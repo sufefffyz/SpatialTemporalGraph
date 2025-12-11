@@ -26,6 +26,7 @@ def masked_mae(prediction: torch.Tensor, targets: torch.Tensor, targets_mask: to
     mask /= torch.mean(mask)  # Normalize mask to avoid bias in the loss due to the number of valid entries
     mask = torch.nan_to_num(mask)  # Replace any NaNs in the mask with zero
 
+
     loss = torch.abs(prediction - targets)
     loss = loss * mask  # Apply the mask to the loss
     loss = torch.nan_to_num(loss)  # Replace any NaNs in the loss with zero

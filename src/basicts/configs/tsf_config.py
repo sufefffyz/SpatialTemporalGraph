@@ -145,9 +145,9 @@ class BasicTSForecastingConfig(BasicTSConfig):
     # Optimizer
     optimizer: type = field(default=Adam, metadata={"help": "Optimizer class."})
     optimizer_params: dict = field(
-        default_factory=lambda: {"lr": 2e-4, "weight_decay": 5e-4},
+        default_factory=lambda: {"lr": 0.0002,"weight_decay": 0.0005},
         metadata={"help": "Optimizer parameters."})
-    lr: float = field(default=2e-4, metadata={"help": "Learning rate."})
+    # lr: float = field(default=5e-4, metadata={"help": "Learning rate."})
 
     # Learning rate scheduler
     lr_scheduler: Union[type, None] = field(default=None, metadata={"help": "Learning rate scheduler type."})

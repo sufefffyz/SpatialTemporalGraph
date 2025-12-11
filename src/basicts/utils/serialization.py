@@ -2,7 +2,7 @@ import json
 import pickle
 
 import numpy as np
-
+import os
 from .adjacent_matrix_norm import (calculate_scaled_laplacian,
                                    calculate_symmetric_message_passing_adj,
                                    calculate_symmetric_normalized_laplacian,
@@ -39,6 +39,45 @@ def load_meta_description(dataset_name: str) -> str:
     with open(f'datasets/{dataset_name}/meta.json', 'r') as f:
         desc = json.load(f)
     return desc
+
+
+def load_dataset_data(dataset_name: str):
+    """
+    Load train/val/test data/timestamps, concatenate them,
+    and check shapes using meta description.
+    """
+
+    meta = load_meta_description(dataset_name)
+    expected_data_shape = tuple(meta["shape"])
+    expected_ts_shape = tuple(meta["timestamps_shape"])
+
+    base_path = os.path.join("datasets", dataset_name)
+    splits = ["train", "val", "test"]
+
+    data_list = []
+    ts_list = []
+
+    # Load train/val/test
+    for split in splits:
+        data_list.append(np.load(os.path.join(base_path, f"{split}_data.npy")))
+        ts_list.append(np.load(os.path.join(base_path, f"{split}_timestamps.npy")))
+
+    # Concatenate
+    data = np.concatenate(data_list, axis=0)
+    timestamps = np.concatenate(ts_list, axis=0)
+
+    # === Shape check ===
+    if data.shape != expected_data_shape:
+        raise ValueError(
+            f"data.shape {data.shape} != expected {expected_data_shape} from meta"
+        )
+
+    if timestamps.shape != expected_ts_shape:
+        raise ValueError(
+            f"timestamp.shape {timestamps.shape} != expected {expected_ts_shape} from meta"
+        )
+
+    return data, timestamps
 
 
 def load_pkl(pickle_file: str) -> object:
