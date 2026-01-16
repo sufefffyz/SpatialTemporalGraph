@@ -4,7 +4,7 @@ import torch
 from easydict import EasyDict
 sys.path.append(os.path.abspath(__file__ + '/../../..'))
 
-from basicts.metrics import masked_mae, masked_mape, masked_rmse
+from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
 from basicts.data import TimeSeriesForecastingDataset
 from basicts.runners import SimpleTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
@@ -48,6 +48,16 @@ CFG.GPU_NUM = 1 # Number of GPUs to use (0 for CPU mode)
 # Runner
 CFG.RUNNER = SimpleTimeSeriesForecastingRunner
 
+############################## Environment Configuration ##############################
+CFG.ENV = EasyDict()
+
+# GPU and random seed settings
+CFG.ENV.SEED = 42 # Random seed
+CFG.ENV.DETERMINISTIC = True # Whether to set random seed for deterministic results
+CFG.ENV.CUDNN = EasyDict()
+CFG.ENV.CUDNN.ENABLED = True # 是否启用 cuDNN。默认值：True
+CFG.ENV.CUDNN.BENCHMARK = True # 是否启用 cuDNN 基准测试。默认值：True
+CFG.ENV.CUDNN.DETERMINISTIC = True # 是否将 cuDNN 设置为确定性模式。默认值：False
 ############################## Dataset Configuration ##############################
 CFG.DATASET = EasyDict()
 # Dataset settings
@@ -89,6 +99,7 @@ CFG.METRICS.FUNCS = EasyDict({
                                 'MAE': masked_mae,
                                 'MAPE': masked_mape,
                                 'RMSE': masked_rmse,
+                                'WAPE': masked_wape
                             })
 CFG.METRICS.TARGET = 'MAE'
 CFG.METRICS.NULL_VAL = NULL_VAL
@@ -118,9 +129,9 @@ CFG.TRAIN.LR_SCHEDULER.PARAM = {
 }
 # Train data loader settings
 CFG.TRAIN.DATA = EasyDict()
-CFG.TRAIN.DATA.BATCH_SIZE = 16
+CFG.TRAIN.DATA.BATCH_SIZE = 64
 CFG.TRAIN.DATA.SHUFFLE = True
-
+CFG.TRAIN.EARLY_STOPPING_PATIENCE = 15
 ############################## Validation Configuration ##############################
 CFG.VAL = EasyDict()
 CFG.VAL.INTERVAL = 1
@@ -129,7 +140,7 @@ CFG.VAL.DATA.BATCH_SIZE = 64
 
 ############################## Test Configuration ##############################
 CFG.TEST = EasyDict()
-CFG.TEST.INTERVAL = 1
+CFG.TEST.INTERVAL = 10
 CFG.TEST.DATA = EasyDict()
 CFG.TEST.DATA.BATCH_SIZE = 64
 

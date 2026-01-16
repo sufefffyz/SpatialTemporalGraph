@@ -52,6 +52,16 @@ CFG.RUNNER = SimpleTimeSeriesForecastingRunner
 # DCRNN does not allow to load parameters since it creates parameters in the first iteration
 CFG._ = random.randint(-1e6, 1e6)
 
+############################## Environment Configuration ##############################
+CFG.ENV = EasyDict()
+
+# GPU and random seed settings
+CFG.ENV.SEED = 42 # Random seed
+CFG.ENV.DETERMINISTIC = True # Whether to set random seed for deterministic results
+CFG.ENV.CUDNN = EasyDict()
+CFG.ENV.CUDNN.ENABLED = True # 是否启用 cuDNN。默认值：True
+CFG.ENV.CUDNN.BENCHMARK = True # 是否启用 cuDNN 基准测试。默认值：True
+CFG.ENV.CUDNN.DETERMINISTIC = True # 是否将 cuDNN 设置为确定性模式。默认值：False
 ############################## Dataset Configuration ##############################
 CFG.DATASET = EasyDict()
 # Dataset settings
@@ -126,6 +136,7 @@ CFG.TRAIN.DATA = EasyDict()
 CFG.TRAIN.DATA.BATCH_SIZE = 64
 CFG.TRAIN.DATA.SHUFFLE = True
 
+CFG.TRAIN.EARLY_STOPPING_PATIENCE = 15
 ############################## Validation Configuration ##############################
 CFG.VAL = EasyDict()
 CFG.VAL.INTERVAL = 1

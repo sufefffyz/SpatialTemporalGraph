@@ -1,0 +1,6 @@
+python experiments/train.py -c baselines/STGODE/PEMS03.py --gpus '0'
+python experiments/train.py -c baselines/STGODE/PEMS04.py --gpus '0'
+python experiments/train.py -c baselines/STGODE/PEMS07.py --gpus '0'
+python experiments/train.py -c baselines/STGODE/PEMS08.py --gpus '0'
+python experiments/train.py -c baselines/STGODE/METR-LA.py --gpus '0'
+python experiments/train.py -c baselines/STGODE/PEMS-BAY.py --gpus '0'

@@ -1,0 +1,5 @@
+python experiments/train.py -c baselines/MTGNN/PEMS-BAY.py --gpus '1'
+python experiments/train.py -c baselines/MTGNN/PEMS03.py --gpus '1'
+python experiments/train.py -c baselines/MTGNN/PEMS04.py --gpus '1'
+python experiments/train.py -c baselines/MTGNN/PEMS07.py --gpus '1'
+python experiments/train.py -c baselines/MTGNN/PEMS08.py --gpus '1'

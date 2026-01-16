@@ -5,15 +5,15 @@ import random
 from easydict import EasyDict
 sys.path.append(os.path.abspath(__file__ + '/../../..'))
 
-from basicts.metrics import masked_mae, masked_mape, masked_rmse
+from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
 from basicts.data import TimeSeriesForecastingDataset
-from basicts.runners import SimpleTimeSeriesForecastingRunner
+from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
 from basicts.utils import get_regular_settings, load_dataset_desc, \
-                            load_dataset_data
+                            load_adj, load_dataset_data
 
 from .arch import GTS
-
+from .loss import gts_loss
 ############################## Hot Parameters ##############################
 # Dataset & Metrics configuration
 DATA_NAME = 'PEMS03'  # Dataset name
@@ -29,7 +29,8 @@ MODEL_ARCH = GTS
 node_feats = load_dataset_data(DATA_NAME)
 train_len = int(node_feats.shape[0] * TRAIN_VAL_TEST_RATIO[0])
 node_feats = node_feats[:train_len, ..., 0]
-
+adj_mx, _ = load_adj("datasets/" + DATA_NAME + "/adj_mx.pkl", "original")
+adj_mx = torch.Tensor(adj_mx[0])
 MODEL_PARAM = {
     "cl_decay_steps": 2000,
     "filter_type": "dual_random_walk",
@@ -46,7 +47,9 @@ MODEL_PARAM = {
     "dim_fc": 251296,
     "node_feats": node_feats,
     "temp": 0.5,
-    "k": 30
+    "k": 30, 
+    "prior_adj": adj_mx,
+    "lamda":1
 }
 NUM_EPOCHS = 100
 
@@ -56,10 +59,19 @@ CFG = EasyDict()
 CFG.DESCRIPTION = 'An Example Config'
 CFG.GPU_NUM = 1 # Number of GPUs to use (0 for CPU mode)
 # Runner
-CFG.RUNNER = SimpleTimeSeriesForecastingRunner
+CFG.RUNNER = WandBTimeSeriesForecastingRunner
 # DCRNN does not allow to load parameters since it creates parameters in the first iteration
 CFG._ = random.randint(-1e6, 1e6)
+############################## Environment Configuration ##############################
+CFG.ENV = EasyDict()
 
+# GPU and random seed settings
+CFG.ENV.SEED = 42 # Random seed
+CFG.ENV.DETERMINISTIC = True # Whether to set random seed for deterministic results
+CFG.ENV.CUDNN = EasyDict()
+CFG.ENV.CUDNN.ENABLED = True # �Ƿ����� cuDNN��Ĭ��ֵ��True
+CFG.ENV.CUDNN.BENCHMARK = True # �Ƿ����� cuDNN ��׼���ԡ�Ĭ��ֵ��True
+CFG.ENV.CUDNN.DETERMINISTIC = True # �Ƿ� cuDNN ����Ϊȷ����ģʽ��Ĭ��ֵ��False
 ############################## Dataset Configuration ##############################
 CFG.DATASET = EasyDict()
 # Dataset settings
@@ -102,6 +114,7 @@ CFG.METRICS.FUNCS = EasyDict({
                                 'MAE': masked_mae,
                                 'MAPE': masked_mape,
                                 'RMSE': masked_rmse,
+                                'WAPE': masked_wape,
                             })
 CFG.METRICS.TARGET = 'MAE'
 CFG.METRICS.NULL_VAL = NULL_VAL
@@ -114,7 +127,7 @@ CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
     MODEL_ARCH.__name__,
     '_'.join([DATA_NAME, str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)])
 )
-CFG.TRAIN.LOSS = masked_mae
+CFG.TRAIN.LOSS = gts_loss
 # Optimizer settings
 CFG.TRAIN.OPTIM = EasyDict()
 CFG.TRAIN.OPTIM.TYPE = "Adam"
@@ -137,7 +150,7 @@ CFG.TRAIN.DATA.SHUFFLE = True
 CFG.TRAIN.CLIP_GRAD_PARAM = {
     "max_norm": 5.0
 }
-
+# CFG.TRAIN.EARLY_STOPPING_PATIENCE = 15
 ############################## Validation Configuration ##############################
 CFG.VAL = EasyDict()
 CFG.VAL.INTERVAL = 1
@@ -146,7 +159,7 @@ CFG.VAL.DATA.BATCH_SIZE = 64
 
 ############################## Test Configuration ##############################
 CFG.TEST = EasyDict()
-CFG.TEST.INTERVAL = 1
+CFG.TEST.INTERVAL = 10
 CFG.TEST.DATA = EasyDict()
 CFG.TEST.DATA.BATCH_SIZE = 64
 

@@ -4,10 +4,10 @@ import torch
 from easydict import EasyDict
 sys.path.append(os.path.abspath(__file__ + '/../../..'))
 
-from basicts.metrics import masked_mae, masked_mape, masked_rmse
+from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
 from basicts.scaler import ZScoreScaler
 from basicts.data import TimeSeriesForecastingDataset
-from basicts.runners import SimpleTimeSeriesForecastingRunner
+from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.utils import get_regular_settings
 
 from .arch import STEP
@@ -28,7 +28,7 @@ NULL_VAL = regular_settings['NULL_VAL'] # Null value in the data
 MODEL_ARCH = STEP
 MODEL_PARAM = {
     "dataset_name": DATA_NAME,
-    "pre_trained_tsformer_path": "checkpoints/TSFormer/METR-LA_100_2016_12/cd176b70ebb4620da5a289ad76355c75/TSFormer_best_val_MAE.pt",
+    "pre_trained_tsformer_path": "tsformer_ckpt/TSFormer_METR-LA.pt",
     "short_term_len": INPUT_LEN_SHORT,
     "long_term_len": INPUT_LEN,
     "tsformer_args": {
@@ -76,8 +76,17 @@ CFG = EasyDict()
 CFG.DESCRIPTION = 'An Example Config'
 CFG.GPU_NUM = 2 # Number of GPUs to use (0 for CPU mode)
 # Runner
-CFG.RUNNER = SimpleTimeSeriesForecastingRunner
+CFG.RUNNER = WandBTimeSeriesForecastingRunner
+############################## Environment Configuration ##############################
+CFG.ENV = EasyDict()
 
+# GPU and random seed settings
+CFG.ENV.SEED = 42 # Random seed
+CFG.ENV.DETERMINISTIC = True # Whether to set random seed for deterministic results
+CFG.ENV.CUDNN = EasyDict()
+CFG.ENV.CUDNN.ENABLED = True # 是否启用 cuDNN。默认值：True
+CFG.ENV.CUDNN.BENCHMARK = True # 是否启用 cuDNN 基准测试。默认值：True
+CFG.ENV.CUDNN.DETERMINISTIC = True # 是否将 cuDNN 设置为确定性模式。默认值：False
 ############################## Dataset Configuration ##############################
 CFG.DATASET = EasyDict()
 # Dataset settings
@@ -120,6 +129,7 @@ CFG.METRICS.FUNCS = EasyDict({
                                 'MAE': masked_mae,
                                 'MAPE': masked_mape,
                                 'RMSE': masked_rmse,
+                                'WAPE': masked_wape,
                             })
 CFG.METRICS.TARGET = 'MAE'
 CFG.METRICS.NULL_VAL = NULL_VAL
@@ -170,7 +180,7 @@ CFG.VAL.DATA.PIN_MEMORY = True
 
 ############################## Test Configuration ##############################
 CFG.TEST = EasyDict()
-CFG.TEST.INTERVAL = 1
+CFG.TEST.INTERVAL = 10
 CFG.TEST.DATA = EasyDict()
 CFG.TEST.DATA.BATCH_SIZE = 32
 CFG.TEST.DATA.NUM_WORKERS = 2

@@ -173,6 +173,7 @@ class GTS(nn.Module, Seq2SeqAttrs):
         self.bn3 = torch.nn.BatchNorm1d(self.embedding_dim)
         self.fc_out = nn.Linear(self.embedding_dim * 2, self.embedding_dim)
         self.fc_cat = nn.Linear(self.embedding_dim, 2)
+        self.lamda = model_kwargs.get('lamda', 1)
         def encode_onehot(labels):
             classes = set(labels)
             classes_dict = {c: np.identity(len(classes))[i, :] for i, c in enumerate(classes)}
@@ -188,9 +189,12 @@ class GTS(nn.Module, Seq2SeqAttrs):
         self.node_feats = torch.Tensor(model_kwargs['node_feats'])
         self.temp = model_kwargs['temp']
         from sklearn.neighbors import kneighbors_graph
-        g = kneighbors_graph(self.node_feats.T, model_kwargs['k'], metric='cosine')
-        g = np.array(g.todense(), dtype=np.float32)
-        self.prior_adj = torch.Tensor(g)
+        if model_kwargs['prior_adj'] is not None:
+            self.prior_adj = model_kwargs['prior_adj']
+        else:
+            g = kneighbors_graph(self.node_feats.T, model_kwargs['k'], metric='cosine')
+            g = np.array(g.todense(), dtype=np.float32)
+            self.prior_adj = torch.Tensor(g)
 
     def _compute_sampling_threshold(self, batches_seen):
         return self.cl_decay_steps / (
@@ -289,4 +293,4 @@ class GTS(nn.Module, Seq2SeqAttrs):
         prediction = outputs.transpose(1, 0).unsqueeze(-1)
         pred_adj = x.softmax(-1)[:, 0].clone().reshape(self.num_nodes, -1)
         prior_adj = self.prior_adj
-        return {"prediction": prediction, "pred_adj": pred_adj, "prior_adj": prior_adj}
+        return {"prediction": prediction, "pred_adj": pred_adj, "prior_adj": prior_adj, "lamda": self.lamda}

@@ -186,3 +186,5 @@ cython_debug/
 
 # not ignore requirements.txt
 !*requirements.txt
+tmp_cfgs/
+wandb/

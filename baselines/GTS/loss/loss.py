@@ -1,9 +1,9 @@
 import torch
 import numpy as np
-from basicts.losses import masked_mae
+from basicts.metrics import masked_mae
 
 
-def gts_loss(prediction, target, pred_adj, prior_adj, null_val = np.nan):
+def gts_loss(prediction, target, pred_adj, prior_adj, lamda, null_val = np.nan):
     # graph loss
     prior_label = prior_adj.view(prior_adj.shape[0] * prior_adj.shape[1]).to(pred_adj.device)
     pred_label  = pred_adj.view(pred_adj.shape[0] * pred_adj.shape[1])
@@ -12,5 +12,5 @@ def gts_loss(prediction, target, pred_adj, prior_adj, null_val = np.nan):
     # regression loss
     loss_r = masked_mae(prediction, target, null_val=null_val)
     # total loss
-    loss = loss_r + loss_g
+    loss = loss_r + lamda*loss_g
     return loss

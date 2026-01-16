@@ -1,5 +1,5 @@
-from typing import Tuple, Union
-
+from typing import Tuple, Union, Dict, Optional
+import wandb
 import torch
 import numpy as np
 
@@ -16,6 +16,12 @@ class MTGNNRunner(SimpleTimeSeriesForecastingRunner):
         self.num_nodes = cfg.TRAIN.CUSTOM.NUM_NODES
         self.num_split = cfg.TRAIN.CUSTOM.NUM_SPLIT
         self.perm = None
+        # wandb logging
+        self.model_name = cfg['MODEL']['NAME']
+        self.dataset_name = cfg['DATASET']['NAME']
+        wandb.init(project="SpatialTemporalModel", name=f'{self.model_name}_{self.dataset_name}',config=cfg)
+        
+        wandb.watch(self.model, log="all")
 
     def forward(self, data: tuple, epoch: int = None, iter_num: int = None, train: bool = True, **kwargs) -> tuple:
         data = self.preprocessing(data)
@@ -64,3 +70,31 @@ class MTGNNRunner(SimpleTimeSeriesForecastingRunner):
             }
             loss = super().train_iters(epoch, iter_index, data)
             self.backward(loss)
+
+    def on_validating_end(self, train_epoch: Optional[int] = None):
+        super().on_validating_end(train_epoch)
+        self.logger.info("Logging validation metrics to WandB...")
+
+        step = train_epoch
+
+        for metric_name in self.metrics:
+            metric = self.meter_pool.get_value(f"val/{metric_name}")
+            key = f"Current_{metric_name}"
+
+            wandb.log({key: metric}, step=step)
+            wandb.run.summary[key] = metric
+
+        target_metric_name = f"val/{self.target_metrics}"
+        best_metric = self.best_metrics[target_metric_name]
+        best_key = f"Best_{self.target_metrics}"
+
+        wandb.log({best_key: best_metric}, step=step)
+        wandb.run.summary[best_key] = best_metric
+
+    
+    def on_training_end(self, cfg: Dict, train_epoch: Optional[int] = None):
+
+        super().on_training_end(cfg, train_epoch)
+        self.logger.info("Close the WandB run...")
+        wandb.finish()
+
