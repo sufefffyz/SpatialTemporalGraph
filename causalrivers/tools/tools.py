@@ -208,6 +208,7 @@ def preprocess_data(
     subsample=1,
     normalize=False,
     remove_trailing_nans_early=False,
+    fill_remaining_nans_with_zero=False,
 ):
 
     sample_data = data.copy()  # dont change the original data
@@ -234,6 +235,9 @@ def preprocess_data(
         )
     if interpolate:
         sample_data = sample_data.interpolate()
+    sample_data = sample_data.replace([np.inf, -np.inf], np.nan)
+    if fill_remaining_nans_with_zero:
+        sample_data = sample_data.fillna(0.0)
     return sample_data
 
 
@@ -252,7 +256,12 @@ def standard_preprocessing(
         subset_month=cfg.subset_month,
         subsample=cfg.subsample,
         normalize=cfg.normalize,
-        remove_trailing_nans_early=cfg.remove_trailing_nans_early
+        remove_trailing_nans_early=cfg.remove_trailing_nans_early,
+        fill_remaining_nans_with_zero=getattr(
+            cfg,
+            "fill_remaining_nans_with_zero",
+            False,
+        ),
     )
     return sample_data
 

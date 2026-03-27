@@ -2,3 +2,5 @@ name: var
 max_lag: 3
 var_absolute_values: True
 map_to_summary_graph: "max"
+var_min_std: 1.0e-12
+var_verbose_failures: False

@@ -5,3 +5,4 @@ subset_year: False
 subsample: 1
 normalize: True
 remove_trailing_nans_early: False
+fill_remaining_nans_with_zero: False

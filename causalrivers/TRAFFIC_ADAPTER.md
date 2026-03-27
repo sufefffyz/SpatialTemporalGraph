@@ -108,6 +108,8 @@ The multi-baseline preset currently runs:
 
 The benchmark now streams samples one at a time, which is much more stable for `10k` traffic subsets than loading every sample into memory first.
 
+For the traffic speed data, the preset now treats remaining `NaN` values as `0` after resampling and interpolation. This is intended for the common case where a road segment has no flow and therefore no measured speed.
+
 To use a larger server more effectively, you can parallelize at the sample level:
 
 ```bash
