@@ -10,6 +10,7 @@ import pandas as pd
 from tools.tools import (
     iter_joint_samples,
     load_label_graphs,
+    load_joint_samples_eager,
     load_timeseries_source,
     prepare_single_sample,
     standard_preprocessing,
@@ -35,6 +36,10 @@ def resolve_method_cfgs(cfg: DictConfig):
     if cfg.get("methods"):
         return list(cfg.methods)
     return [cfg.method]
+
+
+def resolve_load_mode(cfg: DictConfig):
+    return str(cfg.get("load_mode", "streaming")).lower()
 
 
 def chunk_sequence(items, chunk_size):
@@ -64,6 +69,18 @@ def _run_method_set(sample_data, method_cfgs):
     return preds, runtimes
 
 
+def _run_single_method_serial(samples, method_cfg):
+    method_name = method_cfg.name
+    method_fn = get_baseline_method(method_name)
+    preds = []
+    runtime = 0.0
+    for sample_data in _progress(samples, total=len(samples), desc=f"{method_name.upper()} samples"):
+        method_start = time.perf_counter()
+        preds.append(method_fn(sample_data.copy(), method_cfg))
+        runtime += time.perf_counter() - method_start
+    return preds, runtime
+
+
 def run_serial_benchmark(cfg, method_cfgs):
     runtimes = {method_cfg.name: 0.0 for method_cfg in method_cfgs}
     preds_by_method = {method_cfg.name: [] for method_cfg in method_cfgs}
@@ -80,6 +97,25 @@ def run_serial_benchmark(cfg, method_cfgs):
             preds_by_method[method_name].extend(preds[method_name])
             runtimes[method_name] += sample_runtimes[method_name]
 
+    return test_labels, preds_by_method, runtimes
+
+
+def run_eager_benchmark(cfg, method_cfgs):
+    print("Loading data eagerly into memory...")
+    test_data, test_labels = load_joint_samples_eager(
+        cfg,
+        preprocessing=standard_preprocessing if cfg.dt_preprocess else None,
+        human_readable_labels=False,
+    )
+    print(f"Eager mode loaded {len(test_data)} samples")
+
+    preds_by_method = {}
+    runtimes = {}
+    for method_cfg in method_cfgs:
+        preds_by_method[method_cfg.name], runtimes[method_cfg.name] = _run_single_method_serial(
+            test_data,
+            method_cfg,
+        )
     return test_labels, preds_by_method, runtimes
 
 
@@ -184,8 +220,16 @@ def main(cfg: DictConfig):
 
     print(cfg)
     print("Baselines:", ", ".join(method_names))
+    load_mode = resolve_load_mode(cfg)
     n_jobs = int(cfg.get("n_jobs", 1))
-    if n_jobs > 1:
+    if load_mode == "eager":
+        if n_jobs > 1:
+            print("Eager mode keeps the original all-at-once loading path; sample-level prediction parallelism is disabled in this mode.")
+        test_labels, preds_by_method, runtime_seconds = run_eager_benchmark(
+            cfg,
+            method_cfgs,
+        )
+    elif n_jobs > 1:
         sample_graphs = load_label_graphs(cfg)
         print(f"Loaded {len(sample_graphs)} label graphs for parallel execution")
         if len(sample_graphs) <= 1:
@@ -217,6 +261,8 @@ def main(cfg: DictConfig):
                 test_labels,
                 remove_autoregressive=cfg.remove_diagonal,
                 name=method_name,
+                n_jobs=int(cfg.get("score_n_jobs", 1)),
+                chunk_size=int(cfg.get("score_chunk_size", 512)),
             )
         )
 

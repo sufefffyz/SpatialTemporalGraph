@@ -324,6 +324,31 @@ def iter_joint_samples(cfg, index_col="datetime", preprocessing=None, human_read
         )
 
 
+def load_joint_samples_eager(cfg, index_col="datetime", preprocessing=None, human_readable_labels=False):
+    sample_graphs = load_label_graphs(cfg)
+    sample_nodes = [sorted(sample_graph.nodes) for sample_graph in sample_graphs]
+    unique_nodes = sorted({node_id for nodes in sample_nodes for node_id in nodes})
+
+    print(f"Loading {len(unique_nodes)} unique nodes eagerly...")
+    data = load_timeseries_table(cfg.data_path, unique_nodes, index_col=index_col)
+    if preprocessing:
+        data = preprocessing(data, cfg.data_preprocess)
+
+    X = []
+    Y = []
+    sample_iterator = _progress(
+        zip(sample_graphs, sample_nodes),
+        total=len(sample_graphs),
+        desc="Assembling eager samples",
+    )
+    for sample_graph, node_ids in sample_iterator:
+        single_sample = data[[str(node_id) for node_id in node_ids]].copy()
+        single_sample = remove_trailing_nans(single_sample)
+        X.append(single_sample)
+        Y.append(graph_to_label_tensor(sample_graph, human_readable=human_readable_labels))
+    return X, Y
+
+
 def load_joint_samples(cfg, index_col="datetime", preprocessing=None):
     """
     Loads and transforms the data.
@@ -331,18 +356,12 @@ def load_joint_samples(cfg, index_col="datetime", preprocessing=None):
     Importantly, if you struggle with ram it migt be worth to load the samples individually as in 2_tutorial_benchmarking.
     This is however slower.
     """
-
-    X = []
-    Y = []
-    for single_sample, labels in iter_joint_samples(
+    return load_joint_samples_eager(
         cfg,
         index_col=index_col,
         preprocessing=preprocessing,
         human_readable_labels=True,
-    ):
-        X.append(single_sample)
-        Y.append(labels)
-    return X, Y
+    )
 
 
 def save_run(out,stop_time, preds, cfg):

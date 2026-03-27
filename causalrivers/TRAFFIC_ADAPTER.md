@@ -114,15 +114,27 @@ To use a larger server more effectively, you can parallelize at the sample level
 
 ```bash
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-python benchmark.py --config-name benchmark_traffic_multi n_jobs=16 chunk_size=128
+python benchmark.py --config-name benchmark_traffic_multi \
+  n_jobs=16 chunk_size=128 \
+  score_n_jobs=16 score_chunk_size=512
 ```
 
 Notes:
 
 - `n_jobs` controls how many workers process sample chunks in parallel.
 - `chunk_size` controls how many graph samples are grouped into one worker task.
+- `score_n_jobs` controls how many workers are used during the scoring stage.
+- `score_chunk_size` controls the scoring-task chunk size.
 - On Linux servers this uses process workers.
 - In restricted local environments where process workers are unavailable, the benchmark falls back to thread workers so you can still smoke-test the pipeline.
+
+If you want the older CausalRivers behavior that eagerly loads all required time series once and then benchmarks everything from memory, use:
+
+```bash
+python benchmark.py --config-name benchmark_traffic_multi load_mode=eager n_jobs=1
+```
+
+`load_mode=eager` is the closest match to the original one-shot benchmark flow. For the large traffic dataset, `load_mode=streaming` is still the safer default.
 
 ## Strategy notes
 

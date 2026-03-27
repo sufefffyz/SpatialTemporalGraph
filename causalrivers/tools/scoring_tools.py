@@ -1,5 +1,8 @@
 import numpy as np
 import pandas as pd
+import sys
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from sklearn.metrics import (
     precision_recall_curve,
     roc_auc_score,
@@ -19,6 +22,16 @@ def _progress(iterable, **kwargs):
     if tqdm is None:
         return iterable
     return tqdm(iterable, **kwargs)
+
+
+def _chunk_sequence(items, chunk_size):
+    for start_idx in range(0, len(items), chunk_size):
+        yield start_idx // chunk_size, items[start_idx : start_idx + chunk_size]
+
+
+def _resolve_mp_context():
+    preferred_method = "fork" if sys.platform.startswith("linux") else "spawn"
+    return mp.get_context(preferred_method)
 
 
 
@@ -55,13 +68,78 @@ def max_accuracy(labs, preds):
 def f1_max(labs, preds):
     # F1 MAX
     precision, recall, thresholds = precision_recall_curve(labs, preds)
-    f1_scores = 2 * recall * precision / (recall + precision)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        f1_scores = 2 * recall * precision / (recall + precision)
     f1_thresh = thresholds[np.argmax(f1_scores)]
     f1_score = np.nanmax(f1_scores)
     return f1_thresh, f1_score
 
 
-def score(preds, labs, remove_autoregressive=True, name="Result"):
+def _score_single_sample(sample_pair):
+    labs_flat, preds_flat = sample_pair
+    if np.unique(labs_flat).size == 1:
+        return None
+
+    auroc = roc_auc_score(y_true=labs_flat, y_score=preds_flat)
+    f1_thresh, f1_score = f1_max(labs_flat, preds_flat)
+    acc_thresh, acc_score = max_accuracy(labs_flat, preds_flat)
+    return {
+        "auroc": auroc,
+        "f1_thresh": f1_thresh,
+        "f1_score": f1_score,
+        "acc_thresh": acc_thresh,
+        "acc_score": acc_score,
+    }
+
+
+def _score_chunk(sample_pairs):
+    return [_score_single_sample(sample_pair) for sample_pair in sample_pairs]
+
+
+def _collect_individual_scores(sample_pairs, n_jobs=1, chunk_size=512):
+    if n_jobs <= 1 or len(sample_pairs) <= 1:
+        results = []
+        for sample_pair in _progress(sample_pairs, total=len(sample_pairs), desc="Scoring samples"):
+            results.append(_score_single_sample(sample_pair))
+        return results
+
+    chunks = list(_chunk_sequence(sample_pairs, max(1, chunk_size)))
+    max_workers = min(n_jobs, len(chunks))
+    chunk_results = {}
+
+    def collect_results(executor):
+        future_to_chunk = {
+            executor.submit(_score_chunk, chunk): chunk_index
+            for chunk_index, chunk in chunks
+        }
+        progress_bar = tqdm(total=len(sample_pairs), desc="Scoring samples") if tqdm else None
+        for future in as_completed(future_to_chunk):
+            chunk_index = future_to_chunk[future]
+            chunk_output = future.result()
+            chunk_results[chunk_index] = chunk_output
+            if progress_bar is not None:
+                progress_bar.update(len(chunk_output))
+        if progress_bar is not None:
+            progress_bar.close()
+
+    try:
+        with ProcessPoolExecutor(
+            max_workers=max_workers,
+            mp_context=_resolve_mp_context(),
+        ) as executor:
+            collect_results(executor)
+    except (PermissionError, OSError) as exc:
+        print(f"Process scorers unavailable ({exc}); falling back to thread scorers")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            collect_results(executor)
+
+    ordered_results = []
+    for chunk_index in sorted(chunk_results):
+        ordered_results.extend(chunk_results[chunk_index])
+    return ordered_results
+
+
+def score(preds, labs, remove_autoregressive=True, name="Result", n_jobs=1, chunk_size=512):
     """
     Calculates a number of metrics given preds and labs.
     Takes in either a 2dim or a 3dim tensor (batch of summary graphs)
@@ -93,33 +171,29 @@ def score(preds, labs, remove_autoregressive=True, name="Result"):
         preds = np.array(preds)
     # Individual scoring for each sample.
 
-    f1_max_ind = []
-    f1_thresh_ind = []
-    accuracy_ind = []
-    accuracy_ind_thresh = []
-    auroc_ind = []
-    for x in _progress(range(len(labs)), total=len(labs), desc="Scoring samples"):
-        if len(set(labs[x].flatten())) == 1:
-            # not defined for empty samples
-            # this can sometimes happen if a limited time window is chosen
-            continue
-        else:
-            auroc_ind.append(
-                roc_auc_score(y_true=labs[x].flatten(), y_score=preds[x].flatten())
-            )
-        f1_thresh, f1_score = f1_max(labs[x].flatten(), preds[x].flatten())
-        f1_max_ind.append(f1_score)
+    sample_pairs = [
+        (labs[x].flatten(), preds[x].flatten())
+        for x in range(len(labs))
+    ]
+    sample_results = _collect_individual_scores(
+        sample_pairs,
+        n_jobs=n_jobs,
+        chunk_size=chunk_size,
+    )
+    valid_sample_results = [result for result in sample_results if result is not None]
 
-        f1_thresh_ind.append(f1_thresh)
-        acc_thresh, acc_score = max_accuracy(labs[x].flatten(), preds[x].flatten())
-        accuracy_ind.append(acc_score)
-        accuracy_ind_thresh.append(acc_thresh)
-
-    f1_max_ind = np.array(f1_max_ind).mean()
-    f1_thresh_ind = np.array(f1_thresh_ind).mean()
-    accuracy_ind = np.array(accuracy_ind).mean()
-    accuracy_ind_thresh = np.array(accuracy_ind_thresh).mean()
-    auroc_ind = np.array(auroc_ind).mean()
+    if valid_sample_results:
+        f1_max_ind = np.mean([result["f1_score"] for result in valid_sample_results])
+        f1_thresh_ind = np.mean([result["f1_thresh"] for result in valid_sample_results])
+        accuracy_ind = np.mean([result["acc_score"] for result in valid_sample_results])
+        accuracy_ind_thresh = np.mean([result["acc_thresh"] for result in valid_sample_results])
+        auroc_ind = np.mean([result["auroc"] for result in valid_sample_results])
+    else:
+        f1_max_ind = np.nan
+        f1_thresh_ind = np.nan
+        accuracy_ind = np.nan
+        accuracy_ind_thresh = np.nan
+        auroc_ind = np.nan
 
     # Joint calculation
     labs = labs.flatten()
