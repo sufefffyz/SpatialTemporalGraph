@@ -108,6 +108,20 @@ The multi-baseline preset currently runs:
 
 The benchmark now streams samples one at a time, which is much more stable for `10k` traffic subsets than loading every sample into memory first.
 
+To use a larger server more effectively, you can parallelize at the sample level:
+
+```bash
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+python benchmark.py --config-name benchmark_traffic_multi n_jobs=16 chunk_size=128
+```
+
+Notes:
+
+- `n_jobs` controls how many workers process sample chunks in parallel.
+- `chunk_size` controls how many graph samples are grouped into one worker task.
+- On Linux servers this uses process workers.
+- In restricted local environments where process workers are unavailable, the benchmark falls back to thread workers so you can still smoke-test the pipeline.
+
 ## Strategy notes
 
 - `debug_set` is the safest option for a first validation run.

@@ -273,15 +273,31 @@ def benchmarking(X, cfg, method_to_test):
     return preds
 
 
-def _load_label_graphs(cfg):
+def load_label_graphs(cfg):
     data = pickle.load(open(cfg.label_path, "rb"))
     if cfg.restrict_to >= 0:
         data = data[cfg.restrict_to : cfg.restrict_to + 1]
     return data
 
 
+def prepare_single_sample(
+    sample_graph,
+    source,
+    cfg,
+    preprocessing=None,
+    human_readable_labels=False,
+):
+    sample_nodes = sorted(sample_graph.nodes)
+    single_sample = source.get_frame(sample_nodes)
+    if preprocessing:
+        single_sample = preprocessing(single_sample, cfg.data_preprocess)
+    single_sample = remove_trailing_nans(single_sample)
+    labels = graph_to_label_tensor(sample_graph, human_readable=human_readable_labels)
+    return single_sample, labels
+
+
 def iter_joint_samples(cfg, index_col="datetime", preprocessing=None, human_readable_labels=False):
-    sample_graphs = _load_label_graphs(cfg)
+    sample_graphs = load_label_graphs(cfg)
     source = load_timeseries_source(cfg.data_path, index_col=index_col)
     sample_iterator = _progress(
         sample_graphs,
@@ -290,13 +306,13 @@ def iter_joint_samples(cfg, index_col="datetime", preprocessing=None, human_read
     )
 
     for sample_graph in sample_iterator:
-        sample_nodes = sorted(sample_graph.nodes)
-        single_sample = source.get_frame(sample_nodes)
-        if preprocessing:
-            single_sample = preprocessing(single_sample, cfg.data_preprocess)
-        single_sample = remove_trailing_nans(single_sample)
-        labels = graph_to_label_tensor(sample_graph, human_readable=human_readable_labels)
-        yield single_sample, labels
+        yield prepare_single_sample(
+            sample_graph,
+            source,
+            cfg,
+            preprocessing=preprocessing,
+            human_readable_labels=human_readable_labels,
+        )
 
 
 def load_joint_samples(cfg, index_col="datetime", preprocessing=None):

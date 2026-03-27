@@ -10,6 +10,8 @@ save_full_out: True
 remove_diagonal: True
 restrict_to: -1
 dt_preprocess: True
+n_jobs: 1
+chunk_size: 128
 
 data_preprocess:
   resolution: "5min"
