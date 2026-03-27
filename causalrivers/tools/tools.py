@@ -3,7 +3,19 @@ import pandas as pd
 import pickle
 import os
 import datetime
+from pathlib import Path
 from omegaconf import OmegaConf
+
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover - tqdm is optional
+    tqdm = None
+
+
+def _progress(iterable, **kwargs):
+    if tqdm is None:
+        return iterable
+    return tqdm(iterable, **kwargs)
 
 
 def remove_trailing_nans(sample_prep):
@@ -49,10 +61,141 @@ def graph_to_label_tensor(G_sample, human_readable=False):
         return labels
 
 
-def load_sample(which, p="resources/rivers_ts_east_germany.csv"):
+def _build_datetime_index(unix_timestamps, index_col="datetime"):
+    dt_index = pd.to_datetime(np.asarray(unix_timestamps), unit="s")
+    if index_col:
+        dt_index.name = index_col
+    return dt_index
+
+
+class _InMemoryTimeseriesSource:
+    def __init__(self, frame: pd.DataFrame):
+        self.frame = frame
+
+    def get_frame(self, node_ids):
+        return self.frame[[str(x) for x in node_ids]].copy()
+
+
+class _DirectoryTimeseriesSource:
+    def __init__(self, data_path, index_col="datetime"):
+        data_path = Path(data_path)
+        targets_path = data_path / "targets.npy"
+        timestamps_path = data_path / "unix_timestamps.npy"
+        node_ids_path = data_path / "node_ids.npy"
+
+        if not targets_path.exists() or not timestamps_path.exists():
+            raise FileNotFoundError(
+                f"{data_path} must contain targets.npy and unix_timestamps.npy to be used as a time series source."
+            )
+
+        self.targets = np.load(targets_path, mmap_mode="r")
+        self.index = _build_datetime_index(
+            np.load(timestamps_path, mmap_mode="r"),
+            index_col=index_col,
+        )
+        if node_ids_path.exists():
+            available_ids = np.load(node_ids_path, allow_pickle=True)
+            self.id_to_position = {
+                int(node_id): idx for idx, node_id in enumerate(available_ids.tolist())
+            }
+        else:
+            self.id_to_position = None
+
+    def get_frame(self, node_ids):
+        if self.id_to_position is None:
+            column_positions = [int(x) for x in node_ids]
+        else:
+            column_positions = [self.id_to_position[int(x)] for x in node_ids]
+
+        return pd.DataFrame(
+            np.asarray(self.targets[:, column_positions]),
+            columns=[str(x) for x in node_ids],
+            index=self.index,
+        )
+
+
+class _NpzTimeseriesSource:
+    def __init__(self, data_path, index_col="datetime"):
+        self.data = np.load(data_path, allow_pickle=True)
+        if "targets" not in self.data or "unix_timestamps" not in self.data:
+            raise KeyError(
+                f"{data_path} must contain 'targets' and 'unix_timestamps' to be used as a time series source."
+            )
+        self.targets = self.data["targets"]
+        self.index = _build_datetime_index(self.data["unix_timestamps"], index_col=index_col)
+
+    def get_frame(self, node_ids):
+        column_ids = [int(x) for x in node_ids]
+        return pd.DataFrame(
+            self.targets[:, column_ids],
+            columns=[str(x) for x in column_ids],
+            index=self.index,
+        )
+
+
+def _load_timeseries_from_csv(data_path, node_ids, index_col="datetime"):
+    usecols = ([index_col] if index_col else []) + [str(x) for x in node_ids]
     return pd.read_csv(
-        p, index_col=0, usecols=["datetime"] + [str(x) for x in list(which.nodes)]
+        data_path,
+        index_col=index_col if index_col else None,
+        usecols=usecols,
     )
+
+
+def _load_timeseries_from_npz(data_path, node_ids, index_col="datetime"):
+    """
+    Convenience loader for npz datasets.
+    Note: np.load on compressed npz materializes the full targets array in memory.
+    For large traffic datasets prefer the directory format produced by
+    prepare_urban_traffic_for_causalrivers.py, which stores targets as mmap-able .npy.
+    """
+    data = np.load(data_path, allow_pickle=True)
+    if "targets" not in data or "unix_timestamps" not in data:
+        raise KeyError(
+            f"{data_path} must contain 'targets' and 'unix_timestamps' to be used as a time series source."
+        )
+
+    column_ids = [int(x) for x in node_ids]
+    frame = pd.DataFrame(
+        data["targets"][:, column_ids],
+        columns=[str(x) for x in column_ids],
+        index=_build_datetime_index(data["unix_timestamps"], index_col=index_col),
+    )
+    return frame
+
+
+def _load_timeseries_from_directory(data_path, node_ids, index_col="datetime"):
+    return _DirectoryTimeseriesSource(data_path, index_col=index_col).get_frame(node_ids)
+
+
+def load_timeseries_source(data_path, index_col="datetime"):
+    source_path = Path(data_path)
+
+    if source_path.is_dir():
+        return _DirectoryTimeseriesSource(source_path, index_col=index_col)
+
+    match source_path.suffix.lower():
+        case ".csv":
+            frame = pd.read_csv(
+                source_path,
+                index_col=index_col if index_col else None,
+            )
+            return _InMemoryTimeseriesSource(frame)
+        case ".npz":
+            return _NpzTimeseriesSource(source_path, index_col=index_col)
+        case _:
+            raise ValueError(
+                f"Unsupported data_path format: {data_path}. Expected CSV, NPZ, or a directory "
+                "containing targets.npy and unix_timestamps.npy."
+            )
+
+
+def load_timeseries_table(data_path, node_ids, index_col="datetime"):
+    return load_timeseries_source(data_path, index_col=index_col).get_frame(node_ids)
+
+
+def load_sample(which, p="resources/rivers_ts_east_germany.csv"):
+    return load_timeseries_table(p, list(which.nodes), index_col="datetime")
 
 
 
@@ -106,7 +249,7 @@ def standard_preprocessing(
         resolution=cfg.resolution,
         interpolate=cfg.interpolate,
         subset_year=cfg.subset_year,
-        subset_month=cfg.subset_year,
+        subset_month=cfg.subset_month,
         subsample=cfg.subsample,
         normalize=cfg.normalize,
         remove_trailing_nans_early=cfg.remove_trailing_nans_early
@@ -120,10 +263,40 @@ def benchmarking(X, cfg, method_to_test):
     If anything else should happen with the data beforehand this should happen here.
     """
     preds = []
-    for x, sample in enumerate(X):
-        print(x, "/", len(X))
+    progress_bar = _progress(
+        enumerate(X, start=1),
+        total=len(X),
+        desc=f"{cfg.method.name.upper()} samples",
+    )
+    for x, sample in progress_bar:
         preds.append(method_to_test(sample, cfg.method))
     return preds
+
+
+def _load_label_graphs(cfg):
+    data = pickle.load(open(cfg.label_path, "rb"))
+    if cfg.restrict_to >= 0:
+        data = data[cfg.restrict_to : cfg.restrict_to + 1]
+    return data
+
+
+def iter_joint_samples(cfg, index_col="datetime", preprocessing=None, human_readable_labels=False):
+    sample_graphs = _load_label_graphs(cfg)
+    source = load_timeseries_source(cfg.data_path, index_col=index_col)
+    sample_iterator = _progress(
+        sample_graphs,
+        total=len(sample_graphs),
+        desc="Streaming samples",
+    )
+
+    for sample_graph in sample_iterator:
+        sample_nodes = sorted(sample_graph.nodes)
+        single_sample = source.get_frame(sample_nodes)
+        if preprocessing:
+            single_sample = preprocessing(single_sample, cfg.data_preprocess)
+        single_sample = remove_trailing_nans(single_sample)
+        labels = graph_to_label_tensor(sample_graph, human_readable=human_readable_labels)
+        yield single_sample, labels
 
 
 def load_joint_samples(cfg, index_col="datetime", preprocessing=None):
@@ -134,39 +307,16 @@ def load_joint_samples(cfg, index_col="datetime", preprocessing=None):
     This is however slower.
     """
 
-    data = pickle.load(open(cfg.label_path, "rb"))
-    # restrict which unique sample you want to process
-    if cfg.restrict_to >= 0:
-        data = data[cfg.restrict_to : cfg.restrict_to + 1]
-    # This is not ram efficient but faster to process.
-    Y = [graph_to_label_tensor(sample, human_readable=True) for sample in data]
-    # To fix double col names due to human readable format.
-    Y_names = [[m[1] for m in sample.columns.values] for sample in Y]
-    # Get all required ts
-    unique_nodes = list(set([item for sublist in Y_names for item in sublist]))
-    unique_nodes = (
-        ([index_col] + [str(x) for x in unique_nodes])
-        if index_col
-        else [str(x) for x in unique_nodes]
-    )
-    # load required files
-    data = pd.read_csv(
-        cfg.data_path,
-        index_col=index_col if index_col else None,
-        usecols=unique_nodes,
-    )
-    # apply specify preprocessing to the data
-    if preprocessing:
-        data = preprocessing(data, cfg.data_preprocess)
-    # Again, this is not Ram efficient but it loads all the samples jointly.
     X = []
-    for sample in Y:
-        single_sample = data[[str(m[1]) for m in sample.columns]]
-        # final nan removal if anyything remains.
-        single_sample = remove_trailing_nans(single_sample)
+    Y = []
+    for single_sample, labels in iter_joint_samples(
+        cfg,
+        index_col=index_col,
+        preprocessing=preprocessing,
+        human_readable_labels=True,
+    ):
         X.append(single_sample)
-        
-        # PUT IN REMOVE TRAILING NANS HERE AND USE IT earlier also.
+        Y.append(labels)
     return X, Y
 
 
@@ -185,3 +335,31 @@ def save_run(out,stop_time, preds, cfg):
     with open(inner_p + "/config.yaml", "w") as f:
         OmegaConf.save(cfg, f)
     pickle.dump(preds, open(inner_p + "/preds.p", "wb"))
+
+
+def save_multi_run(out, runtimes, stop_time, preds_by_method, cfg, method_names):
+    label_group = Path(cfg.label_path).parent.name
+    p = Path(cfg.save_path) / ("multi_" + label_group)
+    p.mkdir(parents=True, exist_ok=True)
+    inner_p = p / str(datetime.datetime.now())[:24]
+    inner_p.mkdir()
+
+    out.to_csv(inner_p / "scoring.csv")
+    runtime_rows = []
+    for method_name in method_names:
+        runtime_rows.append(
+            {
+                "name": method_name,
+                "runtime": str(runtimes[method_name]),
+            }
+        )
+    runtime_rows.append({"name": "overall", "runtime": str(stop_time)})
+    pd.DataFrame(runtime_rows).to_csv(inner_p / "runtime.csv", index=False)
+
+    with open(inner_p / "config.yaml", "w") as f:
+        OmegaConf.save(cfg, f)
+
+    preds_dir = inner_p / "preds"
+    preds_dir.mkdir()
+    for method_name in method_names:
+        pickle.dump(preds_by_method[method_name], open(preds_dir / f"{method_name}.p", "wb"))

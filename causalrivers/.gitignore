@@ -1,6 +1,5 @@
+__pycache__/
 product/
 datasets/
+results/
 outputs/
-fantasy_submission.csv
-
-**.pyc

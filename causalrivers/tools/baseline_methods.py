@@ -17,6 +17,15 @@ def summary_transform(pred, opt):
     return prediction
 
 
+def _safe_corr(x, y):
+    if np.std(x) == 0 or np.std(y) == 0:
+        return 0.0
+    corr = np.corrcoef(x, y)[0, 1]
+    if np.isnan(corr):
+        return 0.0
+    return float(corr)
+
+
 def var_baseline(d,cfg, human_readable=False):
     """
     Simple Granger based strategy that selects based on absolute parameter values.
@@ -52,3 +61,55 @@ def var_baseline(d,cfg, human_readable=False):
     if human_readable:
         out = make_human_readable(out, d)
     return out
+
+
+def corr_baseline(d, cfg, human_readable=False):
+    values = d.values.astype(float)
+    pred = np.corrcoef(values, rowvar=False)
+    pred = np.nan_to_num(pred, nan=0.0)
+
+    if getattr(cfg, "corr_absolute_values", True):
+        pred = np.abs(pred)
+
+    if human_readable:
+        pred = make_human_readable(pred, d)
+    return pred
+
+
+def lagcorr_baseline(d, cfg, human_readable=False):
+    values = d.values.astype(float)
+    n_vars = values.shape[1]
+    max_lag = int(cfg.max_lag)
+    pred = np.zeros((n_vars, n_vars, max_lag))
+
+    for effect_idx in range(n_vars):
+        effect_series = values[:, effect_idx]
+        for cause_idx in range(n_vars):
+            cause_series = values[:, cause_idx]
+            for lag in range(1, max_lag + 1):
+                pred[effect_idx, cause_idx, lag - 1] = _safe_corr(
+                    cause_series[:-lag],
+                    effect_series[lag:],
+                )
+
+    if getattr(cfg, "lagcorr_absolute_values", True):
+        pred = np.abs(pred)
+
+    out = summary_transform(pred, cfg.map_to_summary_graph)
+    if human_readable:
+        out = make_human_readable(out, d)
+    return out
+
+
+BASELINE_METHODS = {
+    "var": var_baseline,
+    "corr": corr_baseline,
+    "lagcorr": lagcorr_baseline,
+}
+
+
+def get_baseline_method(name):
+    if name not in BASELINE_METHODS:
+        available = ", ".join(sorted(BASELINE_METHODS))
+        raise ValueError(f"Unknown baseline '{name}'. Available baselines: {available}")
+    return BASELINE_METHODS[name]

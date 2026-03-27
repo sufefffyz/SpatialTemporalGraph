@@ -1,0 +1,4 @@
+name: lagcorr
+max_lag: 3
+lagcorr_absolute_values: True
+map_to_summary_graph: "max"

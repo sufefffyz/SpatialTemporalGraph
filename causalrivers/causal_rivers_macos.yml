@@ -1,0 +1,13 @@
+name: causalrivers-macos
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - networkx
+  - hydra-core
+  - scikit-learn
+  - statsmodels
+  - tqdm

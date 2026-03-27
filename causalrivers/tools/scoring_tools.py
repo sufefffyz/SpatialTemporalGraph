@@ -6,8 +6,19 @@ from sklearn.metrics import (
     accuracy_score,
 )
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover - tqdm is optional
+    tqdm = None
+
 # precision recall warning.
 np.seterr(divide="ignore", invalid="ignore")
+
+
+def _progress(iterable, **kwargs):
+    if tqdm is None:
+        return iterable
+    return tqdm(iterable, **kwargs)
 
 
 
@@ -87,8 +98,7 @@ def score(preds, labs, remove_autoregressive=True, name="Result"):
     accuracy_ind = []
     accuracy_ind_thresh = []
     auroc_ind = []
-    for x in range(len(labs)):
-        print(x, "/", len(labs))
+    for x in _progress(range(len(labs)), total=len(labs), desc="Scoring samples"):
         if len(set(labs[x].flatten())) == 1:
             # not defined for empty samples
             # this can sometimes happen if a limited time window is chosen

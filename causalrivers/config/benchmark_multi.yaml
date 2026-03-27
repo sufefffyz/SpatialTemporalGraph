@@ -1,0 +1,24 @@
+defaults:
+  - _self_
+  - data_preprocess: default_preprocessing
+
+label_path: "datasets/confounder_3/east.p"
+data_path: "product/rivers_ts_east_germany.csv"
+save_path: "results/"
+save_full_out: True
+
+remove_diagonal: True
+restrict_to: -1
+dt_preprocess: True
+
+methods:
+  - name: var
+    max_lag: 3
+    var_absolute_values: True
+    map_to_summary_graph: "max"
+  - name: corr
+    corr_absolute_values: True
+  - name: lagcorr
+    max_lag: 3
+    lagcorr_absolute_values: True
+    map_to_summary_graph: "max"
