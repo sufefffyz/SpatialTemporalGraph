@@ -1,0 +1,14 @@
+defaults:
+  - _self_
+  - method: var
+  - data_preprocess: default_preprocessing
+
+label_path: "datasets/confounder_3/east.p"
+data_path: "product/rivers_ts_east_germany.csv"
+save_path: "results/"
+save_full_out: True
+
+
+remove_diagonal: True
+restrict_to: -1
+dt_preprocess: True

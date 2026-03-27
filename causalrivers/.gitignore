@@ -1,0 +1,6 @@
+product/
+datasets/
+outputs/
+fantasy_submission.csv
+
+**.pyc
