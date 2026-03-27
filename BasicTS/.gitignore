@@ -196,5 +196,7 @@ PEMS/scripts/cache/
 PEMS/graph_construction/output_*/
 PEMS/graph_construction/*.osm.pbf
 PEMS/graph_construction/*.geojson
+PEMS/graph_construction/State_Highway_Network_Lines/
 PEMS/scripts/*.geojson
+PEMS/scripts/*.xlsx
 PEMS/*.zip
