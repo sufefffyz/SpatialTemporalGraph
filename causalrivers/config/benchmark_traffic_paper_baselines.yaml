@@ -2,8 +2,8 @@ defaults:
   - data_preprocess: default_preprocessing
   - _self_
 
-label_path: "datasets/traffic_city_traffic_m_speed__category__1_0/debug_set_3_10k/city_traffic_m_speed__category__1_0.p"
-data_path: "product/traffic_city_traffic_m_speed__category__1_0"
+label_path: "datasets/traffic_city_traffic_m_volume__category__1_0/debug_set_3_10k/city_traffic_m_volume__category__1_0.p"
+data_path: "product/traffic_city_traffic_m_volume__category__1_0"
 save_path: "results/"
 save_full_out: True
 
