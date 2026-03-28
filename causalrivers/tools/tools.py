@@ -62,9 +62,7 @@ def graph_to_label_tensor(G_sample, human_readable=False):
 
 
 def _build_datetime_index(unix_timestamps, index_col="datetime"):
-    # Pandas can reject read-only mmap-backed arrays in newer releases, so we
-    # materialize a writable copy before converting to a DatetimeIndex.
-    dt_index = pd.to_datetime(np.array(unix_timestamps, copy=True), unit="s")
+    dt_index = pd.to_datetime(np.asarray(unix_timestamps), unit="s")
     if index_col:
         dt_index.name = index_col
     return dt_index
