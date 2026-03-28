@@ -83,7 +83,7 @@ mem_available_gb() {
 
 running_count() {
   local count=0
-  for pid in "${RUN_PIDS[@]:-}"; do
+  for pid in "${RUN_PIDS[@]}"; do
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
       count=$((count + 1))
     fi
@@ -94,21 +94,24 @@ running_count() {
 remove_pid() {
   local target="$1"
   local next=()
-  for pid in "${RUN_PIDS[@]:-}"; do
-    if [ "$pid" != "$target" ]; then
+  for pid in "${RUN_PIDS[@]}"; do
+    if [ -n "$pid" ] && [ "$pid" != "$target" ]; then
       next+=("$pid")
     fi
   done
-  RUN_PIDS=("${next[@]:-}")
+  RUN_PIDS=("${next[@]}")
 }
 
 collect_finished_jobs() {
   local pid status task
-  for pid in "${RUN_PIDS[@]:-}"; do
+  for pid in "${RUN_PIDS[@]}"; do
+    if [ -z "$pid" ]; then
+      continue
+    fi
     if ! kill -0 "$pid" 2>/dev/null; then
       wait "$pid"
       status=$?
-      task="${PID_TO_TASK[$pid]}"
+      task="${PID_TO_TASK[$pid]:-${pid}}"
       if [ "$status" -eq 0 ]; then
         echo "Finished: $task"
       else
