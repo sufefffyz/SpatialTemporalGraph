@@ -229,13 +229,24 @@ def format_label_dirname(strategy: str, n_vars: int, label_tag: str | None) -> s
     return base
 
 
-def _safe_root_cause_samples(graph: nx.DiGraph, n_vars: int):
-    if not nx.is_directed_acyclic_graph(graph):
-        raise ValueError(
-            "The traffic graph is not a DAG, so the 'root_cause' strategy is not defined for it."
+def _is_root_cause_candidate(graph: nx.DiGraph, sample, n_vars: int):
+    subgraph = graph.subgraph(sample)
+    return nx.is_directed_acyclic_graph(subgraph) and nx.dag_longest_path_length(subgraph) == (n_vars - 1)
+
+
+def _safe_root_cause_samples(graph: nx.DiGraph, n_vars: int, max_samples: int, seed: int):
+    if max_samples > 0:
+        candidates = sample_connected_candidates(
+            graph,
+            n_vars=n_vars,
+            max_samples=max(10, max_samples * 5),
+            seed=seed,
         )
+        root_like = [sample for sample in candidates if _is_root_cause_candidate(graph, sample, n_vars=n_vars)]
+        return _limit_candidates(root_like, max_samples, seed)
+
     candidates = get_all_subgraphs(graph, n_vars=n_vars)
-    return [sample for sample in candidates if nx.dag_longest_path_length(graph.subgraph(sample)) == (n_vars - 1)]
+    return [sample for sample in candidates if _is_root_cause_candidate(graph, sample, n_vars=n_vars)]
 
 
 def generate_samples(graph: nx.DiGraph, strategy: str, n_vars: int, max_samples: int, seed: int, max_distance: float):
@@ -292,7 +303,7 @@ def generate_samples(graph: nx.DiGraph, strategy: str, n_vars: int, max_samples:
         return _limit_candidates(candidates, max_samples, seed)
 
     if strategy == "root_cause":
-        candidates = _safe_root_cause_samples(graph, n_vars=n_vars)
+        candidates = _safe_root_cause_samples(graph, n_vars=n_vars, max_samples=max_samples, seed=seed)
         return _limit_candidates(candidates, max_samples, seed)
 
     raise NotImplementedError(f"Unsupported strategy: {strategy}")
