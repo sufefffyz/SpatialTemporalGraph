@@ -267,11 +267,17 @@ def _build_cdmi_params(frame: pd.DataFrame, cfg, workspace: Path):
 
 
 def _resolve_cdmi_runtime(cfg):
-    repo_path = getattr(cfg, "cdmi_repo_path", None) or os.environ.get("CDMI_REPO_PATH")
+    default_repo_path = Path(__file__).resolve().parents[1] / "external" / "deepCausality"
+    repo_path = (
+        getattr(cfg, "cdmi_repo_path", None)
+        or os.environ.get("CDMI_REPO_PATH")
+        or (str(default_repo_path) if default_repo_path.exists() else None)
+    )
     if not repo_path:
         raise ImportError(
-            "CDMI requires the external deepCausality repository. "
-            "Set cdmi_repo_path=... or export CDMI_REPO_PATH=/path/to/deepCausality."
+            "CDMI requires the deepCausality repository. "
+            "Initialize the bundled submodule with "
+            "'git submodule update --init --recursive' or set cdmi_repo_path=... / CDMI_REPO_PATH."
         )
 
     python_bin = getattr(cfg, "cdmi_python_bin", None) or os.environ.get("CDMI_PYTHON_BIN") or sys.executable

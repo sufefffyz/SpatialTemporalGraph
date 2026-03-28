@@ -114,8 +114,14 @@ For the paper-style method set, the helper runner scripts can now also launch op
 `cdmi` is intentionally wrapped as an external adapter instead of being reimplemented in-core. To use it, point the benchmark at an existing `deepCausality` checkout and its dedicated Python environment:
 
 ```bash
-export CDMI_REPO_PATH=/path/to/deepCausality
+git submodule update --init --recursive
 export CDMI_PYTHON_BIN=/path/to/cdmi-env/bin/python
+```
+
+If you prefer a separate checkout instead of the bundled submodule, you can still override it with:
+
+```bash
+export CDMI_REPO_PATH=/path/to/deepCausality
 ```
 
 This keeps the local benchmark code close to the original CausalRivers core while still letting you schedule CDMI runs from the same scripts.

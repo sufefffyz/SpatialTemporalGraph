@@ -1,0 +1,3 @@
+[submodule "causalrivers/external/deepCausality"]
+	path = causalrivers/external/deepCausality
+	url = https://github.com/wasimahmadpk/deepCausality.git
