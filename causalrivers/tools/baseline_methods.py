@@ -289,6 +289,27 @@ def _resolve_cdmi_runtime(cfg):
     return Path(repo_path).expanduser().resolve(), python_bin, helper_path
 
 
+def _make_tigramite_dataframe(TigramiteDataFrame, values, var_names):
+    constructors = [
+        lambda: TigramiteDataFrame(values=values, var_names=var_names),
+        lambda: TigramiteDataFrame(data=values, var_names=var_names),
+        lambda: TigramiteDataFrame(values, var_names=var_names),
+        lambda: TigramiteDataFrame(values),
+        lambda: TigramiteDataFrame(data=values),
+    ]
+
+    last_error = None
+    for constructor in constructors:
+        try:
+            return constructor()
+        except TypeError as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Failed to construct Tigramite DataFrame for unknown reasons.")
+
+
 def _cc_pairwise_pred(frame, cfg):
     max_lag = int(cfg.max_lag)
     lagged_scores = _directional_cross_correlation(
@@ -453,7 +474,11 @@ def pcmci_baseline(d, cfg, human_readable=False):
     if values.shape[1] < 2 or values.shape[0] <= max_lag + 1:
         return _finalize_lagged_matrix(pred, d, cfg, human_readable=human_readable)
 
-    tigramite_frame = TigramiteDataFrame(values=values, var_names=list(frame.columns))
+    tigramite_frame = _make_tigramite_dataframe(
+        TigramiteDataFrame,
+        values=values,
+        var_names=list(frame.columns),
+    )
     pcmci = PCMCI(
         dataframe=tigramite_frame,
         cond_ind_test=ParCorr(significance="analytic"),
