@@ -12,7 +12,7 @@ N_VARS="${N_VARS:-3}"
 SCORE_N_JOBS="${SCORE_N_JOBS:-32}"
 SCORE_CHUNK_SIZE="${SCORE_CHUNK_SIZE:-512}"
 LOG_DIR="${LOG_DIR:-logs}"
-METHODS="${METHODS:-var cc rp combo pcmci varlingam}"
+METHODS="${METHODS:-var cc rp combo pcmci varlingam dynotears cdmi}"
 MAX_PARALLEL="${MAX_PARALLEL:-2}"
 RESERVED_MEM_GB="${RESERVED_MEM_GB:-64}"
 POLL_SECONDS="${POLL_SECONDS:-15}"
@@ -51,6 +51,9 @@ method_override() {
       ;;
     dynotears)
       echo 'methods=[{name:dynotears,max_lag:3,map_to_summary_graph:max,dynotears_absolute_values:true,dynotears_lambda_w:0.1,dynotears_lambda_a:0.1,dynotears_max_iter:100,dynotears_h_tol:1.0e-8,dynotears_w_threshold:0.0}]'
+      ;;
+    cdmi)
+      echo 'methods=[{name:cdmi,max_lag:3,cdmi_epochs:15,cdmi_pred_len:1,cdmi_train_len:111,cdmi_num_layers:4,cdmi_num_cells:40,cdmi_num_samples:5,cdmi_dropout_rate:0.1,cdmi_step_size:1,cdmi_num_sliding_win:15,cdmi_alpha:0.10,cdmi_plot_forecasts:false}]'
       ;;
     *)
       echo "Unknown method: $method" >&2
@@ -163,6 +166,12 @@ echo "Max parallel    : $MAX_PARALLEL"
 echo "Reserved mem GB : $RESERVED_MEM_GB"
 echo "Estimate/job GB : $JOB_MEM_GB"
 echo "Poll seconds    : $POLL_SECONDS"
+if [ -n "${CDMI_REPO_PATH:-}" ]; then
+  echo "CDMI repo       : $CDMI_REPO_PATH"
+fi
+if [ -n "${CDMI_PYTHON_BIN:-}" ]; then
+  echo "CDMI python     : $CDMI_PYTHON_BIN"
+fi
 echo
 
 for strategy in "${STRATEGIES[@]}"; do

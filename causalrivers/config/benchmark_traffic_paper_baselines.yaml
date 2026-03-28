@@ -26,10 +26,11 @@ data_preprocess:
   remove_trailing_nans_early: False
   fill_remaining_nans_with_zero: True
 
-# Paper-inspired mix:
+# Paper-inspired safe default:
 # - naive baselines: CC / RP / Combo
 # - classical CD strategies that can be wrapped in-core: VAR / PCMCI / VARLiNGAM
-# DynoTears is available as an optional single-method config if you install causalnex manually.
+# Optional additions such as DynoTears and CDMI are exposed through single-method overrides
+# and the paper runner scripts, so the default config stays usable without extra environments.
 methods:
   - name: var
     max_lag: 3

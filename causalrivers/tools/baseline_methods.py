@@ -1,4 +1,10 @@
+import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -59,6 +65,11 @@ def _finalize_lagged_matrix(pred, d, cfg, human_readable=False):
 
 def _maybe_log_var_issue(cfg, message):
     if getattr(cfg, "var_verbose_failures", False):
+        print(message)
+
+
+def _maybe_log_cd_issue(cfg, message):
+    if getattr(cfg, "cdmi_verbose_failures", False):
         print(message)
 
 
@@ -202,6 +213,74 @@ def _parse_dynotears_node(node_name, column_names):
         if match:
             return str(column_name), int(match.group(1))
     return None, None
+
+
+def _infer_frame_frequency(frame: pd.DataFrame, fallback="1H"):
+    inferred = getattr(frame.index, "inferred_freq", None)
+    if inferred is None:
+        try:
+            inferred = pd.infer_freq(frame.index)
+        except (TypeError, ValueError):
+            inferred = None
+    return str(inferred) if inferred is not None else fallback
+
+
+def _build_cdmi_params(frame: pd.DataFrame, cfg, workspace: Path):
+    total_steps = len(frame)
+    pred_len = max(1, int(getattr(cfg, "cdmi_pred_len", 1)))
+    max_train_len = total_steps - pred_len - 1
+    if max_train_len < 2:
+        return None
+
+    train_len = min(int(getattr(cfg, "cdmi_train_len", 111)), max_train_len)
+    step_size = max(1, int(getattr(cfg, "cdmi_step_size", 1)))
+    max_windows = max(1, 1 + max(0, total_steps - train_len - pred_len) // step_size)
+    num_sliding_win = min(
+        int(getattr(cfg, "cdmi_num_sliding_win", 15)),
+        max_windows,
+    )
+
+    model_dir = workspace / "models"
+    plot_dir = workspace / "plots"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "epochs": int(getattr(cfg, "cdmi_epochs", 15)),
+        "pred_len": pred_len,
+        "train_len": train_len,
+        "num_layers": int(getattr(cfg, "cdmi_num_layers", 4)),
+        "num_samples": int(getattr(cfg, "cdmi_num_samples", 5)),
+        "num_cells": int(getattr(cfg, "cdmi_num_cells", 40)),
+        "dropout_rate": float(getattr(cfg, "cdmi_dropout_rate", 0.1)),
+        "step_size": step_size,
+        "num_sliding_win": num_sliding_win,
+        "alpha": float(getattr(cfg, "cdmi_alpha", 0.10)),
+        "freq": str(getattr(cfg, "cdmi_freq", None) or _infer_frame_frequency(frame)),
+        "plot_path": str(plot_dir) + os.sep,
+        "model_path": str(model_dir) + os.sep,
+        "model_name": str(getattr(cfg, "cdmi_model_name", "cdmi_model.sav")),
+        "plot_forecasts": bool(getattr(cfg, "cdmi_plot_forecasts", False)),
+        # The upstream implementation expects this field for internal reporting.
+        "ground_truth": np.zeros((frame.shape[1], frame.shape[1]), dtype=int).tolist(),
+    }
+
+
+def _resolve_cdmi_runtime(cfg):
+    repo_path = getattr(cfg, "cdmi_repo_path", None) or os.environ.get("CDMI_REPO_PATH")
+    if not repo_path:
+        raise ImportError(
+            "CDMI requires the external deepCausality repository. "
+            "Set cdmi_repo_path=... or export CDMI_REPO_PATH=/path/to/deepCausality."
+        )
+
+    python_bin = getattr(cfg, "cdmi_python_bin", None) or os.environ.get("CDMI_PYTHON_BIN") or sys.executable
+    helper_path = Path(__file__).resolve().with_name("run_cdmi_external.py")
+
+    if not helper_path.exists():
+        raise FileNotFoundError(f"Missing CDMI helper script: {helper_path}")
+
+    return Path(repo_path).expanduser().resolve(), python_bin, helper_path
 
 
 def _cc_pairwise_pred(frame, cfg):
@@ -478,6 +557,74 @@ def dynotears_baseline(d, cfg, human_readable=False):
     return _finalize_lagged_matrix(pred, d, cfg, human_readable=human_readable)
 
 
+def cdmi_baseline(d, cfg, human_readable=False):
+    repo_path, python_bin, helper_path = _resolve_cdmi_runtime(cfg)
+    frame = _prepare_dense_frame(d)
+    pred = np.zeros((frame.shape[1], frame.shape[1]))
+
+    if frame.shape[1] < 2 or len(frame) < 4:
+        return _finalize_pairwise_matrix(pred, d, human_readable=human_readable)
+
+    with tempfile.TemporaryDirectory(prefix="causalrivers_cdmi_") as tmpdir:
+        workspace = Path(tmpdir)
+        params = _build_cdmi_params(frame, cfg, workspace=workspace)
+        if params is None:
+            return _finalize_pairwise_matrix(pred, d, human_readable=human_readable)
+
+        input_path = workspace / "input.pkl"
+        params_path = workspace / "params.json"
+        output_path = workspace / "pred.npy"
+
+        frame.to_pickle(input_path)
+        params_path.write_text(json.dumps(params), encoding="utf-8")
+
+        command = [
+            str(python_bin),
+            str(helper_path),
+            "--repo-path",
+            str(repo_path),
+            "--input-pkl",
+            str(input_path),
+            "--params-json",
+            str(params_path),
+            "--output-npy",
+            str(output_path),
+        ]
+
+        timeout_seconds = getattr(cfg, "cdmi_timeout_seconds", None)
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=None if timeout_seconds in {None, "null"} else int(timeout_seconds),
+            )
+        except subprocess.TimeoutExpired as exc:
+            _maybe_log_cd_issue(cfg, f"CDMI timed out for one sample: {exc}")
+            return _finalize_pairwise_matrix(pred, d, human_readable=human_readable)
+
+        if completed.returncode != 0:
+            stderr = (completed.stderr or "").strip()
+            stdout = (completed.stdout or "").strip()
+            combined = "\n".join(x for x in [stdout, stderr] if x)
+            if "ModuleNotFoundError" in combined or "ImportError" in combined:
+                raise ImportError(
+                    "CDMI could not start because the external runtime is missing dependencies. "
+                    "Install the official deepCausality environment and point CDMI_PYTHON_BIN to it."
+                )
+            _maybe_log_cd_issue(
+                cfg,
+                "CDMI subprocess failed for one sample. "
+                f"stdout/stderr:\n{combined[-4000:]}",
+            )
+            return _finalize_pairwise_matrix(pred, d, human_readable=human_readable)
+
+        pred = np.load(output_path)
+
+    return _finalize_pairwise_matrix(pred, d, human_readable=human_readable)
+
+
 BASELINE_METHODS = {
     "var": var_baseline,
     "corr": corr_baseline,
@@ -488,6 +635,7 @@ BASELINE_METHODS = {
     "pcmci": pcmci_baseline,
     "varlingam": varlingam_baseline,
     "dynotears": dynotears_baseline,
+    "cdmi": cdmi_baseline,
 }
 
 

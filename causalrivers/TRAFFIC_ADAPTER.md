@@ -106,6 +106,20 @@ The multi-baseline preset currently runs:
 - `corr`
 - `lagcorr`
 
+For the paper-style method set, the helper runner scripts can now also launch optional methods:
+
+- `dynotears` via `causalnex`
+- `cdmi` via the upstream `deepCausality` repository
+
+`cdmi` is intentionally wrapped as an external adapter instead of being reimplemented in-core. To use it, point the benchmark at an existing `deepCausality` checkout and its dedicated Python environment:
+
+```bash
+export CDMI_REPO_PATH=/path/to/deepCausality
+export CDMI_PYTHON_BIN=/path/to/cdmi-env/bin/python
+```
+
+This keeps the local benchmark code close to the original CausalRivers core while still letting you schedule CDMI runs from the same scripts.
+
 The benchmark now streams samples one at a time, which is much more stable for `10k` traffic subsets than loading every sample into memory first.
 
 For the traffic speed data, the preset now treats remaining `NaN` values as `0` after resampling and interpolation. This is intended for the common case where a road segment has no flow and therefore no measured speed.
