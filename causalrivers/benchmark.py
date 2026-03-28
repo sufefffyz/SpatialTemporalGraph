@@ -277,8 +277,11 @@ def main(cfg: DictConfig):
     if cfg.save_full_out:
         print("Saving...")
         if len(method_names) == 1:
-            cfg.method = method_cfgs[0]
-            save_run(out, stop_time, preds_by_method[method_names[0]], cfg)
+            save_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+            save_cfg.method = OmegaConf.create(
+                OmegaConf.to_container(method_cfgs[0], resolve=True)
+            )
+            save_run(out, stop_time, preds_by_method[method_names[0]], save_cfg)
         else:
             save_multi_run(out, runtimes, stop_time, preds_by_method, cfg, method_names)
     print("Done", stop_time)
