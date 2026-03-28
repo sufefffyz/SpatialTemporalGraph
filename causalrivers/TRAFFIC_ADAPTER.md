@@ -126,6 +126,16 @@ export CDMI_REPO_PATH=/path/to/deepCausality
 
 This keeps the local benchmark code close to the original CausalRivers core while still letting you schedule CDMI runs from the same scripts.
 
+When creating the CDMI environment, note that the upstream `requirements.txt` references `DeepKnockoffs==0.1.0`, which is not available on PyPI. The local helper now uses the bundled `DeepKnockoffs` source directly, so you should install the requirements file without that line.
+
+For example:
+
+```bash
+cd causalrivers/external/deepCausality
+grep -v '^DeepKnockoffs==' requirements.txt > requirements.local.txt
+pip install -r requirements.local.txt
+```
+
 The benchmark now streams samples one at a time, which is much more stable for `10k` traffic subsets than loading every sample into memory first.
 
 For the traffic speed data, the preset now treats remaining `NaN` values as `0` after resampling and interpolation. This is intended for the common case where a road segment has no flow and therefore no measured speed.

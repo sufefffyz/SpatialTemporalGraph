@@ -8,6 +8,22 @@ import numpy as np
 import pandas as pd
 
 
+def _patch_deepknockoffs_version_lookup():
+    import pkg_resources
+
+    original_get_distribution = pkg_resources.get_distribution
+
+    class _DummyDistribution:
+        version = "0.1.0-local"
+
+    def _patched_get_distribution(name):
+        if str(name) == "DeepKnockoffs":
+            return _DummyDistribution()
+        return original_get_distribution(name)
+
+    pkg_resources.get_distribution = _patched_get_distribution
+
+
 def _load_cdmi(repo_path: Path):
     src_path = repo_path / "src"
     if not repo_path.exists() or not src_path.exists():
@@ -15,6 +31,7 @@ def _load_cdmi(repo_path: Path):
             f"Expected a deepCausality checkout with a src/ directory, got: {repo_path}"
         )
 
+    _patch_deepknockoffs_version_lookup()
     sys.path.insert(0, str(repo_path))
     sys.path.insert(0, str(src_path))
     import cdmi  # noqa: WPS433
