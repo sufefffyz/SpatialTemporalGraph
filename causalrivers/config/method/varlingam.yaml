@@ -1,0 +1,7 @@
+name: varlingam
+max_lag: 3
+map_to_summary_graph: "max"
+varlingam_absolute_values: True
+varlingam_criterion: null
+varlingam_prune: True
+varlingam_random_state: 0

@@ -1,0 +1,70 @@
+defaults:
+  - data_preprocess: default_preprocessing
+  - _self_
+
+label_path: "datasets/traffic_city_traffic_m_speed__category__1_0/debug_set_3_10k/city_traffic_m_speed__category__1_0.p"
+data_path: "product/traffic_city_traffic_m_speed__category__1_0"
+save_path: "results/"
+save_full_out: True
+
+remove_diagonal: True
+restrict_to: -1
+dt_preprocess: True
+load_mode: streaming
+n_jobs: 1
+chunk_size: 128
+score_n_jobs: 1
+score_chunk_size: 512
+
+data_preprocess:
+  resolution: "5min"
+  interpolate: True
+  subset_month: False
+  subset_year: False
+  subsample: 1
+  normalize: False
+  remove_trailing_nans_early: False
+  fill_remaining_nans_with_zero: True
+
+# Paper-inspired mix:
+# - naive baselines: CC / RP / Combo
+# - classical CD strategies that can be wrapped in-core: VAR / PCMCI / VARLiNGAM
+# DynoTears is available as an optional single-method config if you install causalnex manually.
+methods:
+  - name: var
+    max_lag: 3
+    var_absolute_values: True
+    map_to_summary_graph: "max"
+    var_min_std: 1.0e-12
+    var_verbose_failures: False
+  - name: cc
+    max_lag: 3
+    cc_absolute_values: True
+    map_to_summary_graph: "max"
+    naive_child_selection: "all"
+  - name: rp
+    max_lag: 3
+    rp_score_mode: "difference"
+    naive_child_selection: "all"
+  - name: combo
+    max_lag: 3
+    cc_absolute_values: True
+    map_to_summary_graph: "max"
+    rp_score_mode: "difference"
+    combo_union_mode: "max"
+    naive_child_selection: "all"
+  - name: pcmci
+    max_lag: 3
+    map_to_summary_graph: "max"
+    pcmci_absolute_values: True
+    pcmci_pc_alpha: 0.05
+    pcmci_alpha_level: 0.05
+    pcmci_filter_nonsignificant: True
+    pcmci_verbosity: 0
+  - name: varlingam
+    max_lag: 3
+    map_to_summary_graph: "max"
+    varlingam_absolute_values: True
+    varlingam_criterion: null
+    varlingam_prune: True
+    varlingam_random_state: 0

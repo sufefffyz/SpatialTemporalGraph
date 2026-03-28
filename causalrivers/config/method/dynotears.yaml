@@ -1,0 +1,9 @@
+name: dynotears
+max_lag: 3
+map_to_summary_graph: "max"
+dynotears_absolute_values: True
+dynotears_lambda_w: 0.1
+dynotears_lambda_a: 0.1
+dynotears_max_iter: 100
+dynotears_h_tol: 1.0e-8
+dynotears_w_threshold: 0.0

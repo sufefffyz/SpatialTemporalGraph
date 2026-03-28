@@ -1,0 +1,7 @@
+name: combo
+max_lag: 3
+cc_absolute_values: True
+map_to_summary_graph: "max"
+rp_score_mode: "difference"
+combo_union_mode: "max"
+naive_child_selection: "all"

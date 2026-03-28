@@ -1,0 +1,5 @@
+name: cc
+max_lag: 3
+cc_absolute_values: True
+map_to_summary_graph: "max"
+naive_child_selection: "all"

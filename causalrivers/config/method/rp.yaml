@@ -1,0 +1,4 @@
+name: rp
+max_lag: 3
+rp_score_mode: "difference"
+naive_child_selection: "all"

@@ -28,7 +28,7 @@ The traffic dataset at the repository root uses a different format: a single `.n
 - `product/traffic_<dataset>/targets.npy`
 - `product/traffic_<dataset>/unix_timestamps.npy`
 - `product/traffic_<dataset>/node_ids.npy`
-- sampled label pickles under `datasets/traffic_<dataset>/.../east.p`
+- sampled label pickles under `datasets/traffic_<dataset>/.../<dataset>.p`
 
 The benchmark loader in `tools/tools.py` was also extended so `data_path` can point to:
 
@@ -66,7 +66,7 @@ Then run:
 
 ```bash
 python benchmark.py \
-  label_path=/absolute/path/to/causalrivers/datasets/traffic_city_traffic_m_speed__category__1_0/debug_set_3/east.p \
+  label_path=/absolute/path/to/causalrivers/datasets/traffic_city_traffic_m_speed__category__1_0/debug_set_3/city_traffic_m_speed__category__1_0.p \
   data_path=/absolute/path/to/causalrivers/product/traffic_city_traffic_m_speed__category__1_0 \
   method=var \
   data_preprocess.normalize=False \
@@ -91,7 +91,7 @@ python prepare_urban_traffic_for_causalrivers.py \
 This writes labels to:
 
 ```text
-datasets/traffic_city_traffic_m_speed__category__1_0/debug_set_3_10k/east.p
+datasets/traffic_city_traffic_m_speed__category__1_0/debug_set_3_10k/city_traffic_m_speed__category__1_0.p
 ```
 
 To benchmark several baselines in one run:

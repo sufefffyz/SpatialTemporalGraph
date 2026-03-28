@@ -347,6 +347,7 @@ def main():
         raise FileNotFoundError(source_path)
 
     dataset_name = sanitize_name(args.dataset_name or source_path.stem)
+    label_filename = f"{dataset_name}.p"
 
     print(f"Loading traffic dataset from {source_path}")
     data = np.load(source_path, allow_pickle=True)
@@ -378,7 +379,7 @@ def main():
                 "Try a different strategy or a smaller sample size."
             )
         label_dirname = format_label_dirname(strategy, n_vars, args.label_tag)
-        label_path = Path(args.labels_dir) / f"traffic_{dataset_name}" / label_dirname / "east.p"
+        label_path = Path(args.labels_dir) / f"traffic_{dataset_name}" / label_dirname / label_filename
         save_label_samples(graph, samples, label_path)
         summary.append((strategy, n_vars, len(samples), label_path))
 

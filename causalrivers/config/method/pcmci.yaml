@@ -1,0 +1,8 @@
+name: pcmci
+max_lag: 3
+map_to_summary_graph: "max"
+pcmci_absolute_values: True
+pcmci_pc_alpha: 0.05
+pcmci_alpha_level: 0.05
+pcmci_filter_nonsignificant: True
+pcmci_verbosity: 0
