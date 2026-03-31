@@ -37,6 +37,10 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+try:
+    from tqdm.auto import tqdm
+except ImportError:  # pragma: no cover - tqdm is optional
+    tqdm = None
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -68,6 +72,12 @@ class PreparedArtifactEvaluation:
     score_name: str
     preds_preprocessed: np.ndarray
     prediction_meta: dict[str, Any]
+
+
+def _progress(iterable, **kwargs):
+    if tqdm is None:
+        return iterable
+    return tqdm(iterable, **kwargs)
 
 
 def parse_args() -> argparse.Namespace:
@@ -112,6 +122,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--restrict-to", type=int, default=-1, help="Optional label-graph index to evaluate. Defaults to all samples.")
     parser.add_argument("--n-jobs", type=int, default=1, help="Parallel scorer jobs.")
     parser.add_argument("--chunk-size", type=int, default=512, help="Chunk size for scorer parallelism.")
+    parser.add_argument(
+        "--slice-batch-size",
+        type=int,
+        default=2048,
+        help="Batch size used when slicing all subgraph prediction matrices from one learned graph.",
+    )
     return parser.parse_args()
 
 
@@ -275,14 +291,29 @@ def _collect_artifact_predictions(
     artifact: LearnedGraphArtifact,
     sample_positions: np.ndarray,
     remove_autoregressive: bool,
+    slice_batch_size: int,
 ) -> tuple[np.ndarray, dict[str, Any]]:
     if artifact.adj.ndim != 2 or artifact.adj.shape[0] != artifact.adj.shape[1]:
         raise ValueError(f"Expected a square 2D adjacency matrix, got shape {artifact.adj.shape}.")
 
-    preds = np.asarray(
-        artifact.adj[sample_positions[:, :, None], sample_positions[:, None, :]],
-        dtype=np.float32,
-    )
+    batch_size = max(1, int(slice_batch_size))
+    pred_chunks: list[np.ndarray] = []
+    total_samples = int(sample_positions.shape[0])
+    chunk_starts = range(0, total_samples, batch_size)
+    for start_idx in _progress(
+        chunk_starts,
+        total=(total_samples + batch_size - 1) // batch_size,
+        desc=f"Slicing {artifact.name}",
+    ):
+        batch_positions = sample_positions[start_idx : start_idx + batch_size]
+        pred_chunks.append(
+            np.asarray(
+                artifact.adj[batch_positions[:, :, None], batch_positions[:, None, :]],
+                dtype=np.float32,
+            )
+        )
+
+    preds = pred_chunks[0] if len(pred_chunks) == 1 else np.concatenate(pred_chunks, axis=0)
 
     if remove_autoregressive:
         preds_preprocessed = remove_diagonal(preds)
@@ -403,6 +434,7 @@ def main() -> int:
                 artifact,
                 sample_positions,
                 args.remove_autoregressive,
+                args.slice_batch_size,
             )
             score_name = (
                 artifact.name
