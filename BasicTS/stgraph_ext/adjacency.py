@@ -26,6 +26,11 @@ def _extract_mtgnn_adj(model: Any) -> torch.Tensor:
     return core.gc.fullA(idx).detach()
 
 
+def _extract_d2stgnn_adj(model: Any) -> torch.Tensor:
+    core = _unwrap_model(model)
+    return F.softmax(F.relu(torch.mm(core.node_emb_d.detach(), core.node_emb_u.detach().transpose(0, 1))), dim=1)
+
+
 def _extract_gts_adj(runner: Any, sample_batch: dict) -> dict[str, torch.Tensor]:
     was_training = runner.model.training
     runner.model.eval()
@@ -54,6 +59,11 @@ def extract_learned_graph(runner: Any, sample_batch: dict | None = None) -> dict
         return {"adj": _to_numpy(_extract_gwnet_adj(runner.model))}
     if model_name == "mtgnn":
         return {"adj": _to_numpy(_extract_mtgnn_adj(runner.model))}
+    if model_name == "d2stgnn":
+        return {
+            "adj": _to_numpy(_extract_d2stgnn_adj(runner.model)),
+            "graph_semantics": np.asarray("static_directed"),
+        }
     if model_name == "gts":
         if sample_batch is None:
             raise ValueError("GTS adjacency extraction requires a sample batch.")

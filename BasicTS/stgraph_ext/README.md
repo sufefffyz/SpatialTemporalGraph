@@ -13,7 +13,7 @@ It adds:
 - explicit-split forecasting dataset support via `split_indices.npz`
 - explicit-train-split z-score scaling
 - periodic learned-graph snapshots under `learned_graphs/`
-- 8 ready-to-run configs for `AGCRN`, `GTS`, `MTGNN`, and `GWNet`
+- 10 ready-to-run configs for `AGCRN`, `GTS`, `MTGNN`, `GWNet`, and `D2STGNN`
 
 ## Prepare datasets
 
@@ -59,6 +59,7 @@ If `--dataset-name` is omitted, the output name is inferred from the requested r
 
 ```bash
 python experiments/train.py -c stgraph_ext/configs/AGCRN_TRAFFIC_VOLUME_5MIN.py -g 0
+python experiments/train.py -c stgraph_ext/configs/D2STGNN_TRAFFIC_VOLUME_5MIN.py -g 0
 python experiments/train.py -c stgraph_ext/configs/GTS_TRAFFIC_VOLUME_5MIN.py -g 0
 python experiments/train.py -c stgraph_ext/configs/MTGNN_TRAFFIC_VOLUME_5MIN.py -g 0
 python experiments/train.py -c stgraph_ext/configs/GWNET_TRAFFIC_VOLUME_5MIN.py -g 0
@@ -66,6 +67,7 @@ python experiments/train.py -c stgraph_ext/configs/GWNET_TRAFFIC_VOLUME_5MIN.py 
 
 ```bash
 python experiments/train.py -c stgraph_ext/configs/AGCRN_RIVERS_EAST_GERMANY_15MIN.py -g 0
+python experiments/train.py -c stgraph_ext/configs/D2STGNN_RIVERS_EAST_GERMANY_15MIN.py -g 0
 python experiments/train.py -c stgraph_ext/configs/GTS_RIVERS_EAST_GERMANY_15MIN.py -g 0
 python experiments/train.py -c stgraph_ext/configs/MTGNN_RIVERS_EAST_GERMANY_15MIN.py -g 0
 python experiments/train.py -c stgraph_ext/configs/GWNET_RIVERS_EAST_GERMANY_15MIN.py -g 0
@@ -109,6 +111,21 @@ Each `.npz` stores at least:
 - `epoch`
 - `model_name`
 - `dataset_name`
+
+`D2STGNN` snapshots also store `graph_semantics=static_directed` to indicate that the
+exported adjacency is the model's static directed adaptive graph.
+
+## Graph symmetry notes
+
+- `GTS`, `GWNet`, `MTGNN`, and `D2STGNN` should be treated as directed or generally non-symmetric
+  adaptive-graph baselines.
+- `AGCRN` starts from a symmetric score matrix built from `E E^T`, but the row-wise softmax used
+  during message passing makes the final propagation matrix non-symmetric, so it is not a strictly
+  undirected baseline.
+- `MTGNN` includes a `graph_undirected` constructor in its codebase, but the row-wise `top-k`
+  sparsification step breaks strict symmetry in the actual propagation graph. This extension layer
+  therefore does not advertise MTGNN as a strict undirected baseline and does not provide an
+  `MTGNN-U` variant yet.
 
 ## Notes
 

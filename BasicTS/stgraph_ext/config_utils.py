@@ -10,6 +10,7 @@ from easydict import EasyDict
 from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
 from basicts.utils import load_adj
 from baselines.AGCRN.arch import AGCRN
+from baselines.D2STGNN.arch import D2STGNN
 from baselines.GTS.arch import GTS
 from baselines.GTS.loss import gts_loss
 from baselines.GWNet.arch import GraphWaveNet
@@ -51,6 +52,18 @@ def _compute_gts_dim_fc(train_length: int) -> int:
     if dim_fc <= 0:
         raise ValueError(f"Training length {train_length} is too short for GTS conv stack.")
     return int(dim_fc)
+
+
+def _time_in_day_size(dataset_name: str) -> int:
+    desc = _load_desc(dataset_name)
+    frequency_minutes = int(desc["frequency (minutes)"])
+    if frequency_minutes <= 0:
+        raise ValueError(f"Dataset {dataset_name} has invalid frequency: {frequency_minutes}.")
+    if 1440 % frequency_minutes != 0:
+        raise ValueError(
+            f"Dataset {dataset_name} frequency {frequency_minutes} does not evenly divide one day."
+        )
+    return 1440 // frequency_minutes
 
 
 def _base_cfg(dataset_name: str, model_arch, model_param: dict, loss_fn, num_epochs: int = 100) -> EasyDict:
@@ -256,4 +269,39 @@ def build_gts_cfg(dataset_name: str, num_epochs: int = 100) -> EasyDict:
     cfg.TRAIN.OPTIM.PARAM = {"lr": 0.001, "eps": 1e-3}
     cfg.TRAIN.LR_SCHEDULER = EasyDict({"TYPE": "MultiStepLR", "PARAM": {"milestones": [20, 30], "gamma": 0.1}})
     cfg.TRAIN.CLIP_GRAD_PARAM = {"max_norm": 5.0}
+    return cfg
+
+
+def build_d2stgnn_cfg(dataset_name: str, num_epochs: int = 100) -> EasyDict:
+    desc = _load_desc(dataset_name)
+    input_len = desc["regular_settings"]["INPUT_LEN"]
+    output_len = desc["regular_settings"]["OUTPUT_LEN"]
+    adj_mx, _ = load_adj(os.path.join("datasets", dataset_name, "adj_mx.pkl"), "doubletransition")
+    model_param = {
+        "num_feat": 1,
+        "num_hidden": 32,
+        "dropout": 0.1,
+        "seq_length": input_len,
+        "k_t": 3,
+        "k_s": 2,
+        "gap": 3,
+        "num_nodes": desc["num_nodes"],
+        "adjs": [torch.tensor(adj) for adj in adj_mx],
+        "num_layers": 5,
+        "num_modalities": 2,
+        "node_hidden": 12,
+        "time_emb_dim": 12,
+        "time_in_day_size": _time_in_day_size(dataset_name),
+        "day_in_week_size": 7,
+    }
+    cfg = _base_cfg(dataset_name, D2STGNN, model_param, masked_mae, num_epochs=num_epochs)
+    cfg.MODEL.FORWARD_FEATURES = [0, 1, 2]
+    cfg.MODEL.TARGET_FEATURES = [0]
+    cfg.TRAIN.OPTIM.TYPE = "Adam"
+    cfg.TRAIN.OPTIM.PARAM = {"lr": 0.002, "weight_decay": 1.0e-5, "eps": 1.0e-8}
+    cfg.TRAIN.LR_SCHEDULER = EasyDict(
+        {"TYPE": "MultiStepLR", "PARAM": {"milestones": [1, 30, 38, 46, 54, 62, 70, 80], "gamma": 0.5}}
+    )
+    cfg.TRAIN.CLIP_GRAD_PARAM = {"max_norm": 5.0}
+    cfg.TRAIN.CL = EasyDict({"WARM_EPOCHS": 30, "CL_EPOCHS": 3, "PREDICTION_LENGTH": output_len})
     return cfg

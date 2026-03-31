@@ -34,6 +34,12 @@ class _FakeMTGNNModel:
         self.idx = torch.tensor([0, 1], dtype=torch.long)
 
 
+class _FakeD2STGNNModel:
+    def __init__(self):
+        self.node_emb_d = torch.tensor([[1.0, 0.0], [0.0, 1.0]], dtype=torch.float32)
+        self.node_emb_u = torch.tensor([[1.0, 1.0], [0.0, 1.0]], dtype=torch.float32)
+
+
 class _FakeGTSModel:
     def __init__(self):
         self.training = True
@@ -69,15 +75,19 @@ class _FakeRunner:
 
 class TestAdjacencyExtraction(unittest.TestCase):
     def test_extract_learned_graph(self):
-        with tempfile.TemporaryDirectory() as tmp1, tempfile.TemporaryDirectory() as tmp2, tempfile.TemporaryDirectory() as tmp3, tempfile.TemporaryDirectory() as tmp4:
+        with tempfile.TemporaryDirectory() as tmp1, tempfile.TemporaryDirectory() as tmp2, tempfile.TemporaryDirectory() as tmp3, tempfile.TemporaryDirectory() as tmp4, tempfile.TemporaryDirectory() as tmp5:
             agcrn_runner = _FakeRunner("AGCRN", _FakeAGCRNModel(), ckpt_dir=tmp1)
             gwnet_runner = _FakeRunner("GraphWaveNet", _FakeGWNetModel(), ckpt_dir=tmp2)
             mtgnn_runner = _FakeRunner("MTGNN", _FakeMTGNNModel(), ckpt_dir=tmp3)
             gts_runner = _FakeRunner("GTS", _FakeGTSModel(), ckpt_dir=tmp4)
+            d2stgnn_runner = _FakeRunner("D2STGNN", _FakeD2STGNNModel(), ckpt_dir=tmp5)
 
             self.assertEqual(extract_learned_graph(agcrn_runner)["adj"].shape, (2, 2))
             self.assertEqual(extract_learned_graph(gwnet_runner)["adj"].shape, (2, 2))
             self.assertEqual(extract_learned_graph(mtgnn_runner)["adj"].shape, (2, 2))
+            d2stgnn_payload = extract_learned_graph(d2stgnn_runner)
+            self.assertEqual(d2stgnn_payload["adj"].shape, (2, 2))
+            self.assertEqual(d2stgnn_payload["graph_semantics"].item(), "static_directed")
             gts_payload = extract_learned_graph(gts_runner, sample_batch={"inputs": None, "target": None})
             self.assertIn("adj", gts_payload)
             self.assertIn("prior_adj", gts_payload)
