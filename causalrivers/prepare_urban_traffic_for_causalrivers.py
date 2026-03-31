@@ -6,6 +6,7 @@ from pathlib import Path
 
 import networkx as nx
 import numpy as np
+import pandas as pd
 
 from tools.graph_sampling_tools import (
     add_one_random_node,
@@ -85,6 +86,14 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--resolution",
+        default=None,
+        help=(
+            "Optional coarser aggregation resolution for the exported product assets, "
+            "for example 15min, 30min, 1h, or 6h. The benchmark resolution should match."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=7,
@@ -101,6 +110,36 @@ def parse_args():
 
 def sanitize_name(name: str) -> str:
     return name.replace("-", "_").replace(" ", "_")
+
+
+def parse_resolution_to_minutes(resolution: str | None) -> int | None:
+    if resolution is None:
+        return None
+    text = str(resolution).strip().lower()
+    if not text:
+        return None
+    if text.isdigit():
+        minutes = int(text)
+    else:
+        text = text.replace("minutes", "min").replace("minute", "min").replace("hours", "h").replace("hour", "h")
+        minutes = int(pd.Timedelta(text).total_seconds() // 60)
+    if minutes <= 0:
+        raise ValueError(f"Resolution must be positive, got {resolution}.")
+    return minutes
+
+
+def resolution_minutes_to_suffix(minutes: int) -> str:
+    if minutes <= 0:
+        raise ValueError(f"Resolution minutes must be positive, got {minutes}.")
+    if minutes % 60 == 0:
+        return f"{minutes // 60}h"
+    return f"{minutes}min"
+
+
+def infer_dataset_name(base_name: str, resolution_minutes: int | None, native_minutes: int) -> str:
+    if resolution_minutes is None or resolution_minutes == native_minutes:
+        return sanitize_name(base_name)
+    return sanitize_name(f"{base_name}_{resolution_minutes_to_suffix(resolution_minutes)}")
 
 
 def maybe_scalar(array_like):
@@ -172,6 +211,18 @@ def build_graph(data) -> tuple[nx.DiGraph, dict]:
         "coordinate_indices": coordinate_indices,
     }
     return graph, metadata
+
+
+def aggregate_targets(targets: np.ndarray, unix_timestamps: np.ndarray, resolution_minutes: int | None) -> tuple[np.ndarray, np.ndarray]:
+    if resolution_minutes is None:
+        return np.asarray(targets, dtype=np.float32), np.asarray(unix_timestamps, dtype=np.int64)
+
+    dt_index = pd.to_datetime(np.asarray(unix_timestamps, dtype=np.int64), unit="s")
+    rule = resolution_minutes_to_suffix(resolution_minutes)
+    frame = pd.DataFrame(np.asarray(targets, dtype=np.float32), index=dt_index)
+    aggregated = frame.groupby(pd.DatetimeIndex(frame.index.floor(rule)), sort=True).mean()
+    aggregated_index = pd.DatetimeIndex(aggregated.index)
+    return aggregated.to_numpy(dtype=np.float32), aggregated_index.astype("datetime64[s]").astype(np.int64)
 
 
 def _limit_candidates(candidates, max_samples: int, seed: int):
@@ -309,15 +360,28 @@ def generate_samples(graph: nx.DiGraph, strategy: str, n_vars: int, max_samples:
     raise NotImplementedError(f"Unsupported strategy: {strategy}")
 
 
-def save_product_assets(product_dir: Path, graph: nx.DiGraph, data, metadata: dict, source_path: Path):
+def save_product_assets(
+    product_dir: Path,
+    graph: nx.DiGraph,
+    data,
+    metadata: dict,
+    source_path: Path,
+    targets_override: np.ndarray | None = None,
+    timestamps_override: np.ndarray | None = None,
+):
     product_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Writing product assets to {product_dir}")
     with open(product_dir / "graph.p", "wb") as handle:
         pickle.dump(graph, handle)
 
-    np.save(product_dir / "targets.npy", data["targets"].astype(np.float32))
-    np.save(product_dir / "unix_timestamps.npy", data["unix_timestamps"])
+    targets_to_save = np.asarray(targets_override if targets_override is not None else data["targets"], dtype=np.float32)
+    timestamps_to_save = np.asarray(
+        timestamps_override if timestamps_override is not None else data["unix_timestamps"],
+        dtype=np.int64,
+    )
+    np.save(product_dir / "targets.npy", targets_to_save)
+    np.save(product_dir / "unix_timestamps.npy", timestamps_to_save)
     np.save(product_dir / "node_ids.npy", np.arange(graph.number_of_nodes(), dtype=np.int64))
 
     for split_name in ["train_timestamps", "val_timestamps", "test_timestamps"]:
@@ -326,10 +390,10 @@ def save_product_assets(product_dir: Path, graph: nx.DiGraph, data, metadata: di
 
     manifest = {
         "source_npz": str(source_path.resolve()),
-        "num_timestamps": int(data["targets"].shape[0]),
+        "num_timestamps": int(targets_to_save.shape[0]),
         "num_nodes": int(graph.number_of_nodes()),
         "num_edges": int(graph.number_of_edges()),
-        "timestamp_frequency_seconds": int(np.median(np.diff(data["unix_timestamps"]))),
+        "timestamp_frequency_seconds": int(np.median(np.diff(timestamps_to_save))),
         "warning": (
             "Labels generated from this product use road-topology edges as pseudo ground truth. "
             "This is useful for making the pipeline runnable, but it is not equivalent to the "
@@ -357,16 +421,43 @@ def main():
     if not source_path.exists():
         raise FileNotFoundError(source_path)
 
-    dataset_name = sanitize_name(args.dataset_name or source_path.stem)
-    label_filename = f"{dataset_name}.p"
-
     print(f"Loading traffic dataset from {source_path}")
     data = np.load(source_path, allow_pickle=True)
+    native_minutes = int(round(np.median(np.diff(np.asarray(data["unix_timestamps"], dtype=np.int64))) / 60))
+    target_resolution_minutes = parse_resolution_to_minutes(args.resolution) or native_minutes
+    if target_resolution_minutes < native_minutes:
+        raise ValueError(
+            f"Target resolution {target_resolution_minutes}min is finer than native resolution "
+            f"{native_minutes}min."
+        )
+    if target_resolution_minutes % native_minutes != 0:
+        raise ValueError(
+            f"Target resolution {target_resolution_minutes}min must be an integer multiple of native "
+            f"resolution {native_minutes}min."
+        )
+
+    dataset_name = sanitize_name(args.dataset_name or infer_dataset_name(source_path.stem, target_resolution_minutes, native_minutes))
+    label_filename = f"{dataset_name}.p"
+
+    aggregated_targets, aggregated_timestamps = aggregate_targets(
+        data["targets"],
+        data["unix_timestamps"],
+        None if target_resolution_minutes == native_minutes else target_resolution_minutes,
+    )
+
     print("Building graph representation")
     graph, graph_metadata = build_graph(data)
 
     product_dir = Path(args.product_dir) / f"traffic_{dataset_name}"
-    save_product_assets(product_dir, graph, data, graph_metadata, source_path)
+    save_product_assets(
+        product_dir,
+        graph,
+        data,
+        graph_metadata,
+        source_path,
+        targets_override=aggregated_targets,
+        timestamps_override=aggregated_timestamps,
+    )
 
     summary = []
     strategy_pairs = [(strategy, n_vars) for strategy in args.strategies for n_vars in args.n_vars]
@@ -406,7 +497,17 @@ def main():
         f"data_path={product_dir} "
         "method=var "
         "data_preprocess.normalize=False "
-        "data_preprocess.resolution=5min"
+        f"data_preprocess.resolution={resolution_minutes_to_suffix(target_resolution_minutes)}"
+    )
+    print(
+        "To use this dataset with benchmark_traffic_multi.yaml, override only the paths and resolution, "
+        "for example:"
+    )
+    print(
+        "python benchmark.py --config-name benchmark_traffic_multi "
+        f"label_path={example_label_path} "
+        f"data_path={product_dir} "
+        f"data_preprocess.resolution={resolution_minutes_to_suffix(target_resolution_minutes)}"
     )
 
 
