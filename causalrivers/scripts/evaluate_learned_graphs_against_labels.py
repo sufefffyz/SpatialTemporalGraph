@@ -61,6 +61,15 @@ class PreparedLabelSet:
     label_tensors_preprocessed: np.ndarray
 
 
+@dataclass(frozen=True)
+class PreparedArtifactEvaluation:
+    prepared_labels: PreparedLabelSet
+    artifact: LearnedGraphArtifact
+    score_name: str
+    preds_preprocessed: np.ndarray
+    prediction_meta: dict[str, Any]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate learned BasicTS adjacency snapshots against causalrivers label graphs."
@@ -262,19 +271,17 @@ def _resolve_node_index_map(
     return adj_node_map
 
 
-def _score_single_artifact(
+def _collect_artifact_predictions(
     artifact: LearnedGraphArtifact,
-    prepared_labels: PreparedLabelSet,
-    sample_positions: list[np.ndarray],
+    sample_positions: np.ndarray,
     remove_autoregressive: bool,
-    n_jobs: int,
-    chunk_size: int,
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    preds = np.stack(
-        [
-            np.asarray(artifact.adj[np.ix_(node_positions, node_positions)], dtype=np.float32)
-            for node_positions in sample_positions
-        ]
+) -> tuple[np.ndarray, dict[str, Any]]:
+    if artifact.adj.ndim != 2 or artifact.adj.shape[0] != artifact.adj.shape[1]:
+        raise ValueError(f"Expected a square 2D adjacency matrix, got shape {artifact.adj.shape}.")
+
+    preds = np.asarray(
+        artifact.adj[sample_positions[:, :, None], sample_positions[:, None, :]],
+        dtype=np.float32,
     )
 
     if remove_autoregressive:
@@ -282,28 +289,16 @@ def _score_single_artifact(
     else:
         preds_preprocessed = preds
 
-    start = time.perf_counter()
-    scoring = score_preprocessed(
-        preds_preprocessed,
-        prepared_labels.label_tensors_preprocessed,
-        name=artifact.name,
-        n_jobs=n_jobs,
-        chunk_size=chunk_size,
-    )
-    runtime_seconds = time.perf_counter() - start
-    scoring.index.name = "Metric"
     meta = {
         "snapshot_path": str(artifact.path),
         "snapshot_name": artifact.name,
-        "num_label_graphs": len(prepared_labels.sample_nodes),
         "adj_shape": list(artifact.adj.shape),
-        "runtime_seconds": runtime_seconds,
         "metadata": {key: (value.tolist() if isinstance(value, np.ndarray) else value) for key, value in artifact.metadata.items()},
     }
-    return scoring, meta
+    return preds_preprocessed, meta
 
 
-def _build_sample_positions(sample_nodes: list[list[Any]], node_index_map: dict[str, int]) -> list[np.ndarray]:
+def _build_sample_positions(sample_nodes: list[list[Any]], node_index_map: dict[str, int]) -> np.ndarray:
     positions: list[np.ndarray] = []
     for nodes in sample_nodes:
         node_positions = []
@@ -315,7 +310,7 @@ def _build_sample_positions(sample_nodes: list[list[Any]], node_index_map: dict[
                 )
             node_positions.append(node_index_map[key])
         positions.append(np.asarray(node_positions, dtype=np.int64))
-    return positions
+    return np.stack(positions, axis=0)
 
 
 def _prepare_label_set(label_path: Path, restrict_to: int, remove_autoregressive: bool) -> PreparedLabelSet:
@@ -382,12 +377,10 @@ def main() -> int:
 
     node_order, adj_node_map = _load_node_order(args.adj_mx_pkl)
 
-    scoring_tables = []
-    runtime_rows: list[dict[str, Any]] = []
-    manifest_entries: list[dict[str, Any]] = []
-    long_rows: list[dict[str, Any]] = []
     label_manifests: list[dict[str, Any]] = []
     multi_label = len(label_paths) > 1
+    learned_artifacts = [_load_learned_graph(path) for path in learned_graph_files]
+    prepared_evaluations: list[PreparedArtifactEvaluation] = []
 
     for label_path in label_paths:
         prepared_labels = _prepare_label_set(
@@ -398,8 +391,7 @@ def main() -> int:
         label_info = prepared_labels.label_info
         label_manifests.append(label_info)
 
-        for learned_graph_path in learned_graph_files:
-            artifact = _load_learned_graph(learned_graph_path)
+        for artifact in learned_artifacts:
             node_index_map = _resolve_node_index_map(
                 artifact,
                 args.adj_mx_pkl,
@@ -407,21 +399,77 @@ def main() -> int:
                 adj_node_map,
             )
             sample_positions = _build_sample_positions(prepared_labels.sample_nodes, node_index_map)
-            scoring, meta = _score_single_artifact(
+            preds_preprocessed, prediction_meta = _collect_artifact_predictions(
                 artifact,
-                prepared_labels,
                 sample_positions,
                 args.remove_autoregressive,
-                args.n_jobs,
-                args.chunk_size,
             )
-            score_name = artifact.name if not multi_label else f"{label_id}__{artifact.name}"
-            scoring.columns = [score_name]
-            scoring_tables.append(scoring)
-            meta.update(label_info)
-            meta["score_name"] = score_name
-            manifest_entries.append(meta)
-            runtime_rows.append(
+            score_name = (
+                artifact.name
+                if not multi_label
+                else f"{label_info['label_id']}__{artifact.name}"
+            )
+            prepared_evaluations.append(
+                PreparedArtifactEvaluation(
+                    prepared_labels=prepared_labels,
+                    artifact=artifact,
+                    score_name=score_name,
+                    preds_preprocessed=preds_preprocessed,
+                    prediction_meta=prediction_meta,
+                )
+            )
+
+    scoring_tables = []
+    runtime_rows: list[dict[str, Any]] = []
+    manifest_entries: list[dict[str, Any]] = []
+    long_rows: list[dict[str, Any]] = []
+
+    for prepared_eval in prepared_evaluations:
+        label_info = prepared_eval.prepared_labels.label_info
+        start = time.perf_counter()
+        scoring = score_preprocessed(
+            prepared_eval.preds_preprocessed,
+            prepared_eval.prepared_labels.label_tensors_preprocessed,
+            name=prepared_eval.artifact.name,
+            n_jobs=args.n_jobs,
+            chunk_size=args.chunk_size,
+        )
+        runtime_seconds = time.perf_counter() - start
+        scoring.index.name = "Metric"
+
+        meta = dict(prepared_eval.prediction_meta)
+        meta["num_label_graphs"] = label_info["num_label_graphs"]
+        meta["runtime_seconds"] = runtime_seconds
+        score_name = prepared_eval.score_name
+
+        scoring.columns = [score_name]
+        scoring_tables.append(scoring)
+        meta.update(label_info)
+        meta["score_name"] = score_name
+        manifest_entries.append(meta)
+        runtime_rows.append(
+            {
+                "label_id": label_info["label_id"],
+                "label_group": label_info["label_group"],
+                "label_name": label_info["label_name"],
+                "label_dataset_name": label_info["label_dataset_name"],
+                "label_path": label_info["label_path"],
+                "strategy": label_info["strategy"],
+                "n_vars": label_info["n_vars"],
+                "label_tag": label_info["label_tag"],
+                "snapshot": prepared_eval.artifact.name,
+                "score_name": score_name,
+                "snapshot_path": str(prepared_eval.artifact.path),
+                "model_name": _normalize_metadata_scalar(prepared_eval.artifact.metadata.get("model_name")),
+                "learned_dataset_name": _normalize_metadata_scalar(prepared_eval.artifact.metadata.get("dataset_name")),
+                "epoch": _normalize_metadata_scalar(prepared_eval.artifact.metadata.get("epoch")),
+                "graph_semantics": _normalize_metadata_scalar(prepared_eval.artifact.metadata.get("graph_semantics")),
+                "runtime_seconds": runtime_seconds,
+                "num_label_graphs": label_info["num_label_graphs"],
+            }
+        )
+        for metric_name, row in scoring[[score_name]].iterrows():
+            long_rows.append(
                 {
                     "label_id": label_info["label_id"],
                     "label_group": label_info["label_group"],
@@ -431,39 +479,17 @@ def main() -> int:
                     "strategy": label_info["strategy"],
                     "n_vars": label_info["n_vars"],
                     "label_tag": label_info["label_tag"],
-                    "snapshot": artifact.name,
+                    "snapshot": prepared_eval.artifact.name,
                     "score_name": score_name,
-                    "snapshot_path": str(artifact.path),
-                    "model_name": _normalize_metadata_scalar(artifact.metadata.get("model_name")),
-                    "learned_dataset_name": _normalize_metadata_scalar(artifact.metadata.get("dataset_name")),
-                    "epoch": _normalize_metadata_scalar(artifact.metadata.get("epoch")),
-                    "graph_semantics": _normalize_metadata_scalar(artifact.metadata.get("graph_semantics")),
-                    "runtime_seconds": meta["runtime_seconds"],
-                    "num_label_graphs": label_info["num_label_graphs"],
+                    "snapshot_path": str(prepared_eval.artifact.path),
+                    "model_name": _normalize_metadata_scalar(prepared_eval.artifact.metadata.get("model_name")),
+                    "learned_dataset_name": _normalize_metadata_scalar(prepared_eval.artifact.metadata.get("dataset_name")),
+                    "epoch": _normalize_metadata_scalar(prepared_eval.artifact.metadata.get("epoch")),
+                    "graph_semantics": _normalize_metadata_scalar(prepared_eval.artifact.metadata.get("graph_semantics")),
+                    "metric": metric_name,
+                    "value": row.iloc[0],
                 }
             )
-            for metric_name, row in scoring[[score_name]].iterrows():
-                long_rows.append(
-                    {
-                        "label_id": label_info["label_id"],
-                        "label_group": label_info["label_group"],
-                        "label_name": label_info["label_name"],
-                        "label_dataset_name": label_info["label_dataset_name"],
-                        "label_path": label_info["label_path"],
-                        "strategy": label_info["strategy"],
-                        "n_vars": label_info["n_vars"],
-                        "label_tag": label_info["label_tag"],
-                        "snapshot": artifact.name,
-                        "score_name": score_name,
-                        "snapshot_path": str(artifact.path),
-                        "model_name": _normalize_metadata_scalar(artifact.metadata.get("model_name")),
-                        "learned_dataset_name": _normalize_metadata_scalar(artifact.metadata.get("dataset_name")),
-                        "epoch": _normalize_metadata_scalar(artifact.metadata.get("epoch")),
-                        "graph_semantics": _normalize_metadata_scalar(artifact.metadata.get("graph_semantics")),
-                        "metric": metric_name,
-                        "value": row.iloc[0],
-                    }
-                )
 
     if len(scoring_tables) == 1:
         merged = scoring_tables[0]
