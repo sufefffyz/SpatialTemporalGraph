@@ -1,6 +1,7 @@
 __all__ = [
     "add_one_random_node",
     "combine_far_apart",
+    "get_two_hop_neighborhood_samples",
     "get_all_subgraphs",
     "get_all_sink_cases",
     "get_longest_path",
@@ -62,6 +63,40 @@ def combine_far_apart(G, candidates):
         new_samples.append(tuple(sorted(sample + candidates[current_best])))
 
     return set(new_samples)
+
+
+def get_two_hop_neighborhood_samples(G: nx.Graph, n_vars: int = 5) -> list[tuple[int, ...]]:
+    """
+    Builds candidate subgraphs by taking the 2-hop neighborhood around each center node.
+
+    The returned subgraph is always size ``n_vars`` when possible. If the 2-hop neighborhood is
+    larger than ``n_vars``, we keep the closest nodes first, then prefer nodes with higher degree
+    as a deterministic tie-breaker. This keeps the center and nearby nodes together while still
+    producing fixed-size samples.
+    """
+    if n_vars <= 0:
+        raise ValueError(f"n_vars must be positive, got {n_vars}.")
+
+    undirected = G.to_undirected(as_view=True)
+    candidates = set()
+
+    for center in list(G.nodes):
+        hop_lengths = nx.single_source_shortest_path_length(undirected, center, cutoff=2)
+        if len(hop_lengths) < n_vars:
+            continue
+
+        ranked_nodes = sorted(
+            hop_lengths.items(),
+            key=lambda item: (
+                item[1],
+                -undirected.degree(item[0]),
+                item[0],
+            ),
+        )
+        chosen = tuple(sorted(node for node, _dist in ranked_nodes[:n_vars]))
+        candidates.add(chosen)
+
+    return sorted(candidates)
 
 
 def get_all_subgraphs(G: nx.Graph, n_vars: int = 5) -> list[set[int]]:

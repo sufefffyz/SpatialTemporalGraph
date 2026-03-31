@@ -14,6 +14,7 @@ from tools.graph_sampling_tools import (
     get_all_sink_cases,
     get_all_subgraphs,
     get_longest_path,
+    get_two_hop_neighborhood_samples,
     select_confounder_samples,
 )
 
@@ -59,7 +60,7 @@ def parse_args():
         "--strategies",
         nargs="+",
         default=["debug_set"],
-        choices=["debug_set", "random", "1_random", "confounder", "sink", "close", "disjoint", "root_cause"],
+        choices=["debug_set", "random", "1_random", "2_hop", "confounder", "sink", "close", "disjoint", "root_cause"],
         help=(
             "Sampling strategies to export. 'debug_set' is the safest smoke-test option on large traffic graphs."
         ),
@@ -325,6 +326,15 @@ def generate_samples(graph: nx.DiGraph, strategy: str, n_vars: int, max_samples:
 
     if strategy == "confounder":
         candidates = select_confounder_samples(graph, n_vars=n_vars)
+        return _limit_candidates(candidates, max_samples, seed)
+
+    if strategy == "2_hop":
+        candidates = get_two_hop_neighborhood_samples(graph, n_vars=n_vars)
+        if not candidates:
+            raise ValueError(
+                "No 2-hop neighborhood candidates were generated. "
+                "Try a smaller n_vars or a graph with denser local connectivity."
+            )
         return _limit_candidates(candidates, max_samples, seed)
 
     if strategy == "sink":
