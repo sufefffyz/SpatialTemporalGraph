@@ -10,11 +10,11 @@ import pandas as pd
 
 from tools.graph_sampling_tools import (
     add_one_random_node,
+    build_two_hop_projection_graph,
     combine_far_apart,
     get_all_sink_cases,
     get_all_subgraphs,
     get_longest_path,
-    get_two_hop_neighborhood_samples,
     select_confounder_samples,
 )
 
@@ -329,13 +329,10 @@ def generate_samples(graph: nx.DiGraph, strategy: str, n_vars: int, max_samples:
         return _limit_candidates(candidates, max_samples, seed)
 
     if strategy == "2_hop":
-        candidates = get_two_hop_neighborhood_samples(graph, n_vars=n_vars)
-        if not candidates:
-            raise ValueError(
-                "No 2-hop neighborhood candidates were generated. "
-                "Try a smaller n_vars or a graph with denser local connectivity."
-            )
-        return _limit_candidates(candidates, max_samples, seed)
+        if max_samples <= 0:
+            candidates = get_all_subgraphs(graph, n_vars=n_vars)
+            return _limit_candidates(candidates, max_samples, seed)
+        return sample_connected_candidates(graph, n_vars=n_vars, max_samples=max_samples, seed=seed)
 
     if strategy == "sink":
         candidates = get_all_sink_cases(graph, n_vars=n_vars, restrict=max_samples if max_samples > 0 else 15)
@@ -415,10 +412,16 @@ def save_product_assets(
         json.dump(manifest, handle, indent=2)
 
 
-def save_label_samples(graph: nx.DiGraph, samples, output_path: Path):
+def _build_label_graph(graph: nx.DiGraph, node_ids, strategy: str):
+    if strategy == "2_hop":
+        return build_two_hop_projection_graph(graph, node_ids)
+    return nx.subgraph(graph, node_ids).copy()
+
+
+def save_label_samples(graph: nx.DiGraph, samples, output_path: Path, strategy: str):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     subgraphs = [
-        nx.subgraph(graph, node_ids).copy()
+        _build_label_graph(graph, node_ids, strategy=strategy)
         for node_ids in progress(samples, total=len(samples), desc=f"Saving {output_path.parent.name}")
     ]
     with open(output_path, "wb") as handle:
@@ -492,7 +495,7 @@ def main():
             )
         label_dirname = format_label_dirname(strategy, n_vars, args.label_tag)
         label_path = Path(args.labels_dir) / f"traffic_{dataset_name}" / label_dirname / label_filename
-        save_label_samples(graph, samples, label_path)
+        save_label_samples(graph, samples, label_path, strategy=strategy)
         summary.append((strategy, n_vars, len(samples), label_path))
 
     print(f"Prepared product assets in: {product_dir}")

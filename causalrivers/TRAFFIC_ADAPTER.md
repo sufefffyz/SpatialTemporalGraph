@@ -38,7 +38,7 @@ The benchmark loader in `tools/tools.py` was also extended so `data_path` can po
 
 The directory format is preferred for large traffic datasets because it can memory-map the target matrix instead of forcing a full CSV conversion.
 
-The adapter now also supports a `2_hop` sampling strategy, which builds a fixed-size subgraph from each node's 2-hop neighborhood using nearby nodes first.
+The adapter now also supports a `2_hop` sampling strategy. It first samples the node set in the same way as `random` (a random connected subgraph), and then replaces the original 1-hop edges with 2-hop projected edges only. For example, `a -> b -> c` becomes `a -> c`.
 
 ## Important limitation
 
@@ -172,6 +172,6 @@ python benchmark.py --config-name benchmark_traffic_multi load_mode=eager n_jobs
 
 - `debug_set` is the safest option for a first validation run.
 - `random` can work, but exhaustive connected-subgraph enumeration on large traffic graphs can become expensive.
-- `2_hop` is a practical alternative when you want a local neighborhood-based subgraph instead of a purely random connected sample.
+- `2_hop` reuses the `random` node sampling process, but the saved label graph keeps only 2-hop projected edges and discards the original 1-hop edges.
 - `root_cause` is usually not applicable because road graphs are not DAGs.
 - `close` and `disjoint` only work when coordinate features are present.

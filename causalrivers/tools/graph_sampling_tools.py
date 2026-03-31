@@ -1,5 +1,6 @@
 __all__ = [
     "add_one_random_node",
+    "build_two_hop_projection_graph",
     "combine_far_apart",
     "get_two_hop_neighborhood_samples",
     "get_all_subgraphs",
@@ -97,6 +98,38 @@ def get_two_hop_neighborhood_samples(G: nx.Graph, n_vars: int = 5) -> list[tuple
         candidates.add(chosen)
 
     return sorted(candidates)
+
+
+def build_two_hop_projection_graph(G: nx.DiGraph, sample_nodes) -> nx.DiGraph:
+    """
+    Build a graph that keeps only 2-hop projected edges inside ``sample_nodes``.
+
+    If ``u -> m -> v`` exists in the induced subgraph on ``sample_nodes``, the
+    returned graph contains ``u -> v``. Original 1-hop edges are not preserved.
+    """
+    sample_nodes = sorted(sample_nodes)
+    induced = G.subgraph(sample_nodes)
+
+    projected = nx.DiGraph()
+    for node in sample_nodes:
+        projected.add_node(node, **dict(G.nodes[node]))
+
+    for source in sample_nodes:
+        two_hop_targets = set()
+        for middle in induced.successors(source):
+            for target in induced.successors(middle):
+                if target != source:
+                    two_hop_targets.add(target)
+
+        for target in sorted(two_hop_targets):
+            projected.add_edge(
+                source,
+                target,
+                origin="2_hop_projection",
+                projected_hops=2,
+            )
+
+    return projected
 
 
 def get_all_subgraphs(G: nx.Graph, n_vars: int = 5) -> list[set[int]]:
