@@ -198,7 +198,7 @@ for strategy in "${STRATEGIES[@]}"; do
       FAILED_RUNS+=("${strategy}:${method}:unknown-method")
       continue
     }
-    log_path="${LOG_DIR}/${strategy}_${N_VARS}_${LABEL_TAG}_${method}_eager.log"
+    log_path="${LOG_DIR}/${DATASET_NAME}_${strategy}_${N_VARS}_${LABEL_TAG}_${method}_eager.log"
 
     while true; do
       collect_finished_jobs
