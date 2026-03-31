@@ -29,14 +29,15 @@ config_path_for() {
   local model="$1"
   local dataset="$2"
   case "$dataset" in
-    TRAFFIC_VOLUME_5MIN)
+    TRAFFIC_VOLUME_*)
       echo "stgraph_ext/configs/${model}_TRAFFIC_VOLUME_5MIN.py"
       ;;
-    RIVERS_EAST_GERMANY_15MIN)
+    RIVERS_EAST_GERMANY_*)
       echo "stgraph_ext/configs/${model}_RIVERS_EAST_GERMANY_15MIN.py"
       ;;
     *)
       echo "Unsupported dataset for resume script: $dataset" >&2
+      echo "Expected dataset families like TRAFFIC_VOLUME_* or RIVERS_EAST_GERMANY_*." >&2
       return 1
       ;;
   esac
