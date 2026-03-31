@@ -29,23 +29,36 @@ read -r -a METHODS_ARRAY <<< "$METHODS"
 read -r -a N_VARS_ARRAY <<< "$N_VARS_LIST"
 read -r -a REGION_ARRAY <<< "$REGIONS"
 
+resolve_methods_override_key() {
+  case "$CONFIG_NAME" in
+    benchmark)
+      echo "+methods"
+      ;;
+    *)
+      echo "methods"
+      ;;
+  esac
+}
+
+METHODS_OVERRIDE_KEY="$(resolve_methods_override_key)"
+
 method_override() {
   local method="$1"
   case "$method" in
     var)
-      echo 'methods=[{name:var,max_lag:3,var_absolute_values:true,map_to_summary_graph:max,var_min_std:1.0e-12,var_verbose_failures:false}]'
+      echo "${METHODS_OVERRIDE_KEY}=[{name:var,max_lag:3,var_absolute_values:true,map_to_summary_graph:max,var_min_std:1.0e-12,var_verbose_failures:false}]"
       ;;
     cc)
-      echo 'methods=[{name:cc,max_lag:3,cc_absolute_values:true,map_to_summary_graph:max,naive_child_selection:all}]'
+      echo "${METHODS_OVERRIDE_KEY}=[{name:cc,max_lag:3,cc_absolute_values:true,map_to_summary_graph:max,naive_child_selection:all}]"
       ;;
     rp)
-      echo 'methods=[{name:rp,max_lag:3,rp_score_mode:difference,naive_child_selection:all}]'
+      echo "${METHODS_OVERRIDE_KEY}=[{name:rp,max_lag:3,rp_score_mode:difference,naive_child_selection:all}]"
       ;;
     pcmci)
-      echo 'methods=[{name:pcmci,max_lag:3,map_to_summary_graph:max,pcmci_absolute_values:true,pcmci_pc_alpha:0.05,pcmci_alpha_level:0.05,pcmci_filter_nonsignificant:true,pcmci_verbosity:0}]'
+      echo "${METHODS_OVERRIDE_KEY}=[{name:pcmci,max_lag:3,map_to_summary_graph:max,pcmci_absolute_values:true,pcmci_pc_alpha:0.05,pcmci_alpha_level:0.05,pcmci_filter_nonsignificant:true,pcmci_verbosity:0}]"
       ;;
     varlingam)
-      echo 'methods=[{name:varlingam,max_lag:3,map_to_summary_graph:max,varlingam_absolute_values:true,varlingam_criterion:null,varlingam_prune:true,varlingam_random_state:0}]'
+      echo "${METHODS_OVERRIDE_KEY}=[{name:varlingam,max_lag:3,map_to_summary_graph:max,varlingam_absolute_values:true,varlingam_criterion:null,varlingam_prune:true,varlingam_random_state:0}]"
       ;;
     *)
       echo "Unknown method: $method" >&2
