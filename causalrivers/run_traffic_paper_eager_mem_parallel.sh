@@ -7,6 +7,8 @@ cd "$SCRIPT_DIR"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 CONFIG_NAME="${CONFIG_NAME:-benchmark_traffic_paper_baselines}"
 DATASET_NAME="${DATASET_NAME:-city_traffic_m_volume__category__1_0}"
+DATA_PATH="${DATA_PATH:-product/traffic_${DATASET_NAME}}"
+RESOLUTION="${RESOLUTION:-5min}"
 LABEL_TAG="${LABEL_TAG:-paperlike}"
 N_VARS="${N_VARS:-3}"
 SCORE_N_JOBS="${SCORE_N_JOBS:-32}"
@@ -143,6 +145,8 @@ launch_job() {
       score_n_jobs="$SCORE_N_JOBS" \
       score_chunk_size="$SCORE_CHUNK_SIZE" \
       label_path="$label_path" \
+      data_path="$DATA_PATH" \
+      data_preprocess.resolution="$RESOLUTION" \
       "$override"
   ) >"$log_path" 2>&1 &
 
@@ -159,6 +163,8 @@ JOB_MEM_GB="$(estimate_job_mem_gb)"
 
 echo "Config          : $CONFIG_NAME"
 echo "Dataset         : $DATASET_NAME"
+echo "Data path       : $DATA_PATH"
+echo "Resolution      : $RESOLUTION"
 echo "Label tag       : $LABEL_TAG"
 echo "n_vars          : $N_VARS"
 echo "Strategies      : ${STRATEGIES[*]}"
