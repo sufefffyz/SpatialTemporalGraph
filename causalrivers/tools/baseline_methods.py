@@ -1,5 +1,6 @@
 import json
 import os
+import pickle
 import re
 import subprocess
 import sys
@@ -9,6 +10,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.api import VAR
+
+
+_STGNN_RUNTIME_CACHE = {}
 
 
 def make_human_readable(out, d):
@@ -61,6 +65,106 @@ def _finalize_lagged_matrix(pred, d, cfg, human_readable=False):
     if human_readable:
         return make_human_readable(out, d)
     return out
+
+
+def _load_pickle(path: Path):
+    with path.open("rb") as handle:
+        try:
+            return pickle.load(handle)
+        except UnicodeDecodeError:
+            handle.seek(0)
+            return pickle.load(handle, encoding="latin1")
+
+
+def _normalize_node_id(node):
+    if isinstance(node, (int, np.integer)):
+        return str(int(node))
+    text = str(node).strip()
+    try:
+        return str(int(text))
+    except ValueError:
+        return text
+
+
+def _resolve_stgnn_graph_path(raw_path):
+    path = Path(raw_path).expanduser().resolve()
+    if path.is_file():
+        return path
+    if not path.is_dir():
+        raise FileNotFoundError(f"STGNN learned graph path not found: {path}")
+
+    final_path = path / "final.npz"
+    if final_path.is_file():
+        return final_path
+
+    npz_files = sorted(path.glob("*.npz"))
+    if len(npz_files) == 1:
+        return npz_files[0]
+    if not npz_files:
+        raise FileNotFoundError(f"No .npz learned graph snapshots found under {path}")
+    raise FileExistsError(
+        f"Multiple .npz snapshots found under {path}; pass a concrete final.npz path instead."
+    )
+
+
+def _load_node_order(adj_mx_pkl):
+    payload = _load_pickle(Path(adj_mx_pkl).expanduser().resolve())
+    if isinstance(payload, tuple) and len(payload) == 3:
+        node_ids, node_to_ind, _adj = payload
+        normalized_map = {_normalize_node_id(key): int(val) for key, val in node_to_ind.items()}
+        return list(node_ids), normalized_map
+    if isinstance(payload, np.ndarray):
+        return list(range(payload.shape[0])), {str(idx): idx for idx in range(payload.shape[0])}
+    raise ValueError(f"Unsupported adj_mx.pkl format in {adj_mx_pkl}")
+
+
+def _load_stgnn_runtime(cfg):
+    graph_path = getattr(cfg, "learned_graph_path", None)
+    adj_mx_pkl = getattr(cfg, "adj_mx_pkl", None)
+    if not graph_path or not adj_mx_pkl:
+        raise ValueError(
+            "stgnn_precomputed baseline requires both learned_graph_path=... and adj_mx_pkl=..."
+        )
+
+    resolved_graph_path = _resolve_stgnn_graph_path(graph_path)
+    resolved_adj_path = Path(adj_mx_pkl).expanduser().resolve()
+    cache_key = (str(resolved_graph_path), str(resolved_adj_path))
+    if cache_key in _STGNN_RUNTIME_CACHE:
+        return _STGNN_RUNTIME_CACHE[cache_key]
+
+    with np.load(resolved_graph_path, allow_pickle=True) as data:
+        if "adj" not in data:
+            raise KeyError(f"{resolved_graph_path} does not contain an 'adj' array.")
+        adj = np.asarray(data["adj"], dtype=float)
+
+    if adj.ndim != 2 or adj.shape[0] != adj.shape[1]:
+        raise ValueError(f"Expected a square 2D adjacency matrix, got shape {adj.shape}.")
+
+    node_order, node_to_ind = _load_node_order(resolved_adj_path)
+    if int(adj.shape[0]) != len(node_order):
+        raise ValueError(
+            f"Snapshot {resolved_graph_path} has {adj.shape[0]} nodes, but {resolved_adj_path} describes "
+            f"{len(node_order)} nodes."
+        )
+
+    runtime = {
+        "adj": adj,
+        "node_to_ind": node_to_ind,
+        "sample_cache": {},
+        "graph_path": str(resolved_graph_path),
+    }
+    _STGNN_RUNTIME_CACHE[cache_key] = runtime
+    return runtime
+
+
+def _resolve_sample_positions(columns, node_to_ind):
+    positions = []
+    for column in columns:
+        key = _normalize_node_id(column)
+        if key not in node_to_ind:
+            raise KeyError(f"Sample node {column!r} is missing from the learned-graph node map.")
+        positions.append(node_to_ind[key])
+    return tuple(positions)
 
 
 def _maybe_log_var_issue(cfg, message):
@@ -656,6 +760,19 @@ def cdmi_baseline(d, cfg, human_readable=False):
     return _finalize_pairwise_matrix(pred, d, human_readable=human_readable)
 
 
+def stgnn_precomputed_baseline(d, cfg, human_readable=False):
+    runtime = _load_stgnn_runtime(cfg)
+    column_key = tuple(map(str, d.columns))
+    sample_cache = runtime["sample_cache"]
+
+    if column_key not in sample_cache:
+        sample_cache[column_key] = _resolve_sample_positions(d.columns, runtime["node_to_ind"])
+
+    node_positions = sample_cache[column_key]
+    pred = np.asarray(runtime["adj"][np.ix_(node_positions, node_positions)], dtype=float)
+    return _finalize_pairwise_matrix(pred, d, human_readable=human_readable)
+
+
 BASELINE_METHODS = {
     "var": var_baseline,
     "corr": corr_baseline,
@@ -667,6 +784,7 @@ BASELINE_METHODS = {
     "varlingam": varlingam_baseline,
     "dynotears": dynotears_baseline,
     "cdmi": cdmi_baseline,
+    "stgnn_precomputed": stgnn_precomputed_baseline,
 }
 
 

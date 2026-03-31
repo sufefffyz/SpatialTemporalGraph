@@ -1,0 +1,3 @@
+name: stgnn_precomputed
+learned_graph_path: null
+adj_mx_pkl: null
