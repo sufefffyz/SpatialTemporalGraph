@@ -42,12 +42,12 @@ config_path_for() {
   esac
 }
 
-result_path_for() {
+metrics_path_for() {
   local model="$1"
   local dataset="$2"
   local model_dir
   model_dir="$(model_dir_for "$model")"
-  echo "checkpoints/${model_dir}/${dataset}_${EPOCHS}_${INPUT_LEN}_${OUTPUT_LEN}/test_results.npz"
+  echo "checkpoints/${model_dir}/${dataset}_${EPOCHS}_${INPUT_LEN}_${OUTPUT_LEN}/test_metrics.json"
 }
 
 graph_snapshot_for() {
@@ -73,22 +73,22 @@ echo
 for dataset in "${DATASET_ARRAY[@]}"; do
   for model in "${MODEL_ARRAY[@]}"; do
     config_path="$(config_path_for "$model" "$dataset")"
-    result_path="$(result_path_for "$model" "$dataset")"
+    metrics_path="$(metrics_path_for "$model" "$dataset")"
     graph_path="$(graph_snapshot_for "$model" "$dataset")"
     log_path="${LOG_DIR}/${dataset}_${model}_e${EPOCHS}.log"
 
-    if [ "$FORCE_RERUN" != "1" ] && [ -f "$result_path" ] && [ -f "$graph_path" ]; then
+    if [ "$FORCE_RERUN" != "1" ] && [ -f "$metrics_path" ] && [ -f "$graph_path" ]; then
       echo "Skip existing: dataset=$dataset model=$model"
-      echo "  result: $result_path"
-      echo "  graph : $graph_path"
+      echo "  metrics: $metrics_path"
+      echo "  graph  : $graph_path"
       echo
       continue
     fi
 
     echo "Running: dataset=$dataset model=$model"
     echo "  config: $config_path"
-    echo "  result: $result_path"
-    echo "  log   : $log_path"
+    echo "  metrics: $metrics_path"
+    echo "  log    : $log_path"
 
     STGRAPH_DATASET_NAME="$dataset" STGRAPH_NUM_EPOCHS="$EPOCHS" \
       "$PYTHON_BIN" experiments/train.py \
