@@ -56,6 +56,47 @@ model_dir_for() {
   esac
 }
 
+resolve_checkpoint_artifact() {
+  local ckpt_dir="$1"
+  local want_all="$2"
+  local direct_path
+
+  if [ "$want_all" = "1" ]; then
+    direct_path="${ckpt_dir}/learned_graphs"
+  else
+    direct_path="${ckpt_dir}/learned_graphs/final.npz"
+  fi
+  if [ -e "$direct_path" ]; then
+    printf '%s\n' "$direct_path"
+    return 0
+  fi
+
+  local pattern
+  if [ "$want_all" = "1" ]; then
+    pattern="${ckpt_dir}"/*/learned_graphs
+  else
+    pattern="${ckpt_dir}"/*/learned_graphs/final.npz
+  fi
+
+  local matches=()
+  local candidate
+  for candidate in $pattern; do
+    if [ -e "$candidate" ]; then
+      matches+=("$candidate")
+    fi
+  done
+
+  if [ "${#matches[@]}" -eq 0 ]; then
+    return 1
+  fi
+
+  if [ "${#matches[@]}" -gt 1 ]; then
+    printf 'Multiple checkpoint artifacts found under %s; using the most recent one.\n' "$ckpt_dir" >&2
+  fi
+
+  ls -td "${matches[@]}" | head -n 1
+}
+
 traffic_label_dataset_name() {
   local dataset="$1"
   case "$dataset" in
@@ -96,10 +137,10 @@ resolve_label_path() {
 
 if [ -z "$LEARNED_GRAPH" ]; then
   ckpt_dir="${BASICTS_ROOT}/checkpoints/$(model_dir_for "$MODEL")/${DATASET}_${EPOCHS}_${INPUT_LEN}_${OUTPUT_LEN}"
-  if [ "$ALL_SNAPSHOTS" = "1" ]; then
-    LEARNED_GRAPH="${ckpt_dir}/learned_graphs"
-  else
-    LEARNED_GRAPH="${ckpt_dir}/learned_graphs/final.npz"
+  if ! LEARNED_GRAPH="$(resolve_checkpoint_artifact "$ckpt_dir" "$ALL_SNAPSHOTS")"; then
+    echo "Unable to resolve learned graph automatically under: $ckpt_dir" >&2
+    echo "Set LEARNED_GRAPH manually to a snapshot file or learned_graphs directory." >&2
+    exit 1
   fi
 fi
 

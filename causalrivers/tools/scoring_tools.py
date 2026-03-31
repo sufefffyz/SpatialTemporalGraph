@@ -139,42 +139,8 @@ def _collect_individual_scores(sample_pairs, n_jobs=1, chunk_size=512):
     return ordered_results
 
 
-def score(preds, labs, remove_autoregressive=True, name="Result", n_jobs=1, chunk_size=512):
-    """
-    Calculates a number of metrics given preds and labs.
-    Takes in either a 2dim or a 3dim tensor (batch of summary graphs)
-    name is used for later column naming.
-    """
-    
-    # Some casting concerning input data type:
-    if isinstance(preds, list):
-        preds = np.array(preds) 
-    if isinstance(labs, list):
-        labs = np.array(labs) 
-    if isinstance(preds,pd.DataFrame):
-        preds = preds.values
-    if isinstance(labs,pd.DataFrame):
-        labs = labs.values
-    # expand dims if a single samle is provided
-    if preds.ndim == 2:
-        preds = np.expand_dims(preds, 0)
-        labs = np.expand_dims(labs, 0)
-
-    # Calculates a number of metrics and returns a df holding them
+def _score_from_prepared(sample_pairs, labs_flat, preds_flat, name="Result", n_jobs=1, chunk_size=512):
     print("Scoring...")
-    # We remove the diagonal as rivers are highly autocorrelated and the causal links here are not relevant.
-    if remove_autoregressive:
-        labs = remove_diagonal(labs)
-        preds = remove_diagonal(preds)
-    else:
-        labs = np.array(labs)
-        preds = np.array(preds)
-    # Individual scoring for each sample.
-
-    sample_pairs = [
-        (labs[x].flatten(), preds[x].flatten())
-        for x in range(len(labs))
-    ]
     sample_results = _collect_individual_scores(
         sample_pairs,
         n_jobs=n_jobs,
@@ -195,23 +161,19 @@ def score(preds, labs, remove_autoregressive=True, name="Result", n_jobs=1, chun
         accuracy_ind_thresh = np.nan
         auroc_ind = np.nan
 
-    # Joint calculation
-    labs = labs.flatten()
-    preds = preds.flatten()
-
     # AUROC
-    auroc = roc_auc_score(labs, preds)
+    auroc = roc_auc_score(labs_flat, preds_flat)
     # F1 MAX
 
-    f1_thresh, f1_score = f1_max(labs, preds)
+    f1_thresh, f1_score = f1_max(labs_flat, preds_flat)
     # ACCURACY MAX
-    acc_thresh, acc_score = max_accuracy(labs, preds)
+    acc_thresh, acc_score = max_accuracy(labs_flat, preds_flat)
 
-    null_model_auroc = roc_auc_score(labs, np.zeros(preds.shape))
+    null_model_auroc = roc_auc_score(labs_flat, np.zeros(preds_flat.shape))
 
-    _, null_model_f1 = f1_max(labs, np.zeros(preds.shape))
+    _, null_model_f1 = f1_max(labs_flat, np.zeros(preds_flat.shape))
 
-    _, null_model_acc = max_accuracy(labs, np.zeros(preds.shape))
+    _, null_model_acc = max_accuracy(labs_flat, np.zeros(preds_flat.shape))
 
     out = pd.DataFrame(
         [
@@ -249,3 +211,64 @@ def score(preds, labs, remove_autoregressive=True, name="Result", n_jobs=1, chun
     )
     out.index.name = "Metric"
     return out
+
+
+def score_preprocessed(preds, labs, name="Result", n_jobs=1, chunk_size=512):
+    """
+    Calculates metrics assuming ``preds`` and ``labs`` are already aligned and
+    preprocessed to the final scoring shape.
+    """
+    preds = np.asarray(preds)
+    labs = np.asarray(labs)
+
+    if preds.ndim == 2:
+        preds = np.expand_dims(preds, 0)
+        labs = np.expand_dims(labs, 0)
+
+    sample_pairs = [
+        (labs[x].flatten(), preds[x].flatten())
+        for x in range(len(labs))
+    ]
+    return _score_from_prepared(
+        sample_pairs,
+        labs.flatten(),
+        preds.flatten(),
+        name=name,
+        n_jobs=n_jobs,
+        chunk_size=chunk_size,
+    )
+
+
+def score(preds, labs, remove_autoregressive=True, name="Result", n_jobs=1, chunk_size=512):
+    """
+    Calculates a number of metrics given preds and labs.
+    Takes in either a 2dim or a 3dim tensor (batch of summary graphs)
+    name is used for later column naming.
+    """
+
+    if isinstance(preds, list):
+        preds = np.array(preds)
+    if isinstance(labs, list):
+        labs = np.array(labs)
+    if isinstance(preds, pd.DataFrame):
+        preds = preds.values
+    if isinstance(labs, pd.DataFrame):
+        labs = labs.values
+    if preds.ndim == 2:
+        preds = np.expand_dims(preds, 0)
+        labs = np.expand_dims(labs, 0)
+
+    if remove_autoregressive:
+        labs = remove_diagonal(labs)
+        preds = remove_diagonal(preds)
+    else:
+        labs = np.array(labs)
+        preds = np.array(preds)
+
+    return score_preprocessed(
+        preds,
+        labs,
+        name=name,
+        n_jobs=n_jobs,
+        chunk_size=chunk_size,
+    )

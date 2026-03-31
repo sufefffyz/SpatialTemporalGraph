@@ -42,7 +42,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
-from tools.scoring_tools import score
+from tools.scoring_tools import remove_diagonal, score_preprocessed
 from tools.tools import graph_to_label_tensor, load_label_graphs
 
 
@@ -52,6 +52,13 @@ class LearnedGraphArtifact:
     name: str
     adj: np.ndarray
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PreparedLabelSet:
+    label_info: dict[str, Any]
+    sample_nodes: list[list[Any]]
+    label_tensors_preprocessed: np.ndarray
 
 
 def parse_args() -> argparse.Namespace:
@@ -233,23 +240,6 @@ def _parse_label_group(label_group: str) -> tuple[str | None, int | None, str | 
     return strategy, n_vars, label_tag
 
 
-def _subset_learned_adj(adj: np.ndarray, sample_nodes: list[Any], node_index_map: dict[str, int]) -> np.ndarray:
-    if adj.ndim != 2 or adj.shape[0] != adj.shape[1]:
-        raise ValueError(f"Expected a square 2D adjacency matrix, got shape {adj.shape}.")
-
-    node_positions = []
-    for node in sample_nodes:
-        key = _normalize_node_id(node)
-        if key not in node_index_map:
-            raise KeyError(
-                f"Node {node!r} from label graph is missing from the learned-graph node map."
-            )
-        node_positions.append(node_index_map[key])
-
-    indexer = np.ix_(node_positions, node_positions)
-    return np.asarray(adj[indexer], dtype=np.float32).copy()
-
-
 def _resolve_node_index_map(
     artifact: LearnedGraphArtifact,
     adj_mx_pkl: Path | None,
@@ -274,24 +264,28 @@ def _resolve_node_index_map(
 
 def _score_single_artifact(
     artifact: LearnedGraphArtifact,
-    label_graphs: list[Any],
-    node_index_map: dict[str, int],
+    prepared_labels: PreparedLabelSet,
+    sample_positions: list[np.ndarray],
     remove_autoregressive: bool,
     n_jobs: int,
     chunk_size: int,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    preds = []
-    labs = []
-    for sample_graph in label_graphs:
-        sample_nodes = sorted(sample_graph.nodes)
-        preds.append(_subset_learned_adj(artifact.adj, sample_nodes, node_index_map))
-        labs.append(graph_to_label_tensor(sample_graph))
+    preds = np.stack(
+        [
+            np.asarray(artifact.adj[np.ix_(node_positions, node_positions)], dtype=np.float32)
+            for node_positions in sample_positions
+        ]
+    )
+
+    if remove_autoregressive:
+        preds_preprocessed = remove_diagonal(preds)
+    else:
+        preds_preprocessed = preds
 
     start = time.perf_counter()
-    scoring = score(
-        preds,
-        labs,
-        remove_autoregressive=remove_autoregressive,
+    scoring = score_preprocessed(
+        preds_preprocessed,
+        prepared_labels.label_tensors_preprocessed,
         name=artifact.name,
         n_jobs=n_jobs,
         chunk_size=chunk_size,
@@ -301,12 +295,64 @@ def _score_single_artifact(
     meta = {
         "snapshot_path": str(artifact.path),
         "snapshot_name": artifact.name,
-        "num_label_graphs": len(label_graphs),
+        "num_label_graphs": len(prepared_labels.sample_nodes),
         "adj_shape": list(artifact.adj.shape),
         "runtime_seconds": runtime_seconds,
         "metadata": {key: (value.tolist() if isinstance(value, np.ndarray) else value) for key, value in artifact.metadata.items()},
     }
     return scoring, meta
+
+
+def _build_sample_positions(sample_nodes: list[list[Any]], node_index_map: dict[str, int]) -> list[np.ndarray]:
+    positions: list[np.ndarray] = []
+    for nodes in sample_nodes:
+        node_positions = []
+        for node in nodes:
+            key = _normalize_node_id(node)
+            if key not in node_index_map:
+                raise KeyError(
+                    f"Node {node!r} from label graph is missing from the learned-graph node map."
+                )
+            node_positions.append(node_index_map[key])
+        positions.append(np.asarray(node_positions, dtype=np.int64))
+    return positions
+
+
+def _prepare_label_set(label_path: Path, restrict_to: int, remove_autoregressive: bool) -> PreparedLabelSet:
+    label_graphs = load_label_graphs(
+        SimpleNamespace(label_path=str(label_path), restrict_to=int(restrict_to))
+    )
+    if not label_graphs:
+        raise ValueError(f"No label graphs loaded from {label_path}")
+
+    sample_nodes = [sorted(sample_graph.nodes) for sample_graph in label_graphs]
+    label_tensors = np.stack(
+        [np.asarray(graph_to_label_tensor(sample_graph), dtype=np.float32) for sample_graph in label_graphs]
+    )
+    label_tensors_preprocessed = (
+        remove_diagonal(label_tensors)
+        if remove_autoregressive
+        else label_tensors
+    )
+
+    label_id = _label_identifier(label_path)
+    strategy, n_vars, label_tag = _parse_label_group(label_path.parent.name)
+    label_info = {
+        "label_path": str(label_path),
+        "label_id": label_id,
+        "label_group": label_path.parent.name,
+        "label_name": label_path.stem,
+        "label_dataset_name": label_path.stem,
+        "strategy": strategy,
+        "n_vars": n_vars,
+        "label_tag": label_tag,
+        "num_label_graphs": len(sample_nodes),
+    }
+    return PreparedLabelSet(
+        label_info=label_info,
+        sample_nodes=sample_nodes,
+        label_tensors_preprocessed=label_tensors_preprocessed,
+    )
 
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -344,25 +390,12 @@ def main() -> int:
     multi_label = len(label_paths) > 1
 
     for label_path in label_paths:
-        label_graphs = load_label_graphs(
-            SimpleNamespace(label_path=str(label_path), restrict_to=int(args.restrict_to))
+        prepared_labels = _prepare_label_set(
+            label_path,
+            restrict_to=args.restrict_to,
+            remove_autoregressive=args.remove_autoregressive,
         )
-        if not label_graphs:
-            raise ValueError(f"No label graphs loaded from {label_path}")
-
-        label_id = _label_identifier(label_path)
-        strategy, n_vars, label_tag = _parse_label_group(label_path.parent.name)
-        label_info = {
-            "label_path": str(label_path),
-            "label_id": label_id,
-            "label_group": label_path.parent.name,
-            "label_name": label_path.stem,
-            "label_dataset_name": label_path.stem,
-            "strategy": strategy,
-            "n_vars": n_vars,
-            "label_tag": label_tag,
-            "num_label_graphs": len(label_graphs),
-        }
+        label_info = prepared_labels.label_info
         label_manifests.append(label_info)
 
         for learned_graph_path in learned_graph_files:
@@ -373,10 +406,11 @@ def main() -> int:
                 node_order,
                 adj_node_map,
             )
+            sample_positions = _build_sample_positions(prepared_labels.sample_nodes, node_index_map)
             scoring, meta = _score_single_artifact(
                 artifact,
-                label_graphs,
-                node_index_map,
+                prepared_labels,
+                sample_positions,
                 args.remove_autoregressive,
                 args.n_jobs,
                 args.chunk_size,
@@ -389,14 +423,14 @@ def main() -> int:
             manifest_entries.append(meta)
             runtime_rows.append(
                 {
-                    "label_id": label_id,
-                    "label_group": label_path.parent.name,
-                    "label_name": label_path.stem,
-                    "label_dataset_name": label_path.stem,
-                    "label_path": str(label_path),
-                    "strategy": strategy,
-                    "n_vars": n_vars,
-                    "label_tag": label_tag,
+                    "label_id": label_info["label_id"],
+                    "label_group": label_info["label_group"],
+                    "label_name": label_info["label_name"],
+                    "label_dataset_name": label_info["label_dataset_name"],
+                    "label_path": label_info["label_path"],
+                    "strategy": label_info["strategy"],
+                    "n_vars": label_info["n_vars"],
+                    "label_tag": label_info["label_tag"],
                     "snapshot": artifact.name,
                     "score_name": score_name,
                     "snapshot_path": str(artifact.path),
@@ -405,20 +439,20 @@ def main() -> int:
                     "epoch": _normalize_metadata_scalar(artifact.metadata.get("epoch")),
                     "graph_semantics": _normalize_metadata_scalar(artifact.metadata.get("graph_semantics")),
                     "runtime_seconds": meta["runtime_seconds"],
-                    "num_label_graphs": len(label_graphs),
+                    "num_label_graphs": label_info["num_label_graphs"],
                 }
             )
             for metric_name, row in scoring[[score_name]].iterrows():
                 long_rows.append(
                     {
-                        "label_id": label_id,
-                        "label_group": label_path.parent.name,
-                        "label_name": label_path.stem,
-                        "label_dataset_name": label_path.stem,
-                        "label_path": str(label_path),
-                        "strategy": strategy,
-                        "n_vars": n_vars,
-                        "label_tag": label_tag,
+                        "label_id": label_info["label_id"],
+                        "label_group": label_info["label_group"],
+                        "label_name": label_info["label_name"],
+                        "label_dataset_name": label_info["label_dataset_name"],
+                        "label_path": label_info["label_path"],
+                        "strategy": label_info["strategy"],
+                        "n_vars": label_info["n_vars"],
+                        "label_tag": label_info["label_tag"],
                         "snapshot": artifact.name,
                         "score_name": score_name,
                         "snapshot_path": str(artifact.path),
