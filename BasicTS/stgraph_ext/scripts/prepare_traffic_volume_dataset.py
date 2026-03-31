@@ -10,13 +10,17 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from stgraph_ext.data_utils import (
+    aggregate_frame_with_explicit_splits,
     build_multichannel_series,
+    dataset_name_with_resolution,
     infer_frequency_minutes,
+    parse_resolution_to_minutes,
     resolve_dataset_dir,
     save_basicts_adjacency,
     save_description,
     save_memmap_array,
     save_split_indices,
+    validate_aggregation_resolution,
 )
 
 
@@ -31,8 +35,8 @@ def parse_args():
     )
     parser.add_argument(
         "--dataset-name",
-        default="TRAFFIC_VOLUME_5MIN",
-        help="Dataset name under BasicTS/datasets.",
+        default=None,
+        help="Dataset name under BasicTS/datasets. Defaults to TRAFFIC_VOLUME_<RESOLUTION>.",
     )
     parser.add_argument(
         "--output-root",
@@ -41,6 +45,11 @@ def parse_args():
     )
     parser.add_argument("--input-len", type=int, default=12, help="Input sequence length.")
     parser.add_argument("--output-len", type=int, default=12, help="Output sequence length.")
+    parser.add_argument(
+        "--resolution",
+        default=None,
+        help="Optional coarser aggregation resolution, e.g. 15min, 30min, 1h, 6h.",
+    )
     return parser.parse_args()
 
 
@@ -77,9 +86,6 @@ def main():
     if not input_path.exists():
         raise FileNotFoundError(f"Input NPZ file not found: {input_path}")
 
-    output_dir = resolve_dataset_dir(args.dataset_name, args.output_root)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     with np.load(input_path, allow_pickle=True) as data:
         raw_targets = np.asarray(data["targets"], dtype=np.float32)
         unix_timestamps = np.asarray(data["unix_timestamps"], dtype=np.int64)
@@ -98,8 +104,26 @@ def main():
         raise ValueError(f"Expected traffic targets with shape [L, N], got {raw_targets.shape}.")
 
     dt_index = pd.to_datetime(unix_timestamps, unit="s", utc=True)
+    native_frequency_minutes = infer_frequency_minutes(dt_index, fallback_minutes=5)
+    target_resolution_minutes = parse_resolution_to_minutes(args.resolution) or native_frequency_minutes
+    validate_aggregation_resolution(native_frequency_minutes, target_resolution_minutes)
+
+    dataset_name = args.dataset_name or dataset_name_with_resolution("TRAFFIC_VOLUME_5MIN", target_resolution_minutes)
+    output_dir = resolve_dataset_dir(dataset_name, args.output_root)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     targets = impute_targets(raw_targets, dt_index)
-    data_with_features, feature_description = build_multichannel_series(targets, dt_index)
+    frame = pd.DataFrame(np.asarray(targets, dtype=np.float32), index=dt_index)
+    aggregated_frame, aggregated_splits, aggregation_info = aggregate_frame_with_explicit_splits(
+        frame,
+        {"train": train_idx, "val": val_idx, "test": test_idx},
+        None if target_resolution_minutes == native_frequency_minutes else target_resolution_minutes,
+    )
+    aggregated_dt_index = pd.DatetimeIndex(aggregated_frame.index)
+    data_with_features, feature_description = build_multichannel_series(
+        aggregated_frame.to_numpy(dtype=np.float32),
+        aggregated_dt_index,
+    )
     adjacency = build_adjacency(num_nodes, edges)
 
     total_len = int(data_with_features.shape[0])
@@ -107,9 +131,9 @@ def main():
         "INPUT_LEN": int(args.input_len),
         "OUTPUT_LEN": int(args.output_len),
         "TRAIN_VAL_TEST_RATIO": [
-            float(len(train_idx) / total_len),
-            float(len(val_idx) / total_len),
-            float(len(test_idx) / total_len),
+            float(len(aggregated_splits["train"]) / total_len),
+            float(len(aggregated_splits["val"]) / total_len),
+            float(len(aggregated_splits["test"]) / total_len),
         ],
         "NORM_EACH_CHANNEL": False,
         "RESCALE": True,
@@ -117,7 +141,7 @@ def main():
         "NULL_VAL": 0.0,
     }
     description = {
-        "name": args.dataset_name,
+        "name": dataset_name,
         "domain": "urban traffic volume",
         "shape": list(data_with_features.shape),
         "num_time_steps": int(data_with_features.shape[0]),
@@ -125,21 +149,34 @@ def main():
         "num_features": int(data_with_features.shape[2]),
         "feature_description": feature_description,
         "has_graph": True,
-        "frequency (minutes)": infer_frequency_minutes(dt_index, fallback_minutes=5),
+        "frequency (minutes)": target_resolution_minutes,
+        "source_frequency (minutes)": native_frequency_minutes,
+        "aggregation": {
+            "applied": bool(target_resolution_minutes != native_frequency_minutes),
+            "resolution_minutes": target_resolution_minutes,
+            **aggregation_info,
+        },
         "regular_settings": regular_settings,
     }
 
     save_memmap_array(output_dir / "data.dat", data_with_features)
     save_description(output_dir / "desc.json", description)
-    save_split_indices(output_dir / "split_indices.npz", train_idx, val_idx, test_idx)
+    save_split_indices(
+        output_dir / "split_indices.npz",
+        aggregated_splits["train"],
+        aggregated_splits["val"],
+        aggregated_splits["test"],
+    )
     save_basicts_adjacency(adjacency, output_dir / "adj_mx.pkl", node_ids=node_ids.tolist())
     np.save(output_dir / "node_ids.npy", np.asarray(node_ids))
-    np.save(output_dir / "unix_timestamps.npy", unix_timestamps)
+    np.save(output_dir / "unix_timestamps.npy", (aggregated_dt_index.asi8 // 1_000_000_000).astype(np.int64))
 
     print(f"Prepared BasicTS dataset at {output_dir}")
     print(
-        f"shape={tuple(data_with_features.shape)} train={len(train_idx)} val={len(val_idx)} "
-        f"test={len(test_idx)} edges={int(np.count_nonzero(adjacency))}"
+        f"shape={tuple(data_with_features.shape)} freq={target_resolution_minutes}min "
+        f"train={len(aggregated_splits['train'])} val={len(aggregated_splits['val'])} "
+        f"test={len(aggregated_splits['test'])} edges={int(np.count_nonzero(adjacency))} "
+        f"dropped_mixed={aggregation_info['dropped_mixed_buckets']}"
     )
 
 

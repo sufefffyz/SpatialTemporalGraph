@@ -1,6 +1,7 @@
 import json
 import os
 import pickle
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -43,6 +44,127 @@ def load_split_indices(dataset_name: str, split_filename: str = "split_indices.n
     split_path = os.path.join(dataset_dir(dataset_name), split_filename)
     with np.load(split_path) as data:
         return {key: np.asarray(data[key], dtype=np.int64) for key in data.files}
+
+
+def parse_resolution_to_minutes(resolution: str | int | None) -> int | None:
+    if resolution is None:
+        return None
+    if isinstance(resolution, int):
+        if resolution <= 0:
+            raise ValueError(f"Resolution must be positive, got {resolution}.")
+        return int(resolution)
+    text = str(resolution).strip().lower()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    text = (
+        text.replace("minutes", "min")
+        .replace("minute", "min")
+        .replace("mins", "min")
+        .replace("hours", "h")
+        .replace("hour", "h")
+    )
+    delta = pd.Timedelta(text)
+    minutes = int(delta.total_seconds() // 60)
+    if minutes <= 0:
+        raise ValueError(f"Resolution must be positive, got {resolution}.")
+    return minutes
+
+
+def resolution_minutes_to_rule(minutes: int) -> str:
+    if minutes <= 0:
+        raise ValueError(f"Resolution minutes must be positive, got {minutes}.")
+    if minutes % 60 == 0:
+        return f"{minutes // 60}h"
+    return f"{minutes}min"
+
+
+def resolution_minutes_to_label(minutes: int) -> str:
+    if minutes <= 0:
+        raise ValueError(f"Resolution minutes must be positive, got {minutes}.")
+    if minutes % 60 == 0:
+        return f"{minutes // 60}H"
+    return f"{minutes}MIN"
+
+
+def dataset_name_with_resolution(base_name: str, minutes: int) -> str:
+    label = resolution_minutes_to_label(minutes)
+    if re.search(r"_(\d+MIN|\d+H)$", base_name):
+        return re.sub(r"_(\d+MIN|\d+H)$", f"_{label}", base_name)
+    return f"{base_name}_{label}"
+
+
+def validate_aggregation_resolution(native_minutes: int, target_minutes: int) -> None:
+    if target_minutes < native_minutes:
+        raise ValueError(
+            f"Target resolution {target_minutes}min is finer than native resolution {native_minutes}min."
+        )
+    if target_minutes % native_minutes != 0:
+        raise ValueError(
+            f"Target resolution {target_minutes}min must be an integer multiple of native resolution "
+            f"{native_minutes}min."
+        )
+
+
+def aggregate_frame_by_minutes(frame: pd.DataFrame, resolution_minutes: int | None) -> pd.DataFrame:
+    if resolution_minutes is None:
+        return frame.copy()
+    rule = resolution_minutes_to_rule(resolution_minutes)
+    bucket_index = pd.DatetimeIndex(frame.index.floor(rule))
+    aggregated = frame.groupby(bucket_index, sort=True).mean()
+    aggregated.index = pd.DatetimeIndex(aggregated.index)
+    return aggregated
+
+
+def aggregate_frame_with_explicit_splits(
+    frame: pd.DataFrame,
+    split_indices: dict[str, np.ndarray],
+    resolution_minutes: int | None,
+) -> tuple[pd.DataFrame, dict[str, np.ndarray], dict[str, int]]:
+    if resolution_minutes is None:
+        return frame.copy(), split_indices, {"dropped_mixed_buckets": 0, "dropped_unassigned_buckets": 0}
+
+    rule = resolution_minutes_to_rule(resolution_minutes)
+    bucket_index = pd.DatetimeIndex(frame.index.floor(rule))
+    split_codes = np.full(len(frame), -1, dtype=np.int8)
+    split_codes[np.asarray(split_indices["train"], dtype=np.int64)] = 0
+    split_codes[np.asarray(split_indices["val"], dtype=np.int64)] = 1
+    split_codes[np.asarray(split_indices["test"], dtype=np.int64)] = 2
+
+    grouped_frame = frame.groupby(bucket_index, sort=True).mean()
+    grouped_frame.index = pd.DatetimeIndex(grouped_frame.index)
+
+    grouped_labels = pd.Series(split_codes, index=bucket_index).groupby(level=0, sort=True)
+
+    keep_buckets: list[pd.Timestamp] = []
+    bucket_label_codes: list[int] = []
+    dropped_mixed = 0
+    dropped_unassigned = 0
+
+    for bucket, labels in grouped_labels:
+        unique_labels = np.unique(labels.to_numpy(dtype=np.int8))
+        if len(unique_labels) != 1:
+            dropped_mixed += 1
+            continue
+        label = int(unique_labels[0])
+        if label < 0:
+            dropped_unassigned += 1
+            continue
+        keep_buckets.append(bucket)
+        bucket_label_codes.append(label)
+
+    aggregated = grouped_frame.loc[keep_buckets].copy()
+    bucket_label_codes_np = np.asarray(bucket_label_codes, dtype=np.int8)
+    aggregated_splits = {
+        "train": np.where(bucket_label_codes_np == 0)[0].astype(np.int64),
+        "val": np.where(bucket_label_codes_np == 1)[0].astype(np.int64),
+        "test": np.where(bucket_label_codes_np == 2)[0].astype(np.int64),
+    }
+    return aggregated, aggregated_splits, {
+        "dropped_mixed_buckets": int(dropped_mixed),
+        "dropped_unassigned_buckets": int(dropped_unassigned),
+    }
 
 
 def load_adjacency_matrix(dataset_name: str, filename: str = "adj_mx.pkl") -> np.ndarray:

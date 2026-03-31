@@ -12,17 +12,21 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
 
 from stgraph_ext.data_utils import (
+    aggregate_frame_by_minutes,
     build_directed_adjacency_from_graph,
     build_multichannel_series,
+    dataset_name_with_resolution,
     extract_networkx_graph,
     infer_frequency_minutes,
     maybe_int,
     normalize_node_labels,
+    parse_resolution_to_minutes,
     resolve_dataset_dir,
     save_basicts_adjacency,
     save_description,
     save_memmap_array,
     save_split_indices,
+    validate_aggregation_resolution,
 )
 
 
@@ -42,8 +46,8 @@ def parse_args():
     )
     parser.add_argument(
         "--dataset-name",
-        default="RIVERS_EAST_GERMANY_15MIN",
-        help="Dataset name under BasicTS/datasets.",
+        default=None,
+        help="Dataset name under BasicTS/datasets. Defaults to RIVERS_EAST_GERMANY_<RESOLUTION>.",
     )
     parser.add_argument(
         "--output-root",
@@ -52,6 +56,11 @@ def parse_args():
     )
     parser.add_argument("--input-len", type=int, default=12, help="Input sequence length.")
     parser.add_argument("--output-len", type=int, default=12, help="Output sequence length.")
+    parser.add_argument(
+        "--resolution",
+        default=None,
+        help="Optional coarser aggregation resolution, e.g. 30min, 1h, 6h, 12h, 24h.",
+    )
     return parser.parse_args()
 
 
@@ -101,20 +110,33 @@ def main():
     if not graph_path.exists():
         raise FileNotFoundError(f"Graph pickle file not found: {graph_path}")
 
-    output_dir = resolve_dataset_dir(args.dataset_name, args.output_root)
+    frame, dt_index = load_targets(csv_path)
+    native_frequency_minutes = infer_frequency_minutes(dt_index, fallback_minutes=15)
+    target_resolution_minutes = parse_resolution_to_minutes(args.resolution) or native_frequency_minutes
+    validate_aggregation_resolution(native_frequency_minutes, target_resolution_minutes)
+
+    dataset_name = args.dataset_name or dataset_name_with_resolution(
+        "RIVERS_EAST_GERMANY_15MIN",
+        target_resolution_minutes,
+    )
+    output_dir = resolve_dataset_dir(dataset_name, args.output_root)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    frame, dt_index = load_targets(csv_path)
     graph = load_river_graph(graph_path)
-    node_ids = normalize_node_labels(frame.columns.tolist())
+    aggregated_frame = aggregate_frame_by_minutes(
+        frame,
+        None if target_resolution_minutes == native_frequency_minutes else target_resolution_minutes,
+    )
+    aggregated_dt_index = pd.DatetimeIndex(aggregated_frame.index)
+    node_ids = normalize_node_labels(aggregated_frame.columns.tolist())
     adjacency = build_directed_adjacency_from_graph(graph, node_ids)
-    targets = frame.to_numpy(dtype=np.float32)
-    data_with_features, feature_description = build_multichannel_series(targets, dt_index)
-    train_idx, val_idx, test_idx = chronological_split(len(frame))
-    unix_timestamps = (dt_index.asi8 // 1_000_000_000).astype(np.int64)
+    targets = aggregated_frame.to_numpy(dtype=np.float32)
+    data_with_features, feature_description = build_multichannel_series(targets, aggregated_dt_index)
+    train_idx, val_idx, test_idx = chronological_split(len(aggregated_frame))
+    unix_timestamps = (aggregated_dt_index.asi8 // 1_000_000_000).astype(np.int64)
 
     description = {
-        "name": args.dataset_name,
+        "name": dataset_name,
         "domain": "river discharge",
         "shape": list(data_with_features.shape),
         "num_time_steps": int(data_with_features.shape[0]),
@@ -122,7 +144,12 @@ def main():
         "num_features": int(data_with_features.shape[2]),
         "feature_description": feature_description,
         "has_graph": True,
-        "frequency (minutes)": infer_frequency_minutes(dt_index, fallback_minutes=15),
+        "frequency (minutes)": target_resolution_minutes,
+        "source_frequency (minutes)": native_frequency_minutes,
+        "aggregation": {
+            "applied": bool(target_resolution_minutes != native_frequency_minutes),
+            "resolution_minutes": target_resolution_minutes,
+        },
         "regular_settings": {
             "INPUT_LEN": int(args.input_len),
             "OUTPUT_LEN": int(args.output_len),
@@ -143,7 +170,8 @@ def main():
 
     print(f"Prepared BasicTS dataset at {output_dir}")
     print(
-        f"shape={tuple(data_with_features.shape)} train={len(train_idx)} val={len(val_idx)} "
+        f"shape={tuple(data_with_features.shape)} freq={target_resolution_minutes}min "
+        f"train={len(train_idx)} val={len(val_idx)} "
         f"test={len(test_idx)} edges={int(np.count_nonzero(adjacency))}"
     )
 
