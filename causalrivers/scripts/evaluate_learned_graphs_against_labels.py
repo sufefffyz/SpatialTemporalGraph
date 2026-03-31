@@ -64,6 +64,7 @@ def parse_args() -> argparse.Namespace:
         required=True,
         default=[],
         dest="label_paths",
+        type=Path,
         help=(
             "Path to a causalrivers label .p/.pkl file or a directory containing label pickles. "
             "Can be repeated."
@@ -75,6 +76,7 @@ def parse_args() -> argparse.Namespace:
         required=True,
         default=[],
         dest="learned_graphs",
+        type=Path,
         help="Path to a learned_graphs/*.npz snapshot or a directory containing such files. Can be repeated.",
     )
     parser.add_argument(
