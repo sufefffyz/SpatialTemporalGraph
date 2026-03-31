@@ -189,6 +189,54 @@ def extract_label_metadata(label_path: str | None) -> dict[str, Any]:
     return meta
 
 
+def normalize_metric_record(
+    row: dict[str, Any],
+) -> dict[str, Any]:
+    method = row.get("method")
+    metric = row.get("metric")
+    if isinstance(metric, str) and metric.startswith("Null "):
+        method = "NULL"
+        metric = metric.removeprefix("Null ")
+    return {
+        "data_dataset_name": row.get("data_dataset_name"),
+        "strategy": row.get("strategy"),
+        "n_vars": row.get("n_vars"),
+        "method": method,
+        "metric": metric,
+        "value": row.get("value"),
+        "config_resolution": row.get("config_resolution"),
+        "label_group": row.get("label_group"),
+    }
+
+
+def build_simple_metric_rows(metric_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [normalize_metric_record(row) for row in metric_rows]
+
+
+def deduplicate_rows(rows: list[dict[str, Any]], key_fields: list[str]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for row in rows:
+        key = tuple(row.get(field) for field in key_fields)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
+
+
+def public_simple_metric_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "data_dataset_name": row.get("data_dataset_name"),
+        "strategy": row.get("strategy"),
+        "n_vars": row.get("n_vars"),
+        "method": row.get("method"),
+        "metric": row.get("metric"),
+        "value": row.get("value"),
+        "config_resolution": row.get("config_resolution"),
+    }
+
+
 def parse_runtime_seconds(raw: str | None) -> float | None:
     if not raw:
         return None
@@ -469,6 +517,7 @@ def upload_to_wandb(
     args: argparse.Namespace,
     output_dir: Path,
     metric_rows: list[dict[str, Any]],
+    metric_rows_dedup: list[dict[str, Any]],
     metric_summary: list[dict[str, Any]],
     runtime_rows: list[dict[str, Any]],
     runtime_summary: list[dict[str, Any]],
@@ -502,6 +551,7 @@ def upload_to_wandb(
     wandb.log(
         {
             "tables/metrics_long": build_wandb_table(metric_rows),
+            "tables/metrics_simple": build_wandb_table(metric_rows_dedup),
             "tables/metrics_summary": build_wandb_table(metric_summary),
             "tables/runtime_long": build_wandb_table(runtime_rows),
             "tables/runtime_summary": build_wandb_table(runtime_summary),
@@ -527,6 +577,22 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     metric_rows, runtime_rows, warnings = aggregate_results(results_root)
+    simple_metric_rows_internal = build_simple_metric_rows(metric_rows)
+    simple_metric_rows = [public_simple_metric_row(row) for row in simple_metric_rows_internal]
+    simple_metric_rows_dedup = [
+        public_simple_metric_row(row)
+        for row in deduplicate_rows(
+            simple_metric_rows_internal,
+            [
+                "data_dataset_name",
+                "label_group",
+                "config_resolution",
+                "method",
+                "metric",
+                "value",
+            ],
+        )
+    ]
 
     metric_summary = summarize_rows(
         metric_rows,
@@ -561,6 +627,8 @@ def main() -> int:
     )
 
     metrics_long_path = output_dir / "metrics_long.csv"
+    metrics_simple_path = output_dir / "metrics_simple.csv"
+    metrics_simple_dedup_path = output_dir / "metrics_simple_dedup.csv"
     metrics_summary_path = output_dir / "metrics_summary.csv"
     runtime_long_path = output_dir / "runtime_long.csv"
     runtime_summary_path = output_dir / "runtime_summary.csv"
@@ -568,6 +636,8 @@ def main() -> int:
     manifest_path = output_dir / "manifest.json"
 
     write_csv(metrics_long_path, metric_rows)
+    write_csv(metrics_simple_path, simple_metric_rows)
+    write_csv(metrics_simple_dedup_path, simple_metric_rows_dedup)
     write_csv(metrics_summary_path, metric_summary)
     write_csv(runtime_long_path, runtime_rows)
     write_csv(runtime_summary_path, runtime_summary)
@@ -581,12 +651,16 @@ def main() -> int:
         "output_dir": str(output_dir),
         "num_run_dirs": len(discover_run_dirs(results_root)),
         "num_metric_rows": len(metric_rows),
+        "num_simple_metric_rows": len(simple_metric_rows),
+        "num_simple_metric_rows_dedup": len(simple_metric_rows_dedup),
         "num_runtime_rows": len(runtime_rows),
         "num_metric_summary_rows": len(metric_summary),
         "num_runtime_summary_rows": len(runtime_summary),
         "warnings": sorted(set(warnings)),
         "files": {
             "metrics_long": str(metrics_long_path),
+            "metrics_simple": str(metrics_simple_path),
+            "metrics_simple_dedup": str(metrics_simple_dedup_path),
             "metrics_summary": str(metrics_summary_path),
             "runtime_long": str(runtime_long_path),
             "runtime_summary": str(runtime_summary_path),
@@ -601,6 +675,7 @@ def main() -> int:
             args,
             output_dir,
             metric_rows,
+            simple_metric_rows_dedup,
             metric_summary,
             runtime_rows,
             runtime_summary,
@@ -610,6 +685,8 @@ def main() -> int:
 
     print(f"Aggregated outputs written to: {output_dir}")
     print(f"Metric rows: {len(metric_rows)}")
+    print(f"Simple metric rows: {len(simple_metric_rows)}")
+    print(f"Simple metric rows deduped: {len(simple_metric_rows_dedup)}")
     print(f"Runtime rows: {len(runtime_rows)}")
     if warnings:
         print(f"Warnings: {len(set(warnings))}")
