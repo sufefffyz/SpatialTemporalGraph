@@ -34,6 +34,7 @@ from aggregate_results_to_wandb import (
 
 CAUSAL_PRIMARY_METRICS = ["AUROC", "Max F1", "Max Acc", "Individual AUROC"]
 FORECAST_PRIMARY_METRICS = ["MAE", "RMSE", "MAPE", "WAPE", "SMAPE"]
+FORECAST_SCOPES = ("overall", "horizon_3", "horizon_6", "horizon_12")
 CONFIG_DIR_PATTERN = re.compile(
     r"^(?P<dataset>.+)_(?P<epochs>\d+)_(?P<input_len>\d+)_(?P<output_len>\d+)$"
 )
@@ -65,7 +66,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--include-null",
         action="store_true",
-        help="Include NULL baseline rows in causal tables.",
+        default=True,
+        help="Include NULL baseline rows in causal tables. Enabled by default.",
+    )
+    parser.add_argument(
+        "--exclude-null",
+        action="store_true",
+        help="Exclude NULL baseline rows from causal tables.",
     )
     return parser.parse_args()
 
@@ -287,10 +294,6 @@ def _parse_forecast_run(path: Path) -> dict[str, Any] | None:
     if not isinstance(metrics_raw, dict):
         return None
 
-    overall = metrics_raw.get("overall", metrics_raw)
-    if not isinstance(overall, dict):
-        return None
-
     dataset_meta = _describe_dataset(dataset_name)
     return {
         "track": "B-forecast",
@@ -303,7 +306,7 @@ def _parse_forecast_run(path: Path) -> dict[str, Any] | None:
         "epochs": int(match.group("epochs")),
         "input_len": int(match.group("input_len")),
         "output_len": int(match.group("output_len")),
-        "metrics": overall,
+        "metrics": metrics_raw,
         "run_dir": str(path.parent.resolve()),
         "metrics_path": str(path.resolve()),
     }
@@ -323,29 +326,37 @@ def _discover_forecast_runs(checkpoints_root: Path) -> list[dict[str, Any]]:
 def _build_forecast_long_rows(forecast_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for run in forecast_runs:
-        for metric_name, value in run["metrics"].items():
-            if not isinstance(value, (int, float)):
+        for scope in FORECAST_SCOPES:
+            if scope == "overall":
+                scope_metrics = run["metrics"].get("overall", run["metrics"])
+            else:
+                scope_metrics = run["metrics"].get(scope)
+            if not isinstance(scope_metrics, dict):
                 continue
-            rows.append(
-                {
-                    "track": run["track"],
-                    "dataset": run["dataset"],
-                    "resolution": run["resolution"],
-                    "signal": run["signal"],
-                    "model": run["model"],
-                    "metric": metric_name,
-                    "value": float(value),
-                }
-            )
+            for metric_name, value in scope_metrics.items():
+                if not isinstance(value, (int, float)):
+                    continue
+                rows.append(
+                    {
+                        "track": run["track"],
+                        "dataset": run["dataset"],
+                        "resolution": run["resolution"],
+                        "signal": run["signal"],
+                        "model": run["model"],
+                        "scope": scope,
+                        "metric": metric_name,
+                        "value": float(value),
+                    }
+                )
     return rows
 
 
 def _build_forecast_core(forecast_long_rows: list[dict[str, Any]]) -> pd.DataFrame:
     if not forecast_long_rows:
-        return pd.DataFrame(columns=["track", "dataset", "resolution", "signal", "model"])
+        return pd.DataFrame(columns=["track", "dataset", "resolution", "signal", "scope", "model"])
 
     forecast_df = pd.DataFrame(forecast_long_rows)
-    group_cols = ["track", "dataset", "resolution", "signal", "model"]
+    group_cols = ["track", "dataset", "resolution", "signal", "scope", "model"]
     summary = (
         forecast_df.groupby(group_cols + ["metric"], dropna=False)["value"]
         .mean()
@@ -366,12 +377,66 @@ def _build_forecast_core(forecast_long_rows: list[dict[str, Any]]) -> pd.DataFra
     ]
     ordered_cols = group_cols + [col for col in metric_order if col in wide.columns]
     wide = wide[ordered_cols]
-    sort_cols = ["dataset", "resolution"]
+    scope_order = {scope: idx for idx, scope in enumerate(FORECAST_SCOPES)}
+    wide["scope_order"] = wide["scope"].map(scope_order).fillna(999)
+    sort_cols = ["dataset", "resolution", "scope_order"]
     if "MAE" in wide.columns:
         sort_cols.append("MAE")
     sort_cols.append("model")
-    ascending = [True, True, True, True][: len(sort_cols)]
-    return wide.sort_values(sort_cols, ascending=ascending).reset_index(drop=True)
+    ascending = [True, True, True, True, True][: len(sort_cols)]
+    return wide.sort_values(sort_cols, ascending=ascending).drop(columns=["scope_order"]).reset_index(drop=True)
+
+
+def _round_numeric_df(df: pd.DataFrame, digits: int = 4) -> pd.DataFrame:
+    rounded = df.copy()
+    numeric_cols = rounded.select_dtypes(include=["number"]).columns
+    if len(numeric_cols) > 0:
+        rounded[numeric_cols] = rounded[numeric_cols].round(digits)
+    return rounded
+
+
+def _format_plain(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, (int, float)):
+        return f"{float(value):.4f}"
+    return str(value)
+
+
+def _styled_metric_table(
+    df: pd.DataFrame,
+    metric_cols: list[str],
+    lower_is_better: bool = False,
+) -> pd.DataFrame:
+    styled = df.copy()
+    rankable = [
+        col
+        for col in metric_cols
+        if col in styled.columns and pd.api.types.is_numeric_dtype(styled[col])
+    ]
+
+    for col in rankable:
+        values = styled[col].dropna().unique().tolist()
+        values = sorted(values, reverse=not lower_is_better)
+        best = values[0] if values else None
+        second = values[1] if len(values) > 1 else None
+        column_values: list[str] = []
+        for value in styled[col]:
+            if pd.isna(value):
+                column_values.append("")
+                continue
+            text = f"{float(value):.4f}"
+            if best is not None and value == best:
+                text = f"**{text}**"
+            elif second is not None and value == second:
+                text = f"<u>{text}</u>"
+            column_values.append(text)
+        styled[col] = column_values
+
+    for col in styled.columns:
+        if col not in rankable:
+            styled[col] = styled[col].map(_format_plain)
+    return styled
 
 
 def _markdown_table(df: pd.DataFrame, max_rows: int = 50) -> str:
@@ -405,6 +470,16 @@ def _section_title(dataset: str | None, resolution: str | None, signal: str | No
     return " | ".join(pieces) if pieces else "Unknown Dataset"
 
 
+def _scope_label(scope: str | None) -> str:
+    mapping = {
+        "overall": "Overall",
+        "horizon_3": "H3",
+        "horizon_6": "H6",
+        "horizon_12": "H12",
+    }
+    return mapping.get(scope or "", scope or "Unknown")
+
+
 def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str:
     lines: list[str] = [
         "# Advisor Summary",
@@ -413,6 +488,7 @@ def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str
         "",
         "- `A-causal`: 直接从时序做因果边发现。",
         "- `B-causal`: 先训练 STGNN，再把 learned graph 送回 causal benchmark 评估。",
+        "- `NULL`: 统一作为下界基线保留在表里。",
         "",
     ]
 
@@ -430,20 +506,24 @@ def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str
                 lines.append(f"#### {title}")
                 lines.append(
                     _markdown_table(
-                        sub_df[
-                            [
-                                col
-                                for col in [
-                                    "track",
-                                    "model",
-                                    "AUROC",
-                                    "Max F1",
-                                    "Max Acc",
-                                    "Individual AUROC",
+                        _styled_metric_table(
+                            sub_df[
+                                [
+                                    col
+                                    for col in [
+                                        "track",
+                                        "model",
+                                        "AUROC",
+                                        "Max F1",
+                                        "Max Acc",
+                                        "Individual AUROC",
+                                    ]
+                                    if col in sub_df.columns
                                 ]
-                                if col in sub_df.columns
-                            ]
-                        ],
+                            ],
+                            metric_cols=CAUSAL_PRIMARY_METRICS,
+                            lower_is_better=False,
+                        ),
                         max_rows=20,
                     )
                 )
@@ -453,7 +533,7 @@ def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str
         [
             "## 2. Forecasting Summary",
             "",
-            "- 这里汇总的是 `BasicTS/checkpoints/**/test_metrics.json` 的整体预测指标。",
+            "- 这里汇总的是 `BasicTS/checkpoints/**/test_metrics.json` 的 `Overall + H3 + H6 + H12` 预测指标。",
             "",
         ]
     )
@@ -466,19 +546,26 @@ def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str
             ["dataset", "resolution", "signal"], dropna=False
         ):
             lines.append(f"### {_section_title(dataset, resolution, signal)}")
-            lines.append(
-                _markdown_table(
-                    dataset_df[
-                        [
-                            col
-                            for col in ["model", "MAE", "RMSE", "MAPE", "WAPE", "SMAPE"]
-                            if col in dataset_df.columns
-                        ]
-                    ],
-                    max_rows=20,
-                )
-            )
             lines.append("")
+            for scope, scope_df in dataset_df.groupby("scope", dropna=False):
+                lines.append(f"#### {_scope_label(scope)}")
+                lines.append(
+                    _markdown_table(
+                        _styled_metric_table(
+                            scope_df[
+                                [
+                                    col
+                                    for col in ["model", "MAE", "RMSE", "MAPE", "WAPE", "SMAPE"]
+                                    if col in scope_df.columns
+                                ]
+                            ],
+                            metric_cols=FORECAST_PRIMARY_METRICS,
+                            lower_is_better=True,
+                        ),
+                        max_rows=20,
+                    )
+                )
+                lines.append("")
 
     return "\n".join(lines)
 
@@ -494,13 +581,15 @@ def main() -> int:
     metric_rows, _run_method_meta = deduplicate_metric_rows(metric_rows_raw)
     run_meta = _build_run_metadata(causal_results_root)
     metric_rows = _enrich_causal_rows(metric_rows, run_meta)
-    if not args.include_null:
+
+    include_null = args.include_null and not args.exclude_null
+    if not include_null:
         metric_rows = [row for row in metric_rows if row.get("model") != "NULL"]
-    causal_core = _build_causal_core(metric_rows)
+    causal_core = _round_numeric_df(_build_causal_core(metric_rows))
 
     forecast_runs = _discover_forecast_runs(forecast_checkpoints_root)
     forecast_long_rows = _build_forecast_long_rows(forecast_runs)
-    forecast_core = _build_forecast_core(forecast_long_rows)
+    forecast_core = _round_numeric_df(_build_forecast_core(forecast_long_rows))
 
     causal_path = output_dir / "advisor_causal_core.csv"
     forecast_path = output_dir / "advisor_forecasting_core.csv"
@@ -510,6 +599,7 @@ def main() -> int:
     causal_core.to_csv(causal_path, index=False)
     forecast_core.to_csv(forecast_path, index=False)
     report_path.write_text(_build_report(causal_core, forecast_core), encoding="utf-8")
+
     cleaned_warnings = sorted(
         {
             warning
