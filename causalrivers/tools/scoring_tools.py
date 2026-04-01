@@ -49,14 +49,16 @@ def max_accuracy(labs, preds):
     # ACCURACY MAX
     preds = preds.astype(float)
     if preds.min() == preds.max():
-        possible_thresholds = [0.0, float(preds.max()) + 1e-6]
+        a = []
     else:
-        # Use a fixed-size grid. The previous arange-based logic could explode
-        # to millions of thresholds when preds.min() ~= preds.max() > 0,
-        # which made near-uniform graphs (for example D2STGNN/GWNET outputs)
-        # appear to "hang" during scoring.
-        a = np.linspace(float(preds.min()), float(preds.max()), num=101).tolist()
-        possible_thresholds = [0.0] + a + [float(preds.max()) + 1e-6]
+        a = list(
+            np.arange(
+                preds.min(),
+                preds.max(),
+                (preds.max() - preds.min()) / 100,
+            )
+        )  # 100 steps
+    possible_thresholds = [0] + a + [preds.max() + 1e-6]
     acc = [accuracy_score(labs, preds > thresh) for thresh in possible_thresholds]
     acc_thresh = possible_thresholds[np.argmax(acc)]
     acc_score = np.nanmax(acc)
