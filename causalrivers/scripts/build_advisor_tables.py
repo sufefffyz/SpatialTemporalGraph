@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Build advisor-facing summary tables from causalrivers result directories.
+"""Build project-level advisor tables from both CausalRivers and BasicTS results.
 
-This script is designed for two result families:
-1. A-line: causal discovery from time series (var / cc / pcmci / varlingam / ...)
-2. B-line: STGNN learned-graph evaluation routed through benchmark.py via
-   `method=stgnn_precomputed`.
+Outputs are written to the repository-level ``outputs/advisor_tables`` directory
+by default so the summary can be used as a single briefing package for:
 
-It scans `results/`, deduplicates identical runs, restores the concrete STGNN
-model name from `method.learned_graph_path`, and writes advisor-friendly CSV and
-Markdown tables.
+1. A-causal: classical causal discovery on time series in ``causalrivers/results``
+2. B-causal: STGNN learned-graph results re-evaluated by the causal benchmark
+3. B-forecast: BasicTS forecasting metrics from ``BasicTS/checkpoints``
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,39 +27,50 @@ except ImportError as exc:  # pragma: no cover
 from aggregate_results_to_wandb import (
     aggregate_results,
     deduplicate_metric_rows,
-    deduplicate_runtime_rows,
+    normalize_resolution,
+    parse_dataset_resolution_hint,
 )
 
 
-PRIMARY_METRICS = ["AUROC", "Max F1", "Max Acc", "Individual AUROC"]
+CAUSAL_PRIMARY_METRICS = ["AUROC", "Max F1", "Max Acc", "Individual AUROC"]
+FORECAST_PRIMARY_METRICS = ["MAE", "RMSE", "MAPE", "WAPE", "SMAPE"]
+CONFIG_DIR_PATTERN = re.compile(
+    r"^(?P<dataset>.+)_(?P<epochs>\d+)_(?P<input_len>\d+)_(?P<output_len>\d+)$"
+)
 
 
 def parse_args() -> argparse.Namespace:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(
-        description="Build advisor-facing result tables from causalrivers benchmark outputs."
+        description="Build advisor-facing project summary tables from causalrivers and BasicTS results."
     )
     parser.add_argument(
-        "--results-root",
+        "--causal-results-root",
         type=Path,
-        default=repo_root / "results",
-        help="Root directory containing result folders.",
+        default=repo_root / "causalrivers" / "results",
+        help="Root directory containing causalrivers benchmark results.",
+    )
+    parser.add_argument(
+        "--forecast-checkpoints-root",
+        type=Path,
+        default=repo_root / "BasicTS" / "checkpoints",
+        help="Root directory containing BasicTS checkpoint folders with test_metrics.json files.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=repo_root / "outputs" / "advisor_tables",
-        help="Directory for CSV and Markdown outputs.",
+        help="Project-level directory for advisor-facing outputs.",
     )
     parser.add_argument(
         "--include-null",
         action="store_true",
-        help="Include NULL baseline rows in summary tables.",
+        help="Include NULL baseline rows in causal tables.",
     )
     return parser.parse_args()
 
 
-def _normalize_stgnn_model(name: str | None) -> str | None:
+def _normalize_model(name: str | None) -> str | None:
     if not name:
         return None
     mapping = {
@@ -81,7 +92,7 @@ def _infer_stgnn_model_from_path(learned_graph_path: str | None) -> str | None:
     if "checkpoints" in parts:
         idx = parts.index("checkpoints")
         if idx + 1 < len(parts):
-            return _normalize_stgnn_model(parts[idx + 1])
+            return _normalize_model(parts[idx + 1])
     return None
 
 
@@ -104,13 +115,13 @@ def _build_run_metadata(results_root: Path) -> dict[str, dict[str, Any]]:
 
         learned_graph_path = method_cfg.get("learned_graph_path")
         stgnn_model = _infer_stgnn_model_from_path(learned_graph_path)
-        run_line = "B-line" if source_method == "stgnn_precomputed" else "A-line"
+        run_track = "B-causal" if source_method == "stgnn_precomputed" else "A-causal"
 
         run_meta[run_dir] = {
             "source_method": source_method,
             "learned_graph_path": learned_graph_path,
             "stgnn_model": stgnn_model,
-            "line": run_line,
+            "track": run_track,
         }
     return run_meta
 
@@ -133,48 +144,98 @@ def _display_method(row: dict[str, Any], run_meta: dict[str, dict[str, Any]]) ->
         "combo": "Combo",
         "pcmci": "PCMCI",
         "varlingam": "VARLiNGAM",
-        "stgnn_precomputed": meta.get("stgnn_model") or "STGNN",
     }
     return mapping.get(method, method)
 
 
-def _row_line(row: dict[str, Any], run_meta: dict[str, dict[str, Any]]) -> str:
+def _row_track(row: dict[str, Any], run_meta: dict[str, dict[str, Any]]) -> str:
     run_dir = str(Path(str(row["run_dir"])).resolve())
     meta = run_meta.get(run_dir, {})
-    return meta.get("line", "A-line")
+    return meta.get("track", "A-causal")
 
 
-def _enrich_rows(rows: list[dict[str, Any]], run_meta: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+def _meaningful_dataset_name(data_name: Any, label_name: Any) -> str | None:
+    data_text = str(data_name).strip() if data_name is not None else ""
+    label_text = str(label_name).strip() if label_name is not None else ""
+    if data_text and data_text.lower() not in {"datasets", "none"}:
+        return data_text
+    if label_text and label_text.lower() not in {"datasets", "none"}:
+        return label_text
+    return None
+
+
+def _describe_dataset(raw_name: str | None, resolution_hint: Any = None) -> dict[str, str | None]:
+    name = (raw_name or "").strip()
+    lowered = name.lower().removesuffix(".csv")
+    resolution = parse_dataset_resolution_hint(name) or normalize_resolution(resolution_hint)
+
+    alias = name if name else None
+    signal = None
+    family = "other"
+
+    if lowered.startswith("traffic_volume_") or lowered.startswith("traffic_city_traffic_m_volume__category__1_0"):
+        alias = "UTB-m"
+        signal = "volume"
+        family = "traffic"
+        resolution = resolution or "5min"
+    elif lowered.startswith("traffic_speed_") or lowered.startswith("traffic_city_traffic_m_speed__category__1_0"):
+        alias = "UTB-m"
+        signal = "speed"
+        family = "traffic"
+        resolution = resolution or "5min"
+    elif lowered.startswith("rivers_east_germany_") or lowered.startswith("rivers_ts_east_germany"):
+        alias = "Rivers-East"
+        signal = "discharge"
+        family = "rivers"
+    elif name:
+        alias = name.replace(".csv", "")
+
+    return {
+        "dataset": alias,
+        "resolution": resolution,
+        "signal": signal,
+        "family": family,
+    }
+
+
+def _enrich_causal_rows(rows: list[dict[str, Any]], run_meta: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     enriched: list[dict[str, Any]] = []
     for row in rows:
+        dataset_name = _meaningful_dataset_name(row.get("data_dataset_name"), row.get("label_dataset_name"))
+        dataset_meta = _describe_dataset(dataset_name, row.get("config_resolution"))
         new_row = dict(row)
-        new_row["line"] = _row_line(row, run_meta)
-        new_row["method_display"] = _display_method(row, run_meta)
+        new_row["track"] = _row_track(row, run_meta)
+        new_row["model"] = _display_method(row, run_meta)
+        new_row["dataset"] = dataset_meta["dataset"]
+        new_row["resolution"] = dataset_meta["resolution"]
+        new_row["signal"] = dataset_meta["signal"]
+        new_row["family"] = dataset_meta["family"]
         enriched.append(new_row)
     return enriched
 
 
-def _build_summary_table(metric_rows: list[dict[str, Any]], runtime_rows: list[dict[str, Any]]) -> pd.DataFrame:
+def _build_causal_core(metric_rows: list[dict[str, Any]]) -> pd.DataFrame:
+    if not metric_rows:
+        return pd.DataFrame(
+            columns=[
+                "track",
+                "dataset",
+                "resolution",
+                "signal",
+                "strategy",
+                "n_vars",
+                "model",
+                *CAUSAL_PRIMARY_METRICS,
+            ]
+        )
+
     metric_df = pd.DataFrame(metric_rows)
-    runtime_df = pd.DataFrame(runtime_rows)
-
-    group_cols = [
-        "line",
-        "data_dataset_name",
-        "label_group",
-        "strategy",
-        "n_vars",
-        "label_tag",
-        "config_resolution",
-        "method_display",
-    ]
-
+    group_cols = ["track", "dataset", "resolution", "signal", "strategy", "n_vars", "model"]
     metric_summary = (
         metric_df.groupby(group_cols + ["metric"], dropna=False)["value"]
         .mean()
         .reset_index()
     )
-
     wide = (
         metric_summary.pivot_table(
             index=group_cols,
@@ -185,94 +246,132 @@ def _build_summary_table(metric_rows: list[dict[str, Any]], runtime_rows: list[d
         .reset_index()
     )
     wide.columns.name = None
-
-    if not runtime_df.empty:
-        runtime_filtered = runtime_df[runtime_df["method"] != "overall"].copy()
-        runtime_summary = (
-            runtime_filtered.groupby(group_cols, dropna=False)["runtime_seconds"]
-            .mean()
-            .reset_index()
-            .rename(columns={"runtime_seconds": "runtime_seconds_mean"})
-        )
-        wide = wide.merge(runtime_summary, on=group_cols, how="left")
-
-    preferred_cols = group_cols + PRIMARY_METRICS + ["runtime_seconds_mean"]
+    preferred_cols = group_cols + CAUSAL_PRIMARY_METRICS
     ordered_cols = [col for col in preferred_cols if col in wide.columns] + [
         col for col in wide.columns if col not in preferred_cols
     ]
     wide = wide[ordered_cols]
-    return wide.sort_values(group_cols).reset_index(drop=True)
+    sort_cols = ["dataset", "resolution", "strategy", "n_vars", "track", "AUROC", "Max F1"]
+    existing_sort_cols = [col for col in sort_cols if col in wide.columns]
+    ascending = [True, True, True, True, True, False, False][: len(existing_sort_cols)]
+    return wide.sort_values(existing_sort_cols, ascending=ascending).reset_index(drop=True)
 
 
-def _compact_summary_view(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty:
-        return df.copy()
-    preferred = [
-        "data_dataset_name",
-        "label_group",
-        "strategy",
-        "n_vars",
-        "method_display",
-        "AUROC",
-        "Max F1",
-        "Max Acc",
-        "runtime_seconds_mean",
-    ]
-    columns = [column for column in preferred if column in df.columns]
-    compact = df[columns].copy()
-    sort_cols = [column for column in ["data_dataset_name", "label_group", "AUROC", "Max F1"] if column in compact.columns]
-    ascending = [True, True, False, False][: len(sort_cols)]
-    return compact.sort_values(sort_cols, ascending=ascending).reset_index(drop=True)
+def _find_config_dir_name(path: Path) -> str | None:
+    for part in path.parts:
+        if CONFIG_DIR_PATTERN.match(part):
+            return part
+    return None
 
 
-def _best_rows_by_metric(df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    if df.empty or metric not in df.columns:
-        return df.iloc[0:0].copy()
-    group_cols = [column for column in ["line", "data_dataset_name", "label_group", "strategy", "n_vars"] if column in df.columns]
-    idx = (
-        df.groupby(group_cols, dropna=False)[metric]
-        .idxmax()
-        .dropna()
-        .astype(int)
+def _parse_forecast_run(path: Path) -> dict[str, Any] | None:
+    parts = path.parts
+    if "checkpoints" not in parts:
+        return None
+    idx = parts.index("checkpoints")
+    if idx + 1 >= len(parts):
+        return None
+
+    model_dir = parts[idx + 1]
+    model = _normalize_model(model_dir)
+    config_dir_name = _find_config_dir_name(path)
+    if config_dir_name is None:
+        return None
+
+    match = CONFIG_DIR_PATTERN.match(config_dir_name)
+    if match is None:
+        return None
+
+    dataset_name = match.group("dataset")
+    metrics_raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(metrics_raw, dict):
+        return None
+
+    overall = metrics_raw.get("overall", metrics_raw)
+    if not isinstance(overall, dict):
+        return None
+
+    dataset_meta = _describe_dataset(dataset_name)
+    return {
+        "track": "B-forecast",
+        "model": model,
+        "dataset": dataset_meta["dataset"],
+        "resolution": dataset_meta["resolution"],
+        "signal": dataset_meta["signal"],
+        "family": dataset_meta["family"],
+        "dataset_name": dataset_name,
+        "epochs": int(match.group("epochs")),
+        "input_len": int(match.group("input_len")),
+        "output_len": int(match.group("output_len")),
+        "metrics": overall,
+        "run_dir": str(path.parent.resolve()),
+        "metrics_path": str(path.resolve()),
+    }
+
+
+def _discover_forecast_runs(checkpoints_root: Path) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    if not checkpoints_root.exists():
+        return runs
+    for metrics_path in checkpoints_root.rglob("test_metrics.json"):
+        parsed = _parse_forecast_run(metrics_path)
+        if parsed is not None:
+            runs.append(parsed)
+    return sorted(runs, key=lambda row: (row["dataset_name"], row["model"], row["run_dir"]))
+
+
+def _build_forecast_long_rows(forecast_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for run in forecast_runs:
+        for metric_name, value in run["metrics"].items():
+            if not isinstance(value, (int, float)):
+                continue
+            rows.append(
+                {
+                    "track": run["track"],
+                    "dataset": run["dataset"],
+                    "resolution": run["resolution"],
+                    "signal": run["signal"],
+                    "model": run["model"],
+                    "metric": metric_name,
+                    "value": float(value),
+                }
+            )
+    return rows
+
+
+def _build_forecast_core(forecast_long_rows: list[dict[str, Any]]) -> pd.DataFrame:
+    if not forecast_long_rows:
+        return pd.DataFrame(columns=["track", "dataset", "resolution", "signal", "model"])
+
+    forecast_df = pd.DataFrame(forecast_long_rows)
+    group_cols = ["track", "dataset", "resolution", "signal", "model"]
+    summary = (
+        forecast_df.groupby(group_cols + ["metric"], dropna=False)["value"]
+        .mean()
+        .reset_index()
     )
-    best = df.loc[idx].copy()
-    sort_cols = [column for column in ["line", "data_dataset_name", "label_group", metric] if column in best.columns]
-    ascending = [True, True, True, False][: len(sort_cols)]
-    return best.sort_values(sort_cols, ascending=ascending).reset_index(drop=True)
-
-
-def _a_b_comparison(df: pd.DataFrame, metric: str = "AUROC") -> pd.DataFrame:
-    if df.empty or metric not in df.columns:
-        return df.iloc[0:0].copy()
-    group_cols = ["data_dataset_name", "label_group", "strategy", "n_vars"]
-    subset_cols = group_cols + ["line", "method_display", metric]
-    available_cols = [column for column in subset_cols if column in df.columns]
-    working = df[available_cols].copy()
-    best = _best_rows_by_metric(working, metric)
-    if best.empty or "line" not in best.columns:
-        return best
-    a_best = best[best["line"] == "A-line"].copy()
-    b_best = best[best["line"] == "B-line"].copy()
-    if a_best.empty or b_best.empty:
-        return best.iloc[0:0].copy()
-    merged = a_best.merge(
-        b_best,
-        on=group_cols,
-        suffixes=("_a", "_b"),
-        how="inner",
+    wide = (
+        summary.pivot_table(
+            index=group_cols,
+            columns="metric",
+            values="value",
+            aggfunc="first",
+        )
+        .reset_index()
     )
-    if merged.empty:
-        return merged
-    merged["delta_b_minus_a"] = merged[f"{metric}_b"] - merged[f"{metric}_a"]
-    order_cols = group_cols + [
-        "method_display_a",
-        f"{metric}_a",
-        "method_display_b",
-        f"{metric}_b",
-        "delta_b_minus_a",
+    wide.columns.name = None
+    metric_order = FORECAST_PRIMARY_METRICS + [
+        col for col in wide.columns if col not in group_cols and col not in FORECAST_PRIMARY_METRICS
     ]
-    existing = [column for column in order_cols if column in merged.columns]
-    return merged[existing].sort_values(group_cols).reset_index(drop=True)
+    ordered_cols = group_cols + [col for col in metric_order if col in wide.columns]
+    wide = wide[ordered_cols]
+    sort_cols = ["dataset", "resolution"]
+    if "MAE" in wide.columns:
+        sort_cols.append("MAE")
+    sort_cols.append("model")
+    ascending = [True, True, True, True][: len(sort_cols)]
+    return wide.sort_values(sort_cols, ascending=ascending).reset_index(drop=True)
 
 
 def _markdown_table(df: pd.DataFrame, max_rows: int = 50) -> str:
@@ -301,114 +400,131 @@ def _markdown_table(df: pd.DataFrame, max_rows: int = 50) -> str:
     return "\n".join(lines)
 
 
-def _write_report(
-    output_path: Path,
-    long_df: pd.DataFrame,
-    a_df: pd.DataFrame,
-    b_df: pd.DataFrame,
-    combined_df: pd.DataFrame,
-) -> None:
-    a_best = _best_rows_by_metric(a_df, "AUROC")
-    b_best = _best_rows_by_metric(b_df, "AUROC")
-    ab_compare = _a_b_comparison(combined_df, metric="AUROC")
-    a_compact = _compact_summary_view(a_df)
-    b_compact = _compact_summary_view(b_df)
-    combined_compact = _compact_summary_view(combined_df)
+def _section_title(dataset: str | None, resolution: str | None, signal: str | None) -> str:
+    pieces = [piece for piece in [dataset, resolution, signal] if piece]
+    return " | ".join(pieces) if pieces else "Unknown Dataset"
 
+
+def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str:
     lines: list[str] = [
-        "# Advisor Report Tables",
+        "# Advisor Summary",
         "",
-        f"- Total metric rows: {len(long_df)}",
-        f"- A-line summary rows: {len(a_df)}",
-        f"- B-line summary rows: {len(b_df)}",
+        "## 1. Causal Benchmark Summary",
         "",
-        "## Topline",
-        "- A-line: time-series causal discovery baselines.",
-        "- B-line: STGNN learned-graph results evaluated as causal graphs.",
-        "",
-        "## A-line Best By AUROC",
-        _markdown_table(a_best, max_rows=30),
-        "",
-        "## B-line Best By AUROC",
-        _markdown_table(b_best, max_rows=30),
-        "",
-        "## A-vs-B Best AUROC Comparison",
-        _markdown_table(ab_compare, max_rows=30),
-        "",
-        "## A-line Compact Table",
-        _markdown_table(a_compact, max_rows=40),
-        "",
-        "## B-line Compact Table",
-        _markdown_table(b_compact, max_rows=40),
-        "",
-        "## Combined Compact Table",
-        _markdown_table(combined_compact, max_rows=50),
+        "- `A-causal`: 直接从时序做因果边发现。",
+        "- `B-causal`: 先训练 STGNN，再把 learned graph 送回 causal benchmark 评估。",
         "",
     ]
-    output_path.write_text("\n".join(lines), encoding="utf-8")
+
+    if causal_core.empty:
+        lines.append("_No causal benchmark rows found._")
+        lines.append("")
+    else:
+        for (dataset, resolution, signal), dataset_df in causal_core.groupby(
+            ["dataset", "resolution", "signal"], dropna=False
+        ):
+            lines.append(f"### {_section_title(dataset, resolution, signal)}")
+            lines.append("")
+            for (strategy, n_vars), sub_df in dataset_df.groupby(["strategy", "n_vars"], dropna=False):
+                title = f"{strategy} | n_vars={n_vars}" if strategy is not None else f"n_vars={n_vars}"
+                lines.append(f"#### {title}")
+                lines.append(
+                    _markdown_table(
+                        sub_df[
+                            [
+                                col
+                                for col in [
+                                    "track",
+                                    "model",
+                                    "AUROC",
+                                    "Max F1",
+                                    "Max Acc",
+                                    "Individual AUROC",
+                                ]
+                                if col in sub_df.columns
+                            ]
+                        ],
+                        max_rows=20,
+                    )
+                )
+                lines.append("")
+
+    lines.extend(
+        [
+            "## 2. Forecasting Summary",
+            "",
+            "- 这里汇总的是 `BasicTS/checkpoints/**/test_metrics.json` 的整体预测指标。",
+            "",
+        ]
+    )
+
+    if forecast_core.empty:
+        lines.append("_No forecasting rows found._")
+        lines.append("")
+    else:
+        for (dataset, resolution, signal), dataset_df in forecast_core.groupby(
+            ["dataset", "resolution", "signal"], dropna=False
+        ):
+            lines.append(f"### {_section_title(dataset, resolution, signal)}")
+            lines.append(
+                _markdown_table(
+                    dataset_df[
+                        [
+                            col
+                            for col in ["model", "MAE", "RMSE", "MAPE", "WAPE", "SMAPE"]
+                            if col in dataset_df.columns
+                        ]
+                    ],
+                    max_rows=20,
+                )
+            )
+            lines.append("")
+
+    return "\n".join(lines)
 
 
 def main() -> int:
     args = parse_args()
-    results_root = args.results_root.expanduser().resolve()
+    causal_results_root = args.causal_results_root.expanduser().resolve()
+    forecast_checkpoints_root = args.forecast_checkpoints_root.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    metric_rows_raw, runtime_rows_raw, warnings = aggregate_results(results_root)
-    metric_rows, run_method_meta = deduplicate_metric_rows(metric_rows_raw)
-    runtime_rows = deduplicate_runtime_rows(runtime_rows_raw, run_method_meta)
-
-    run_meta = _build_run_metadata(results_root)
-    metric_rows = _enrich_rows(metric_rows, run_meta)
-    runtime_rows = _enrich_rows(runtime_rows, run_meta)
-
+    metric_rows_raw, _runtime_rows_raw, warnings = aggregate_results(causal_results_root)
+    metric_rows, _run_method_meta = deduplicate_metric_rows(metric_rows_raw)
+    run_meta = _build_run_metadata(causal_results_root)
+    metric_rows = _enrich_causal_rows(metric_rows, run_meta)
     if not args.include_null:
-        metric_rows = [row for row in metric_rows if row.get("method_display") != "NULL"]
-        runtime_rows = [row for row in runtime_rows if row.get("method_display") != "NULL"]
+        metric_rows = [row for row in metric_rows if row.get("model") != "NULL"]
+    causal_core = _build_causal_core(metric_rows)
 
-    long_df = pd.DataFrame(metric_rows).sort_values(
-        ["line", "data_dataset_name", "label_group", "method_display", "metric"]
-    )
-    combined_df = _build_summary_table(metric_rows, runtime_rows)
-    a_df = combined_df[combined_df["line"] == "A-line"].reset_index(drop=True)
-    b_df = combined_df[combined_df["line"] == "B-line"].reset_index(drop=True)
+    forecast_runs = _discover_forecast_runs(forecast_checkpoints_root)
+    forecast_long_rows = _build_forecast_long_rows(forecast_runs)
+    forecast_core = _build_forecast_core(forecast_long_rows)
 
-    long_path = output_dir / "advisor_results_long.csv"
-    combined_path = output_dir / "advisor_combined_summary.csv"
-    a_path = output_dir / "advisor_a_line_summary.csv"
-    b_path = output_dir / "advisor_b_line_summary.csv"
-    a_best_path = output_dir / "advisor_a_line_best_auroc.csv"
-    b_best_path = output_dir / "advisor_b_line_best_auroc.csv"
-    compare_path = output_dir / "advisor_a_vs_b_best_auroc.csv"
+    causal_path = output_dir / "advisor_causal_core.csv"
+    forecast_path = output_dir / "advisor_forecasting_core.csv"
     report_path = output_dir / "advisor_report.md"
     warnings_path = output_dir / "advisor_warnings.txt"
 
-    a_best = _best_rows_by_metric(a_df, "AUROC")
-    b_best = _best_rows_by_metric(b_df, "AUROC")
-    compare_df = _a_b_comparison(combined_df, metric="AUROC")
+    causal_core.to_csv(causal_path, index=False)
+    forecast_core.to_csv(forecast_path, index=False)
+    report_path.write_text(_build_report(causal_core, forecast_core), encoding="utf-8")
+    cleaned_warnings = sorted(
+        {
+            warning
+            for warning in warnings
+            if "label dataset=datasets" not in warning
+        }
+    )
+    if cleaned_warnings:
+        warnings_path.write_text("\n".join(cleaned_warnings), encoding="utf-8")
 
-    long_df.to_csv(long_path, index=False)
-    combined_df.to_csv(combined_path, index=False)
-    a_df.to_csv(a_path, index=False)
-    b_df.to_csv(b_path, index=False)
-    a_best.to_csv(a_best_path, index=False)
-    b_best.to_csv(b_best_path, index=False)
-    compare_df.to_csv(compare_path, index=False)
-    _write_report(report_path, long_df, a_df, b_df, combined_df)
-
-    if warnings:
-        warnings_path.write_text("\n".join(sorted(set(warnings))), encoding="utf-8")
-
-    print(f"Wrote long table    : {long_path}")
-    print(f"Wrote combined table: {combined_path}")
-    print(f"Wrote A-line table  : {a_path}")
-    print(f"Wrote B-line table  : {b_path}")
-    print(f"Wrote A best table  : {a_best_path}")
-    print(f"Wrote B best table  : {b_best_path}")
-    print(f"Wrote A/B compare   : {compare_path}")
-    print(f"Wrote report        : {report_path}")
-    if warnings:
-        print(f"Wrote warnings      : {warnings_path}")
+    print(f"Wrote causal table    : {causal_path}")
+    print(f"Wrote forecast table  : {forecast_path}")
+    print(f"Wrote report          : {report_path}")
+    if cleaned_warnings:
+        print(f"Wrote warnings        : {warnings_path}")
     return 0
 
 
