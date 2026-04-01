@@ -57,6 +57,11 @@ def parse_args() -> argparse.Namespace:
         default=200,
         help="Output figure DPI.",
     )
+    parser.add_argument(
+        "--pair-cmap",
+        default="viridis",
+        help="Colormap used for the side-by-side comparison with a shared colorbar.",
+    )
     return parser.parse_args()
 
 
@@ -162,23 +167,31 @@ def _plot_pair(
     title_prefix: str,
     dpi: int,
     tick_labels: list[str] | None,
+    cmap: str,
 ) -> None:
     size = max(8, min(18, 0.18 * true_adj.shape[0]))
     fig, axes = plt.subplots(1, 2, figsize=(2 * size, size))
 
-    left = axes[0].imshow(true_adj, cmap="Blues", aspect="auto", vmin=0.0, vmax=1.0)
+    shared_vmin = float(min(np.nanmin(true_adj), np.nanmin(learned_adj)))
+    shared_vmax = float(max(np.nanmax(true_adj), np.nanmax(learned_adj)))
+
+    left = axes[0].imshow(
+        true_adj,
+        cmap=cmap,
+        aspect="auto",
+        vmin=shared_vmin,
+        vmax=shared_vmax,
+    )
     axes[0].set_title(f"{title_prefix}: true graph")
     axes[0].set_xlabel("Cause")
     axes[0].set_ylabel("Effect")
 
-    learned_vmin = float(np.nanmin(learned_adj))
-    learned_vmax = float(np.nanmax(learned_adj))
     right = axes[1].imshow(
         learned_adj,
-        cmap="viridis",
+        cmap=cmap,
         aspect="auto",
-        vmin=learned_vmin,
-        vmax=learned_vmax,
+        vmin=shared_vmin,
+        vmax=shared_vmax,
     )
     axes[1].set_title(f"{title_prefix}: learned graph")
     axes[1].set_xlabel("Cause")
@@ -195,8 +208,7 @@ def _plot_pair(
             ax.set_xticks([])
             ax.set_yticks([])
 
-    fig.colorbar(left, ax=axes[0], fraction=0.046, pad=0.04)
-    fig.colorbar(right, ax=axes[1], fraction=0.046, pad=0.04)
+    fig.colorbar(right, ax=axes, fraction=0.03, pad=0.02)
     fig.tight_layout()
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -253,6 +265,7 @@ def main() -> int:
         title_prefix=prefix,
         dpi=args.dpi,
         tick_labels=tick_labels,
+        cmap=args.pair_cmap,
     )
 
     print(f"Saved true heatmap   : {true_out}")
