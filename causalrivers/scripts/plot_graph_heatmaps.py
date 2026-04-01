@@ -62,6 +62,16 @@ def parse_args() -> argparse.Namespace:
         default="viridis",
         help="Colormap used for the side-by-side comparison with a shared colorbar.",
     )
+    parser.add_argument(
+        "--pair-scale-mode",
+        choices=["normalize_each", "raw"],
+        default="normalize_each",
+        help=(
+            "How to scale the side-by-side comparison. "
+            "'normalize_each' rescales both matrices to [0, 1] before plotting for structural comparison; "
+            "'raw' uses the shared raw value range."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -160,6 +170,15 @@ def _plot_single_heatmap(
     plt.close(fig)
 
 
+def _minmax_normalize(matrix: np.ndarray) -> np.ndarray:
+    matrix = np.asarray(matrix, dtype=np.float32)
+    min_val = float(np.nanmin(matrix))
+    max_val = float(np.nanmax(matrix))
+    if np.isclose(min_val, max_val):
+        return np.zeros_like(matrix, dtype=np.float32)
+    return (matrix - min_val) / (max_val - min_val)
+
+
 def _plot_pair(
     true_adj: np.ndarray,
     learned_adj: np.ndarray,
@@ -168,32 +187,43 @@ def _plot_pair(
     dpi: int,
     tick_labels: list[str] | None,
     cmap: str,
+    scale_mode: str,
 ) -> None:
     size = max(8, min(18, 0.18 * true_adj.shape[0]))
-    fig, axes = plt.subplots(1, 2, figsize=(2 * size, size))
+    fig, axes = plt.subplots(1, 2, figsize=(2 * size, size), constrained_layout=True)
 
-    shared_vmin = float(min(np.nanmin(true_adj), np.nanmin(learned_adj)))
-    shared_vmax = float(max(np.nanmax(true_adj), np.nanmax(learned_adj)))
+    if scale_mode == "normalize_each":
+        true_plot = _minmax_normalize(true_adj)
+        learned_plot = _minmax_normalize(learned_adj)
+        shared_vmin = 0.0
+        shared_vmax = 1.0
+        title_suffix = "normalized"
+    else:
+        true_plot = true_adj
+        learned_plot = learned_adj
+        shared_vmin = float(min(np.nanmin(true_adj), np.nanmin(learned_adj)))
+        shared_vmax = float(max(np.nanmax(true_adj), np.nanmax(learned_adj)))
+        title_suffix = "raw"
 
     left = axes[0].imshow(
-        true_adj,
+        true_plot,
         cmap=cmap,
         aspect="auto",
         vmin=shared_vmin,
         vmax=shared_vmax,
     )
-    axes[0].set_title(f"{title_prefix}: true graph")
+    axes[0].set_title(f"{title_prefix}: true graph ({title_suffix})")
     axes[0].set_xlabel("Cause")
     axes[0].set_ylabel("Effect")
 
     right = axes[1].imshow(
-        learned_adj,
+        learned_plot,
         cmap=cmap,
         aspect="auto",
         vmin=shared_vmin,
         vmax=shared_vmax,
     )
-    axes[1].set_title(f"{title_prefix}: learned graph")
+    axes[1].set_title(f"{title_prefix}: learned graph ({title_suffix})")
     axes[1].set_xlabel("Cause")
     axes[1].set_ylabel("Effect")
 
@@ -209,7 +239,6 @@ def _plot_pair(
             ax.set_yticks([])
 
     fig.colorbar(right, ax=axes, fraction=0.03, pad=0.02)
-    fig.tight_layout()
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
 
@@ -266,6 +295,7 @@ def main() -> int:
         dpi=args.dpi,
         tick_labels=tick_labels,
         cmap=args.pair_cmap,
+        scale_mode=args.pair_scale_mode,
     )
 
     print(f"Saved true heatmap   : {true_out}")
