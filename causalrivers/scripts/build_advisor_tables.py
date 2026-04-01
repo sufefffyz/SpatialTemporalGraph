@@ -210,14 +210,28 @@ def _enrich_causal_rows(rows: list[dict[str, Any]], run_meta: dict[str, dict[str
     for row in rows:
         dataset_name = _meaningful_dataset_name(row.get("data_dataset_name"), row.get("label_dataset_name"))
         dataset_meta = _describe_dataset(dataset_name, row.get("config_resolution"))
-        new_row = dict(row)
-        new_row["track"] = _row_track(row, run_meta)
-        new_row["model"] = _display_method(row, run_meta)
-        new_row["dataset"] = dataset_meta["dataset"]
-        new_row["resolution"] = dataset_meta["resolution"]
-        new_row["signal"] = dataset_meta["signal"]
-        new_row["family"] = dataset_meta["family"]
-        enriched.append(new_row)
+        metric_names = [row.get("metric")]
+        model_name = _display_method(row, run_meta)
+
+        if model_name == "NULL":
+            metric_name = str(row.get("metric"))
+            if metric_name == "Acc":
+                metric_names = ["Max Acc"]
+            elif metric_name == "F1":
+                metric_names = ["Max F1"]
+            elif metric_name == "AUROC":
+                metric_names = ["AUROC", "Individual AUROC"]
+
+        for metric_name in metric_names:
+            new_row = dict(row)
+            new_row["metric"] = metric_name
+            new_row["track"] = _row_track(row, run_meta)
+            new_row["model"] = model_name
+            new_row["dataset"] = dataset_meta["dataset"]
+            new_row["resolution"] = dataset_meta["resolution"]
+            new_row["signal"] = dataset_meta["signal"]
+            new_row["family"] = dataset_meta["family"]
+            enriched.append(new_row)
     return enriched
 
 
