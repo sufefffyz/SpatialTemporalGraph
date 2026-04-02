@@ -435,20 +435,27 @@ def _build_track_matrix(core_df: pd.DataFrame, track: str) -> pd.DataFrame:
         return pd.DataFrame(columns=["dataset", "resolution", "signal", "strategy", "n_vars", "metric"])
 
     model_cols = _ordered_model_columns(track, subset["model"].dropna().unique().tolist())
+    metric_cols = [col for col in CAUSAL_PRIMARY_METRICS if col in subset.columns]
     dataset_frames: list[pd.DataFrame] = []
     for dataset_key, dataset_df in subset.groupby(["dataset", "resolution", "signal"], dropna=False):
+        long_df = dataset_df.melt(
+            id_vars=["strategy", "n_vars", "model"],
+            value_vars=metric_cols,
+            var_name="metric",
+            value_name="value",
+        )
         strategy_pairs = (
-            dataset_df[["strategy", "n_vars"]]
+            long_df[["strategy", "n_vars"]]
             .drop_duplicates()
             .sort_values(["strategy", "n_vars"], na_position="last")
         )
         index_tuples = [
             (row.strategy, row.n_vars, metric)
             for row in strategy_pairs.itertuples(index=False)
-            for metric in CAUSAL_PRIMARY_METRICS
+            for metric in metric_cols
         ]
         full_index = pd.MultiIndex.from_tuples(index_tuples, names=["strategy", "n_vars", "metric"])
-        pivot = dataset_df.pivot_table(
+        pivot = long_df.pivot_table(
             index=["strategy", "n_vars", "metric"],
             columns="model",
             values="value",
