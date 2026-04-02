@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 from pathlib import Path
@@ -506,6 +507,20 @@ def _format_matrix_df(df: pd.DataFrame, model_cols: list[str], lower_is_better: 
     return formatted
 
 
+def _blank_repeated_labels(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    compact = df.copy()
+    if compact.empty:
+        return compact
+    for col in columns:
+        previous = object()
+        for idx, value in compact[col].items():
+            if value == previous:
+                compact.at[idx, col] = ""
+            else:
+                previous = value
+    return compact
+
+
 def _styled_metric_table(
     df: pd.DataFrame,
     metric_cols: list[str],
@@ -583,6 +598,44 @@ def _scope_label(scope: str | None) -> str:
     return mapping.get(scope or "", scope or "Unknown")
 
 
+def _ordered_forecast_models(present_models: list[str]) -> list[str]:
+    preferred = [model for model in TRACK_MODEL_ORDER["B-causal"] if model != "NULL"]
+    ordered = [model for model in preferred if model in present_models]
+    extras = sorted(set(present_models) - set(preferred))
+    return ordered + extras
+
+
+def _styled_forecast_dataset_table(dataset_df: pd.DataFrame) -> pd.DataFrame:
+    if dataset_df.empty:
+        return pd.DataFrame(columns=["scope", "model", *FORECAST_PRIMARY_METRICS])
+
+    model_cols = [
+        col
+        for col in ["model", "MAE", "RMSE", "MAPE", "WAPE", "SMAPE"]
+        if col in dataset_df.columns
+    ]
+    working = dataset_df.copy()
+    scope_order = {scope: idx for idx, scope in enumerate(FORECAST_SCOPES)}
+    model_order = {
+        model: idx for idx, model in enumerate(_ordered_forecast_models(working["model"].dropna().unique().tolist()))
+    }
+    working["scope_order"] = working["scope"].map(scope_order).fillna(999)
+    working["model_order"] = working["model"].map(model_order).fillna(999)
+    working = working.sort_values(["scope_order", "model_order", "model"]).reset_index(drop=True)
+
+    styled_parts: list[pd.DataFrame] = []
+    for scope, scope_df in working.groupby("scope", dropna=False, sort=False):
+        scope_table = _styled_metric_table(
+            scope_df[model_cols].reset_index(drop=True),
+            metric_cols=FORECAST_PRIMARY_METRICS,
+            lower_is_better=True,
+        )
+        scope_table.insert(0, "scope", _scope_label(scope))
+        styled_parts.append(scope_table)
+
+    return pd.concat(styled_parts, ignore_index=True)
+
+
 def _dataset_matrix_sections(matrix_df: pd.DataFrame, track: str) -> list[str]:
     lines: list[str] = []
     if matrix_df.empty:
@@ -596,16 +649,156 @@ def _dataset_matrix_sections(matrix_df: pd.DataFrame, track: str) -> list[str]:
         lines.append(f"### {_section_title(dataset, resolution, signal)}")
         lines.append(
             _markdown_table(
-                _format_matrix_df(
-                    dataset_df[["strategy", "n_vars", "metric", *model_cols]].copy(),
-                    model_cols=model_cols,
-                    lower_is_better=False,
+                _blank_repeated_labels(
+                    _format_matrix_df(
+                        dataset_df[["strategy", "n_vars", "metric", *model_cols]].copy(),
+                        model_cols=model_cols,
+                        lower_is_better=False,
+                    ),
+                    ["strategy", "n_vars"],
                 ),
                 max_rows=120,
             )
         )
         lines.append("")
     return lines
+
+
+def _html_escape(value: Any) -> str:
+    return html.escape("" if value is None else str(value))
+
+
+def _html_table_with_rowspan(df: pd.DataFrame, merge_cols: list[str], model_cols: list[str]) -> str:
+    if df.empty:
+        return "<p><em>No rows found.</em></p>"
+
+    headers = list(df.columns)
+    rows = df.reset_index(drop=True)
+
+    rowspan_maps: dict[str, dict[int, int]] = {col: {} for col in merge_cols}
+    for col in merge_cols:
+        start = 0
+        while start < len(rows):
+            value = rows.at[start, col]
+            end = start + 1
+            while end < len(rows) and rows.at[end, col] == value:
+                end += 1
+            rowspan_maps[col][start] = end - start
+            start = end
+
+    html_lines = [
+        '<table class="advisor-table">',
+        "  <thead>",
+        "    <tr>",
+    ]
+    for header in headers:
+        html_lines.append(f"      <th>{_html_escape(header)}</th>")
+    html_lines.extend(["    </tr>", "  </thead>", "  <tbody>"])
+
+    skip_cells: dict[str, set[int]] = {col: set() for col in merge_cols}
+    for row_idx in range(len(rows)):
+        html_lines.append("    <tr>")
+        for col in headers:
+            value = rows.at[row_idx, col]
+            if col in merge_cols:
+                if row_idx in skip_cells[col]:
+                    continue
+                rowspan = rowspan_maps[col].get(row_idx, 1)
+                for skipped in range(row_idx + 1, row_idx + rowspan):
+                    skip_cells[col].add(skipped)
+                html_lines.append(
+                    f'      <td rowspan="{rowspan}">{_html_escape(value)}</td>'
+                )
+            else:
+                cell = _html_escape(value)
+                if col in model_cols and cell == "/":
+                    html_lines.append('      <td class="missing">/</td>')
+                else:
+                    html_lines.append(f"      <td>{cell}</td>")
+        html_lines.append("    </tr>")
+
+    html_lines.extend(["  </tbody>", "</table>"])
+    return "\n".join(html_lines)
+
+
+def _forecast_html_sections(forecast_core: pd.DataFrame) -> list[str]:
+    lines: list[str] = []
+    if forecast_core.empty:
+        lines.append("<p><em>No forecasting rows found.</em></p>")
+        return lines
+
+    for (dataset, resolution, signal), dataset_df in forecast_core.groupby(
+        ["dataset", "resolution", "signal"], dropna=False
+    ):
+        lines.append(f"<h3>{_html_escape(_section_title(dataset, resolution, signal))}</h3>")
+        working = _styled_forecast_dataset_table(dataset_df)
+        lines.append(
+            _html_table_with_rowspan(
+                working,
+                merge_cols=["scope"],
+                model_cols=[col for col in FORECAST_PRIMARY_METRICS if col in working.columns],
+            )
+        )
+    return lines
+
+
+def _matrix_html_sections(matrix_df: pd.DataFrame, track: str) -> list[str]:
+    lines: list[str] = []
+    if matrix_df.empty:
+        lines.append("<p><em>No rows found.</em></p>")
+        return lines
+
+    model_cols = _ordered_model_columns(
+        track,
+        [col for col in matrix_df.columns if col not in {"dataset", "resolution", "signal", "strategy", "n_vars", "metric"}],
+    )
+    model_cols = [col for col in model_cols if col in matrix_df.columns]
+    for (dataset, resolution, signal), dataset_df in matrix_df.groupby(["dataset", "resolution", "signal"], dropna=False):
+        lines.append(f"<h3>{_html_escape(_section_title(dataset, resolution, signal))}</h3>")
+        working = _format_matrix_df(
+            dataset_df[["strategy", "n_vars", "metric", *model_cols]].copy(),
+            model_cols=model_cols,
+            lower_is_better=False,
+        )
+        lines.append(_html_table_with_rowspan(working, merge_cols=["strategy", "n_vars"], model_cols=model_cols))
+    return lines
+
+
+def _build_html_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str:
+    a_matrix = _build_track_matrix(causal_core, "A-causal")
+    b_matrix = _build_track_matrix(causal_core, "B-causal")
+
+    sections: list[str] = [
+        "<!DOCTYPE html>",
+        '<html lang="zh-CN">',
+        "<head>",
+        '  <meta charset="utf-8">',
+        "  <title>Advisor Summary</title>",
+        "  <style>",
+        "body { font-family: Arial, sans-serif; margin: 24px; line-height: 1.4; }",
+        "h1, h2, h3 { margin-top: 24px; }",
+        ".advisor-table { border-collapse: collapse; width: 100%; margin: 12px 0 24px; }",
+        ".advisor-table th, .advisor-table td { border: 1px solid #999; padding: 6px 8px; text-align: center; vertical-align: middle; }",
+        ".advisor-table th { background: #f3f4f6; }",
+        ".missing { color: #666; }",
+        "ul { margin-top: 0; }",
+        "  </style>",
+        "</head>",
+        "<body>",
+        "  <h1>Advisor Summary</h1>",
+        "  <h2>1. A-line Causal Summary</h2>",
+        "  <ul><li>每个数据集单独汇总成矩阵表。</li><li>行：strategy / n_vars / metric。</li><li>列：模型。</li><li>debug_set 已排除，缺失项显示为 /。</li></ul>",
+        *_matrix_html_sections(a_matrix, "A-causal"),
+        "  <h2>2. B-line Causal Summary</h2>",
+        "  <ul><li>先训练 STGNN learned graph，再用 causal benchmark 回评。</li><li>NULL 作为共同下界基线保留。</li><li>缺失项显示为 /。</li></ul>",
+        *_matrix_html_sections(b_matrix, "B-causal"),
+        "  <h2>3. Forecasting Summary</h2>",
+        "  <ul><li>汇总 BasicTS checkpoints 的 Overall + H3 + H6 + H12。</li></ul>",
+        *_forecast_html_sections(forecast_core),
+        "</body>",
+        "</html>",
+    ]
+    return "\n".join(sections)
 
 
 def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str:
@@ -656,25 +849,16 @@ def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str
         ):
             lines.append(f"### {_section_title(dataset, resolution, signal)}")
             lines.append("")
-            for scope, scope_df in dataset_df.groupby("scope", dropna=False):
-                lines.append(f"#### {_scope_label(scope)}")
-                lines.append(
-                    _markdown_table(
-                        _styled_metric_table(
-                            scope_df[
-                                [
-                                    col
-                                    for col in ["model", "MAE", "RMSE", "MAPE", "WAPE", "SMAPE"]
-                                    if col in scope_df.columns
-                                ]
-                            ],
-                            metric_cols=FORECAST_PRIMARY_METRICS,
-                            lower_is_better=True,
-                        ),
-                        max_rows=40,
-                    )
+            lines.append(
+                _markdown_table(
+                    _blank_repeated_labels(
+                        _styled_forecast_dataset_table(dataset_df),
+                        ["scope"],
+                    ),
+                    max_rows=80,
                 )
-                lines.append("")
+            )
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -709,6 +893,7 @@ def main() -> int:
     b_matrix_path = output_dir / "advisor_b_line_matrix.csv"
     forecast_path = output_dir / "advisor_forecasting_core.csv"
     report_path = output_dir / "advisor_report.md"
+    html_report_path = output_dir / "advisor_report.html"
     warnings_path = output_dir / "advisor_warnings.txt"
 
     causal_core.to_csv(causal_path, index=False)
@@ -716,6 +901,7 @@ def main() -> int:
     b_matrix.to_csv(b_matrix_path, index=False, na_rep="/")
     forecast_core.to_csv(forecast_path, index=False)
     report_path.write_text(_build_report(causal_core, forecast_core), encoding="utf-8")
+    html_report_path.write_text(_build_html_report(causal_core, forecast_core), encoding="utf-8")
 
     cleaned_warnings = sorted(
         {
@@ -732,6 +918,7 @@ def main() -> int:
     print(f"Wrote B-line matrix   : {b_matrix_path}")
     print(f"Wrote forecast table  : {forecast_path}")
     print(f"Wrote report          : {report_path}")
+    print(f"Wrote HTML report     : {html_report_path}")
     if cleaned_warnings:
         print(f"Wrote warnings        : {warnings_path}")
     return 0
