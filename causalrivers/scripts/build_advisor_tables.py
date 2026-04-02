@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Build project-level advisor tables from both CausalRivers and BasicTS results.
-
-Outputs are written to the repository-level ``outputs/advisor_tables`` directory
-by default so the summary can be used as a single briefing package for:
-
-1. A-causal: classical causal discovery on time series in ``causalrivers/results``
-2. B-causal: STGNN learned-graph results re-evaluated by the causal benchmark
-3. B-forecast: BasicTS forecasting metrics from ``BasicTS/checkpoints``
-"""
+"""Build project-level advisor tables from both CausalRivers and BasicTS results."""
 
 from __future__ import annotations
 
@@ -35,6 +27,10 @@ from aggregate_results_to_wandb import (
 CAUSAL_PRIMARY_METRICS = ["AUROC", "Max F1", "Max Acc", "Individual AUROC"]
 FORECAST_PRIMARY_METRICS = ["MAE", "RMSE", "MAPE", "WAPE", "SMAPE"]
 FORECAST_SCOPES = ("overall", "horizon_3", "horizon_6", "horizon_12")
+TRACK_MODEL_ORDER = {
+    "A-causal": ["VAR", "CC", "LagCC", "RP", "Combo", "PCMCI", "VARLiNGAM", "NULL"],
+    "B-causal": ["AGCRN", "D2STGNN", "GWNET", "MTGNN", "GTS", "NULL"],
+}
 CONFIG_DIR_PATTERN = re.compile(
     r"^(?P<dataset>.+)_(?P<epochs>\d+)_(?P<input_len>\d+)_(?P<output_len>\d+)$"
 )
@@ -235,6 +231,15 @@ def _enrich_causal_rows(rows: list[dict[str, Any]], run_meta: dict[str, dict[str
     return enriched
 
 
+def _filter_causal_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("strategy") or "") == "debug_set":
+            continue
+        filtered.append(row)
+    return filtered
+
+
 def _build_causal_core(metric_rows: list[dict[str, Any]]) -> pd.DataFrame:
     if not metric_rows:
         return pd.DataFrame(
@@ -417,6 +422,83 @@ def _format_plain(value: Any) -> str:
     return str(value)
 
 
+def _ordered_model_columns(track: str, present_models: list[str]) -> list[str]:
+    preferred = TRACK_MODEL_ORDER.get(track, [])
+    ordered = [model for model in preferred if model in present_models]
+    extras = sorted(set(present_models) - set(preferred))
+    return ordered + extras
+
+
+def _build_track_matrix(core_df: pd.DataFrame, track: str) -> pd.DataFrame:
+    subset = core_df[core_df["track"] == track].copy()
+    if subset.empty:
+        return pd.DataFrame(columns=["dataset", "resolution", "signal", "strategy", "n_vars", "metric"])
+
+    model_cols = _ordered_model_columns(track, subset["model"].dropna().unique().tolist())
+    dataset_frames: list[pd.DataFrame] = []
+    for dataset_key, dataset_df in subset.groupby(["dataset", "resolution", "signal"], dropna=False):
+        strategy_pairs = (
+            dataset_df[["strategy", "n_vars"]]
+            .drop_duplicates()
+            .sort_values(["strategy", "n_vars"], na_position="last")
+        )
+        index_tuples = [
+            (row.strategy, row.n_vars, metric)
+            for row in strategy_pairs.itertuples(index=False)
+            for metric in CAUSAL_PRIMARY_METRICS
+        ]
+        full_index = pd.MultiIndex.from_tuples(index_tuples, names=["strategy", "n_vars", "metric"])
+        pivot = dataset_df.pivot_table(
+            index=["strategy", "n_vars", "metric"],
+            columns="model",
+            values="value",
+            aggfunc="first",
+        )
+        pivot = pivot.reindex(full_index)
+        pivot = pivot.reindex(columns=model_cols)
+        pivot = pivot.reset_index()
+        pivot.insert(0, "signal", dataset_key[2])
+        pivot.insert(0, "resolution", dataset_key[1])
+        pivot.insert(0, "dataset", dataset_key[0])
+        dataset_frames.append(pivot)
+
+    matrix = pd.concat(dataset_frames, ignore_index=True)
+    numeric_cols = [col for col in model_cols if col in matrix.columns]
+    if numeric_cols:
+        matrix[numeric_cols] = matrix[numeric_cols].round(4)
+    return matrix
+
+
+def _format_matrix_df(df: pd.DataFrame, model_cols: list[str], lower_is_better: bool = False) -> pd.DataFrame:
+    formatted = df.copy()
+    for row_idx, row in formatted.iterrows():
+        present_values = []
+        for col in model_cols:
+            value = row.get(col)
+            if pd.notna(value):
+                present_values.append(float(value))
+        ordered_values = sorted(set(present_values), reverse=not lower_is_better)
+        best = ordered_values[0] if ordered_values else None
+        second = ordered_values[1] if len(ordered_values) > 1 else None
+
+        for col in model_cols:
+            value = row.get(col)
+            if pd.isna(value):
+                formatted.at[row_idx, col] = "/"
+                continue
+            text = f"{float(value):.4f}"
+            if best is not None and float(value) == best:
+                text = f"**{text}**"
+            elif second is not None and float(value) == second:
+                text = f"<u>{text}</u>"
+            formatted.at[row_idx, col] = text
+
+    for col in formatted.columns:
+        if col not in model_cols:
+            formatted[col] = formatted[col].map(_format_plain)
+    return formatted
+
+
 def _styled_metric_table(
     df: pd.DataFrame,
     metric_cols: list[str],
@@ -494,58 +576,64 @@ def _scope_label(scope: str | None) -> str:
     return mapping.get(scope or "", scope or "Unknown")
 
 
+def _dataset_matrix_sections(matrix_df: pd.DataFrame, track: str) -> list[str]:
+    lines: list[str] = []
+    if matrix_df.empty:
+        lines.append("_No rows found._")
+        lines.append("")
+        return lines
+
+    model_cols = _ordered_model_columns(track, [col for col in matrix_df.columns if col not in {"dataset", "resolution", "signal", "strategy", "n_vars", "metric"}])
+    model_cols = [col for col in model_cols if col in matrix_df.columns]
+    for (dataset, resolution, signal), dataset_df in matrix_df.groupby(["dataset", "resolution", "signal"], dropna=False):
+        lines.append(f"### {_section_title(dataset, resolution, signal)}")
+        lines.append(
+            _markdown_table(
+                _format_matrix_df(
+                    dataset_df[["strategy", "n_vars", "metric", *model_cols]].copy(),
+                    model_cols=model_cols,
+                    lower_is_better=False,
+                ),
+                max_rows=120,
+            )
+        )
+        lines.append("")
+    return lines
+
+
 def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str:
+    a_matrix = _build_track_matrix(causal_core, "A-causal")
+    b_matrix = _build_track_matrix(causal_core, "B-causal")
+
     lines: list[str] = [
         "# Advisor Summary",
         "",
-        "## 1. Causal Benchmark Summary",
+        "## 1. A-line Causal Summary",
         "",
-        "- `A-causal`: 直接从时序做因果边发现。",
-        "- `B-causal`: 先训练 STGNN，再把 learned graph 送回 causal benchmark 评估。",
-        "- `NULL`: 统一作为下界基线保留在表里。",
+        "- 每个数据集单独汇总成矩阵表。",
+        "- 行：`strategy / n_vars / metric`。",
+        "- 列：模型。",
+        "- `debug_set` 已排除。",
+        "- 没测到的组合显示为 `/`。",
         "",
     ]
-
-    if causal_core.empty:
-        lines.append("_No causal benchmark rows found._")
-        lines.append("")
-    else:
-        for (dataset, resolution, signal), dataset_df in causal_core.groupby(
-            ["dataset", "resolution", "signal"], dropna=False
-        ):
-            lines.append(f"### {_section_title(dataset, resolution, signal)}")
-            lines.append("")
-            for (strategy, n_vars), sub_df in dataset_df.groupby(["strategy", "n_vars"], dropna=False):
-                title = f"{strategy} | n_vars={n_vars}" if strategy is not None else f"n_vars={n_vars}"
-                lines.append(f"#### {title}")
-                lines.append(
-                    _markdown_table(
-                        _styled_metric_table(
-                            sub_df[
-                                [
-                                    col
-                                    for col in [
-                                        "track",
-                                        "model",
-                                        "AUROC",
-                                        "Max F1",
-                                        "Max Acc",
-                                        "Individual AUROC",
-                                    ]
-                                    if col in sub_df.columns
-                                ]
-                            ],
-                            metric_cols=CAUSAL_PRIMARY_METRICS,
-                            lower_is_better=False,
-                        ),
-                        max_rows=20,
-                    )
-                )
-                lines.append("")
+    lines.extend(_dataset_matrix_sections(a_matrix, "A-causal"))
 
     lines.extend(
         [
-            "## 2. Forecasting Summary",
+            "## 2. B-line Causal Summary",
+            "",
+            "- 先训练 STGNN learned graph，再用 causal benchmark 回评。",
+            "- `NULL` 作为共同下界基线保留。",
+            "- `debug_set` 已排除，缺失项显示为 `/`。",
+            "",
+        ]
+    )
+    lines.extend(_dataset_matrix_sections(b_matrix, "B-causal"))
+
+    lines.extend(
+        [
+            "## 3. Forecasting Summary",
             "",
             "- 这里汇总的是 `BasicTS/checkpoints/**/test_metrics.json` 的 `Overall + H3 + H6 + H12` 预测指标。",
             "",
@@ -576,7 +664,7 @@ def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str
                             metric_cols=FORECAST_PRIMARY_METRICS,
                             lower_is_better=True,
                         ),
-                        max_rows=20,
+                        max_rows=40,
                     )
                 )
                 lines.append("")
@@ -595,22 +683,30 @@ def main() -> int:
     metric_rows, _run_method_meta = deduplicate_metric_rows(metric_rows_raw)
     run_meta = _build_run_metadata(causal_results_root)
     metric_rows = _enrich_causal_rows(metric_rows, run_meta)
+    metric_rows = _filter_causal_rows(metric_rows)
 
     include_null = args.include_null and not args.exclude_null
     if not include_null:
         metric_rows = [row for row in metric_rows if row.get("model") != "NULL"]
+
     causal_core = _round_numeric_df(_build_causal_core(metric_rows))
+    a_matrix = _build_track_matrix(causal_core, "A-causal")
+    b_matrix = _build_track_matrix(causal_core, "B-causal")
 
     forecast_runs = _discover_forecast_runs(forecast_checkpoints_root)
     forecast_long_rows = _build_forecast_long_rows(forecast_runs)
     forecast_core = _round_numeric_df(_build_forecast_core(forecast_long_rows))
 
     causal_path = output_dir / "advisor_causal_core.csv"
+    a_matrix_path = output_dir / "advisor_a_line_matrix.csv"
+    b_matrix_path = output_dir / "advisor_b_line_matrix.csv"
     forecast_path = output_dir / "advisor_forecasting_core.csv"
     report_path = output_dir / "advisor_report.md"
     warnings_path = output_dir / "advisor_warnings.txt"
 
     causal_core.to_csv(causal_path, index=False)
+    a_matrix.to_csv(a_matrix_path, index=False, na_rep="/")
+    b_matrix.to_csv(b_matrix_path, index=False, na_rep="/")
     forecast_core.to_csv(forecast_path, index=False)
     report_path.write_text(_build_report(causal_core, forecast_core), encoding="utf-8")
 
@@ -625,6 +721,8 @@ def main() -> int:
         warnings_path.write_text("\n".join(cleaned_warnings), encoding="utf-8")
 
     print(f"Wrote causal table    : {causal_path}")
+    print(f"Wrote A-line matrix   : {a_matrix_path}")
+    print(f"Wrote B-line matrix   : {b_matrix_path}")
     print(f"Wrote forecast table  : {forecast_path}")
     print(f"Wrote report          : {report_path}")
     if cleaned_warnings:
