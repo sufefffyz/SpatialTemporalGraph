@@ -45,14 +45,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--causal-results-root",
         type=Path,
-        default=repo_root / "causalrivers" / "results",
-        help="Root directory containing causalrivers benchmark results.",
+        action="append",
+        help="Root directory containing causalrivers benchmark results. Can be passed multiple times.",
     )
     parser.add_argument(
         "--forecast-checkpoints-root",
         type=Path,
-        default=repo_root / "BasicTS" / "checkpoints",
-        help="Root directory containing BasicTS checkpoint folders with test_metrics.json files.",
+        action="append",
+        help="Root directory containing BasicTS checkpoint folders with test_metrics.json files. Can be passed multiple times.",
     )
     parser.add_argument(
         "--output-dir",
@@ -72,6 +72,64 @@ def parse_args() -> argparse.Namespace:
         help="Exclude NULL baseline rows from causal tables.",
     )
     return parser.parse_args()
+
+
+def _find_named_ancestor(path: Path, name: str) -> Path | None:
+    current = path if path.is_dir() else path.parent
+    for candidate in (current, *current.parents):
+        if candidate.name == name:
+            return candidate
+    return None
+
+
+def _unique_existing_paths(paths: list[Path]) -> list[Path]:
+    seen: set[Path] = set()
+    existing: list[Path] = []
+    for path in paths:
+        resolved = path.expanduser().resolve()
+        if not resolved.exists() or resolved in seen:
+            continue
+        seen.add(resolved)
+        existing.append(resolved)
+    return existing
+
+
+def _auto_discover_causal_roots(repo_root: Path) -> list[Path]:
+    roots: list[Path] = []
+    for config_path in repo_root.rglob("config.yaml"):
+        ancestor = _find_named_ancestor(config_path, "results")
+        if ancestor is not None:
+            roots.append(ancestor)
+    return _unique_existing_paths(roots)
+
+
+def _auto_discover_forecast_roots(repo_root: Path) -> list[Path]:
+    roots: list[Path] = []
+    for metrics_path in repo_root.rglob("test_metrics.json"):
+        ancestor = _find_named_ancestor(metrics_path, "checkpoints")
+        if ancestor is not None:
+            roots.append(ancestor)
+    return _unique_existing_paths(roots)
+
+
+def _resolve_causal_roots(args: argparse.Namespace) -> list[Path]:
+    repo_root = Path(__file__).resolve().parents[2]
+    if args.causal_results_root:
+        return _unique_existing_paths(list(args.causal_results_root))
+    default_root = repo_root / "causalrivers" / "results"
+    if default_root.exists():
+        return [default_root.resolve()]
+    return _auto_discover_causal_roots(repo_root)
+
+
+def _resolve_forecast_roots(args: argparse.Namespace) -> list[Path]:
+    repo_root = Path(__file__).resolve().parents[2]
+    if args.forecast_checkpoints_root:
+        return _unique_existing_paths(list(args.forecast_checkpoints_root))
+    default_root = repo_root / "BasicTS" / "checkpoints"
+    if default_root.exists():
+        return [default_root.resolve()]
+    return _auto_discover_forecast_roots(repo_root)
 
 
 def _normalize_model(name: str | None) -> str | None:
@@ -865,14 +923,25 @@ def _build_report(causal_core: pd.DataFrame, forecast_core: pd.DataFrame) -> str
 
 def main() -> int:
     args = parse_args()
-    causal_results_root = args.causal_results_root.expanduser().resolve()
-    forecast_checkpoints_root = args.forecast_checkpoints_root.expanduser().resolve()
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    metric_rows_raw, _runtime_rows_raw, warnings = aggregate_results(causal_results_root)
+    causal_results_roots = _resolve_causal_roots(args)
+    forecast_checkpoints_roots = _resolve_forecast_roots(args)
+
+    metric_rows_raw: list[dict[str, Any]] = []
+    runtime_rows_raw: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for causal_root in causal_results_roots:
+        root_metric_rows, root_runtime_rows, root_warnings = aggregate_results(causal_root)
+        metric_rows_raw.extend(root_metric_rows)
+        runtime_rows_raw.extend(root_runtime_rows)
+        warnings.extend(root_warnings)
+
     metric_rows, _run_method_meta = deduplicate_metric_rows(metric_rows_raw)
-    run_meta = _build_run_metadata(causal_results_root)
+    run_meta: dict[str, dict[str, Any]] = {}
+    for causal_root in causal_results_roots:
+        run_meta.update(_build_run_metadata(causal_root))
     metric_rows = _enrich_causal_rows(metric_rows, run_meta)
     metric_rows = _filter_causal_rows(metric_rows)
 
@@ -884,7 +953,9 @@ def main() -> int:
     a_matrix = _build_track_matrix(causal_core, "A-causal")
     b_matrix = _build_track_matrix(causal_core, "B-causal")
 
-    forecast_runs = _discover_forecast_runs(forecast_checkpoints_root)
+    forecast_runs: list[dict[str, Any]] = []
+    for forecast_root in forecast_checkpoints_roots:
+        forecast_runs.extend(_discover_forecast_runs(forecast_root))
     forecast_long_rows = _build_forecast_long_rows(forecast_runs)
     forecast_core = _round_numeric_df(_build_forecast_core(forecast_long_rows))
 
@@ -912,6 +983,20 @@ def main() -> int:
     )
     if cleaned_warnings:
         warnings_path.write_text("\n".join(cleaned_warnings), encoding="utf-8")
+
+    if causal_results_roots:
+        print("Causal roots:")
+        for root in causal_results_roots:
+            print(f"  - {root}")
+    else:
+        print("Causal roots: none found")
+
+    if forecast_checkpoints_roots:
+        print("Forecast roots:")
+        for root in forecast_checkpoints_roots:
+            print(f"  - {root}")
+    else:
+        print("Forecast roots: none found")
 
     print(f"Wrote causal table    : {causal_path}")
     print(f"Wrote A-line matrix   : {a_matrix_path}")
