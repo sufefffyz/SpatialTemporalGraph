@@ -20,6 +20,8 @@ mkdir -p "$OUTPUT_DIR"
 LOG_FILE="$OUTPUT_DIR/train.log"
 SUMMARY_FILE="$OUTPUT_DIR/profile_summary.json"
 PEAK_FILE="$OUTPUT_DIR/peak_gpu_memory_mb.txt"
+BEFORE_METRICS_FILE="$OUTPUT_DIR/before_test_metrics.txt"
+AFTER_METRICS_FILE="$OUTPUT_DIR/after_test_metrics.txt"
 echo "0" > "$PEAK_FILE"
 
 monitor_gpu_memory() {
@@ -52,6 +54,8 @@ echo "GPUs        : $GPUS"
 echo "Output dir  : $OUTPUT_DIR"
 echo "Log file    : $LOG_FILE"
 
+find checkpoints -name test_metrics.json 2>/dev/null | sort > "$BEFORE_METRICS_FILE"
+
 START_TS="$(date +%s)"
 START_ISO="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
@@ -71,6 +75,12 @@ END_TS="$(date +%s)"
 END_ISO="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 DURATION="$((END_TS - START_TS))"
 PEAK_GPU_MEM="$(cat "$PEAK_FILE" 2>/dev/null || true)"
+find checkpoints -name test_metrics.json 2>/dev/null | sort > "$AFTER_METRICS_FILE"
+
+METRICS_PATH="$(comm -13 "$BEFORE_METRICS_FILE" "$AFTER_METRICS_FILE" | tail -n 1)"
+if [[ -z "$METRICS_PATH" ]]; then
+  METRICS_PATH="$(find checkpoints -name test_metrics.json -print 2>/dev/null | sort | tail -n 1)"
+fi
 
 if [[ -z "$PEAK_GPU_MEM" ]]; then
   PEAK_GPU_MEM_JSON="null"
@@ -78,17 +88,25 @@ else
   PEAK_GPU_MEM_JSON="$PEAK_GPU_MEM"
 fi
 
+if [[ -z "$METRICS_PATH" ]]; then
+  METRICS_PATH_JSON="null"
+else
+  METRICS_PATH_JSON="\"$METRICS_PATH\""
+fi
+
 cat >"$SUMMARY_FILE" <<EOF
 {
   "config_path": "$CFG_PATH",
   "gpus": "$GPUS",
+  "seed": ${BASICTS_SEED:-null},
   "tag": "$TAG",
   "start_time_utc": "$START_ISO",
   "end_time_utc": "$END_ISO",
   "duration_seconds": $DURATION,
   "peak_gpu_memory_mb": $PEAK_GPU_MEM_JSON,
   "exit_code": $EXIT_CODE,
-  "log_file": "$LOG_FILE"
+  "log_file": "$LOG_FILE",
+  "test_metrics_path": $METRICS_PATH_JSON
 }
 EOF
 

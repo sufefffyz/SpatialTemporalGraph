@@ -50,6 +50,10 @@ CFG.GPU_NUM = 1 # Number of GPUs to use (0 for CPU mode)
 # Runner
 CFG.RUNNER = SimpleTimeSeriesForecastingRunner
 
+############################## Environment Configuration ##############################
+CFG.ENV = EasyDict()
+CFG.ENV.SEED = int(os.environ.get("BASICTS_SEED", "2023"))
+
 ############################## Dataset Configuration ##############################
 CFG.DATASET = EasyDict()
 # Dataset settings
@@ -98,6 +102,7 @@ CFG.METRICS.NULL_VAL = NULL_VAL
 ############################## Training Configuration ##############################
 CFG.TRAIN = EasyDict()
 CFG.TRAIN.NUM_EPOCHS = NUM_EPOCHS
+CFG.TRAIN.EARLY_STOPPING_PATIENCE = 30
 CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
     'checkpoints',
     MODEL_ARCH.__name__,
@@ -134,7 +139,7 @@ CFG.VAL.DATA.BATCH_SIZE = 64
 
 ############################## Test Configuration ##############################
 CFG.TEST = EasyDict()
-CFG.TEST.INTERVAL = 1
+CFG.TEST.INTERVAL = NUM_EPOCHS
 CFG.TEST.DATA = EasyDict()
 CFG.TEST.DATA.BATCH_SIZE = 64
 

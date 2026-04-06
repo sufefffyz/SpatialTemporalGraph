@@ -30,6 +30,10 @@ _TRAIN_BATCH_SIZE = {
 }
 
 
+def _seed_from_env() -> int:
+    return int(os.environ.get("BASICTS_SEED", "2023"))
+
+
 def _build_common_cfg(dataset_name: str, num_epochs: int, input_len: int, output_len: int) -> tuple[EasyDict, dict]:
     regular_settings = get_regular_settings(dataset_name)
     train_val_test_ratio = regular_settings["TRAIN_VAL_TEST_RATIO"]
@@ -42,7 +46,7 @@ def _build_common_cfg(dataset_name: str, num_epochs: int, input_len: int, output
     cfg.GPU_NUM = 1
 
     cfg.ENV = EasyDict()
-    cfg.ENV.SEED = 0
+    cfg.ENV.SEED = _seed_from_env()
 
     cfg.DATASET = EasyDict()
     cfg.DATASET.NAME = dataset_name
@@ -80,6 +84,7 @@ def _build_common_cfg(dataset_name: str, num_epochs: int, input_len: int, output
 
     cfg.TRAIN = EasyDict()
     cfg.TRAIN.NUM_EPOCHS = num_epochs
+    cfg.TRAIN.EARLY_STOPPING_PATIENCE = 30
     cfg.TRAIN.OPTIM = EasyDict()
     cfg.TRAIN.OPTIM.TYPE = "AdamW"
     cfg.TRAIN.OPTIM.PARAM = {
@@ -101,7 +106,7 @@ def _build_common_cfg(dataset_name: str, num_epochs: int, input_len: int, output
     cfg.VAL.DATA = EasyDict()
 
     cfg.TEST = EasyDict()
-    cfg.TEST.INTERVAL = 1
+    cfg.TEST.INTERVAL = num_epochs
     cfg.TEST.DATA = EasyDict()
 
     cfg.EVAL = EasyDict()
