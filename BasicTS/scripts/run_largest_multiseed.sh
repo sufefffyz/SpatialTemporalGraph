@@ -3,26 +3,82 @@
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-  echo "Usage: bash scripts/run_largest_multiseed.sh <STID|BigST> <CA|GBA|GLA|SD> [gpus]" >&2
+  echo "Usage: bash scripts/run_largest_multiseed.sh <STID|BigST> <CA|GBA|GLA|SD> [gpus] [num_runs]" >&2
   exit 1
 fi
 
 BASELINE="$1"
 DATASET="$2"
 GPUS="${3:-0}"
+NUM_RUNS="${4:-${NUM_RUNS:-3}}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+if ! [[ "$NUM_RUNS" =~ ^[0-9]+$ ]] || [[ "$NUM_RUNS" -le 0 ]]; then
+  echo "num_runs must be a positive integer, got: $NUM_RUNS" >&2
+  exit 1
+fi
+
+SHARED_SEED_DIR="${SHARED_SEED_DIR:-$REPO_ROOT/profile_logs/shared_seeds}"
+DEFAULT_SHARED_SEED_FILE="$SHARED_SEED_DIR/largest_shared_seeds_${NUM_RUNS}.txt"
+
+load_seed_file() {
+  local seed_file="$1"
+  local seed_lines=()
+  local seed_tokens=()
+  mapfile -t seed_lines < "$seed_file"
+  for line in "${seed_lines[@]}"; do
+    line="${line%%#*}"
+    if [[ -z "${line//[[:space:]]/}" ]]; then
+      continue
+    fi
+    read -r -a tokens <<< "$line"
+    seed_tokens+=("${tokens[@]}")
+  done
+  printf '%s\n' "${seed_tokens[@]}"
+}
+
 if [[ -n "${SEEDS:-}" ]]; then
   read -r -a SEED_ARRAY <<< "$SEEDS"
+  SEED_SOURCE="env:SEEDS"
+elif [[ -n "${SEED_FILE:-}" ]]; then
+  if [[ ! -f "$SEED_FILE" ]]; then
+    echo "Missing seed file: $SEED_FILE" >&2
+    exit 1
+  fi
+  mapfile -t SEED_ARRAY < <(load_seed_file "$SEED_FILE")
+  SEED_SOURCE="$(cd "$(dirname "$SEED_FILE")" && pwd)/$(basename "$SEED_FILE")"
+elif [[ -f "$DEFAULT_SHARED_SEED_FILE" ]]; then
+  mapfile -t SEED_ARRAY < <(load_seed_file "$DEFAULT_SHARED_SEED_FILE")
+  SEED_SOURCE="$DEFAULT_SHARED_SEED_FILE"
 else
-  NUM_RUNS="${NUM_RUNS:-3}"
-  BASE_SEED="${BASE_SEED:-2023}"
-  SEED_ARRAY=()
-  for ((i=0; i<NUM_RUNS; i++)); do
-    SEED_ARRAY+=("$((BASE_SEED + i))")
-  done
+  GENERATOR_SEED_ARGS=()
+  RANGE_ARGS=()
+  if [[ -n "${GENERATOR_SEED:-}" ]]; then
+    GENERATOR_SEED_ARGS+=(--generator-seed "$GENERATOR_SEED")
+  fi
+  if [[ -n "${SEED_LOW:-}" ]]; then
+    RANGE_ARGS+=(--low "$SEED_LOW")
+  fi
+  if [[ -n "${SEED_HIGH:-}" ]]; then
+    RANGE_ARGS+=(--high "$SEED_HIGH")
+  fi
+
+  mkdir -p "$SHARED_SEED_DIR"
+  python3 scripts/generate_shared_seeds.py \
+    --num-seeds "$NUM_RUNS" \
+    --output "$DEFAULT_SHARED_SEED_FILE" \
+    "${GENERATOR_SEED_ARGS[@]}" \
+    "${RANGE_ARGS[@]}"
+  mapfile -t SEED_ARRAY < <(load_seed_file "$DEFAULT_SHARED_SEED_FILE")
+  SEED_SOURCE="auto-generated:${DEFAULT_SHARED_SEED_FILE}"
+fi
+
+if [[ ${#SEED_ARRAY[@]} -ne "$NUM_RUNS" ]]; then
+  echo "Resolved ${#SEED_ARRAY[@]} seeds, but num_runs=$NUM_RUNS." >&2
+  echo "Seed source: ${SEED_SOURCE}" >&2
+  exit 1
 fi
 
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
@@ -30,6 +86,12 @@ OUTPUT_DIR="${PROFILE_OUTPUT_DIR:-$REPO_ROOT/profile_logs/${BASELINE}_${DATASET}
 mkdir -p "$OUTPUT_DIR"
 
 SUMMARY_ARGS=()
+
+printf '%s\n' "${SEED_ARRAY[@]}" > "$OUTPUT_DIR/used_seeds.txt"
+echo "Using seeds from ${SEED_SOURCE}"
+echo "Requested num_runs: ${NUM_RUNS}"
+echo "Seed list: ${SEED_ARRAY[*]}"
+echo "Saved seed list to $OUTPUT_DIR/used_seeds.txt"
 
 for seed in "${SEED_ARRAY[@]}"; do
   echo "==== Running ${BASELINE} on ${DATASET} with seed ${seed} ===="
