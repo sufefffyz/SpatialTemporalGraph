@@ -896,7 +896,7 @@ def phase0_load_metadata(
 # =============================================================================
 # Phase 1: 提取 OSM 路网, 构建关联矩阵
 # =============================================================================
-def phase1_extract_network(bbox_dict, output_dir, max_edge_length_m=2000):
+def phase1_extract_network(bbox_dict, output_dir, max_edge_length_m=2000, pbf_path=None):
     """
     从 OSM 提取 motorway + motorway_link + trunk + trunk_link 网络, 构建关联矩阵.
     trunk/trunk_link 覆盖部分在 OSM 中未标为 motorway 但在 PeMS 中有传感器的高速公路.
@@ -926,8 +926,9 @@ def phase1_extract_network(bbox_dict, output_dir, max_edge_length_m=2000):
     west = bbox_dict["west"]
     log(f"  区域范围: ({south:.4f},{west:.4f})-({north:.4f},{east:.4f})")
 
-    # PBF 文件路径 (修改为你的实际路径)
-    pbf_path = os.path.join(os.path.dirname(output_dir), "california-latest.osm.pbf")
+    # PBF 文件路径
+    if pbf_path is None:
+        pbf_path = os.path.join(os.path.dirname(output_dir), "california-latest.osm.pbf")
     if not os.path.exists(pbf_path):
         raise FileNotFoundError(f"找不到 PBF 文件: {pbf_path}")
 
@@ -2370,7 +2371,7 @@ def run_pipeline(metadata_file, output_dir="output", buffer_deg=0.02,
                  ml_threshold=1e-4, ramp_threshold=0.01,
                  shn_shapefile=None, shn_postmiles_geojson=None,
                  max_edge_length_m=2000, shn_pm_tolerance=1.5,
-                 shn_max_snap_distance_m=500.0):
+                 shn_max_snap_distance_m=500.0, pbf_path=None):
     """
     执行完整 pipeline.
 
@@ -2404,7 +2405,12 @@ def run_pipeline(metadata_file, output_dir="output", buffer_deg=0.02,
     # Phase 1
     (G, nodes_gdf, edges_gdf, incidence_df, edge_info_df,
      edge_hw_map, links_dict, way_to_rels) = \
-        phase1_extract_network(bbox_dict, output_dir, max_edge_length_m)
+        phase1_extract_network(
+            bbox_dict,
+            output_dir,
+            max_edge_length_m,
+            pbf_path=pbf_path,
+        )
 
     # Phase 2
     fwy_links, no_ref_df = phase2_assign_freeways_ref_only(
@@ -2458,7 +2464,12 @@ def run_single_phase(phase_num, output_dir="output", **kwargs):
     elif phase_num == 1:
         bbox_dict = load_intermediate("phase0_bbox", output_dir)
         max_edge_length_m = kwargs.get("max_edge_length_m", 2000)
-        return phase1_extract_network(bbox_dict, output_dir, max_edge_length_m)
+        return phase1_extract_network(
+            bbox_dict,
+            output_dir,
+            max_edge_length_m,
+            pbf_path=kwargs.get("pbf_path"),
+        )
 
     elif phase_num == 2:
         sensors_df = load_intermediate("phase0_sensors", output_dir)
@@ -2562,6 +2573,10 @@ if __name__ == "__main__":
         help="边最大长度 (米), 超过则拆分 (默认: 2000)",
     )
     parser.add_argument(
+        "--pbf-path", type=str, default=None,
+        help="本地 OSM PBF 文件路径; 不指定时默认使用 output_dir 上级目录中的 california-latest.osm.pbf",
+    )
+    parser.add_argument(
         "--shn-pm-tolerance", type=float, default=1.5,
         help="SHN 里程候选筛选容忍范围 (mile, 默认: 1.5)",
     )
@@ -2587,6 +2602,7 @@ if __name__ == "__main__":
             shn_shapefile=args.shn_shapefile,
             shn_postmiles_geojson=args.shn_postmiles_geojson,
             max_edge_length_m=args.max_edge_length,
+            pbf_path=args.pbf_path,
             shn_pm_tolerance=args.shn_pm_tolerance,
             shn_max_snap_distance_m=args.shn_max_snap_distance,
         )
@@ -2600,6 +2616,7 @@ if __name__ == "__main__":
             shn_shapefile=args.shn_shapefile,
             shn_postmiles_geojson=args.shn_postmiles_geojson,
             max_edge_length_m=args.max_edge_length,
+            pbf_path=args.pbf_path,
             shn_pm_tolerance=args.shn_pm_tolerance,
             shn_max_snap_distance_m=args.shn_max_snap_distance,
         )

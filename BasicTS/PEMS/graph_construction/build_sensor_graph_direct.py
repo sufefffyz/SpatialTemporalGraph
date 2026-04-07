@@ -492,6 +492,13 @@ if __name__ == "__main__":
         default=None,
         help="搜索直接邻居的最大距离上限（米），默认不限",
     )
+    parser.add_argument(
+        "--cutoff",
+        type=float,
+        default=None,
+        help="兼容旧调用方式；等价于 --max-distance",
+    )
 
     args = parser.parse_args()
-    build_sensor_graph(args.output_dir, args.max_distance)
+    max_distance = args.max_distance if args.max_distance is not None else args.cutoff
+    build_sensor_graph(args.output_dir, max_distance)

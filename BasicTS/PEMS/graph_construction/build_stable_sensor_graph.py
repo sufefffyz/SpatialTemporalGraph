@@ -409,6 +409,8 @@ def run_job(
         "--shn-max-snap-distance",
         str(args.shn_max_snap_distance),
     ]
+    if args.pbf_path is not None:
+        pipeline_cmd.extend(["--pbf-path", str(args.pbf_path)])
     run_command(pipeline_cmd, cwd=GRAPH_ROOT)
 
     if args.pipeline_only:
@@ -419,9 +421,13 @@ def run_job(
         sys.executable,
         str(args.build_script),
         str(output_dir),
-        "--cutoff",
-        str(args.cutoff),
     ]
+    build_script_name = Path(args.build_script).name
+    if build_script_name == "build_sensor_graph_direct.py":
+        if args.cutoff is not None:
+            build_cmd.extend(["--max-distance", str(args.cutoff)])
+    else:
+        build_cmd.extend(["--cutoff", str(args.cutoff)])
     run_command(build_cmd, cwd=GRAPH_ROOT)
     export_training_and_analysis_artifacts(output_dir, label)
 
@@ -505,6 +511,12 @@ def parse_args() -> argparse.Namespace:
         help="边最大长度，默认 2000 米",
     )
     parser.add_argument(
+        "--pbf-path",
+        type=Path,
+        default=None,
+        help="本地 OSM PBF 文件路径；会透传给 network_graph_pipeline2.7.py",
+    )
+    parser.add_argument(
         "--shn-pm-tolerance",
         type=float,
         default=1.5,
@@ -520,7 +532,7 @@ def parse_args() -> argparse.Namespace:
         "--cutoff",
         type=float,
         default=5000,
-        help="Phase 7 最短路截断距离，默认 5000 米",
+        help="Phase 7 距离参数。direct 图中表示搜索直接邻居的最大距离；旧版脚本中表示最短路截断距离",
     )
     parser.add_argument(
         "--stable-year",
@@ -555,6 +567,8 @@ def parse_args() -> argparse.Namespace:
     args.shn_postmiles_geojson = resolve_existing_path(
         args.shn_postmiles_geojson, "SHN postmiles GeoJSON"
     )
+    if args.pbf_path is not None:
+        args.pbf_path = resolve_existing_path(str(args.pbf_path), "OSM PBF 文件")
     if args.presence_ratio <= 0 or args.presence_ratio > 1:
         raise ValueError("--presence-ratio 必须在 (0, 1] 范围内")
     args.sensor_types = [sensor_type.upper() for sensor_type in args.sensor_types]
