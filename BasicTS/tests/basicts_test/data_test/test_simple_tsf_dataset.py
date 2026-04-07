@@ -5,6 +5,7 @@ from unittest.mock import mock_open, patch
 
 import numpy as np
 
+from basicts.data.recent_window_tsf_dataset import RecentWindowTimeSeriesForecastingDataset
 from basicts.data.simple_tsf_dataset import TimeSeriesForecastingDataset
 
 
@@ -265,6 +266,42 @@ class TestTimeSeriesForecastingDataset(unittest.TestCase):
 
         expected_len = len(self.data)*self.train_val_test_ratio[0] - self.input_len - self.output_len + 1
         self.assertEqual(len(dataset), expected_len)
+
+    @patch('builtins.open', new_callable=mock_open, read_data=json.dumps({'shape': [144,], 'frequency (minutes)': 60}))
+    @patch('numpy.memmap')
+    def test_load_data_train_mode_recent_steps(self, mock_memmap, mocked_open):
+        mock_memmap.return_value = np.arange(144, dtype='float32')
+
+        dataset = RecentWindowTimeSeriesForecastingDataset(
+            dataset_name=self.dataset_name,
+            train_val_test_ratio=self.train_val_test_ratio,
+            mode='train',
+            input_len=self.input_len,
+            output_len=self.output_len,
+            overlap=self.overlap,
+            logger=self.logger,
+            train_recent_steps=30
+        )
+
+        self.assertEqual(len(dataset.data), 30)
+
+    @patch('builtins.open', new_callable=mock_open, read_data=json.dumps({'shape': [144,], 'frequency (minutes)': 60}))
+    @patch('numpy.memmap')
+    def test_load_data_train_mode_recent_days(self, mock_memmap, mocked_open):
+        mock_memmap.return_value = np.arange(144, dtype='float32')
+
+        dataset = RecentWindowTimeSeriesForecastingDataset(
+            dataset_name=self.dataset_name,
+            train_val_test_ratio=self.train_val_test_ratio,
+            mode='train',
+            input_len=self.input_len,
+            output_len=self.output_len,
+            overlap=self.overlap,
+            logger=self.logger,
+            train_recent_days=2
+        )
+
+        self.assertEqual(len(dataset.data), 48)
 
 
 if __name__ == '__main__':

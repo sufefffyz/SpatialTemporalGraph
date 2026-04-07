@@ -43,6 +43,18 @@ def dataset_names_for_args(districts: list[int], year: int, last_days: int | Non
     return names
 
 
+def build_run_specs(train_window_days: list[int] | None, include_full_train: bool) -> list[dict[str, object]]:
+    specs = []
+    if include_full_train or not train_window_days:
+        specs.append({"run_tag": "fulltrain", "train_window_days": None})
+    if train_window_days:
+        for days in sorted(set(train_window_days), reverse=True):
+            if days <= 0:
+                raise ValueError("--train-window-days 必须为正整数")
+            specs.append({"run_tag": f"train{days}d", "train_window_days": int(days)})
+    return specs
+
+
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -50,11 +62,14 @@ def load_json(path: Path) -> dict:
 def write_gwnet_config(
     basicts_root: Path,
     dataset_name: str,
+    run_tag: str,
     epochs: int,
     batch_size: int,
+    train_window_days: int | None,
 ) -> Path:
     desc = load_json(basicts_root / "datasets" / dataset_name / "desc.json")
-    config_path = basicts_root / "baselines" / "GWNet" / f"{dataset_name}.py"
+    config_name = f"{dataset_name}_{run_tag}"
+    config_path = basicts_root / "baselines" / "GWNet" / f"{config_name}.py"
 
     config_text = textwrap.dedent(
         f"""\
@@ -65,7 +80,10 @@ def write_gwnet_config(
         sys.path.append(os.path.abspath(__file__ + '/../../..'))
 
         from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
-        from basicts.data import TimeSeriesForecastingDataset
+        from basicts.data import (
+            RecentWindowTimeSeriesForecastingDataset,
+            TimeSeriesForecastingDataset,
+        )
         from basicts.runners import SimpleTimeSeriesForecastingRunner
         from basicts.scaler import ZScoreScaler
         from basicts.utils import get_regular_settings, load_adj, load_dataset_desc
@@ -105,7 +123,7 @@ def write_gwnet_config(
         }}
 
         CFG = EasyDict()
-        CFG.DESCRIPTION = 'PeMS MVP pilot on ' + DATA_NAME
+        CFG.DESCRIPTION = 'PeMS MVP pilot on ' + DATA_NAME + ' ({run_tag})'
         CFG.GPU_NUM = 1
         CFG.RUNNER = SimpleTimeSeriesForecastingRunner
 
@@ -117,14 +135,17 @@ def write_gwnet_config(
         CFG.ENV.CUDNN.BENCHMARK = True
         CFG.ENV.CUDNN.DETERMINISTIC = True
 
+        DATASET_CLS = RecentWindowTimeSeriesForecastingDataset if {repr(train_window_days)} is not None else TimeSeriesForecastingDataset
+
         CFG.DATASET = EasyDict()
         CFG.DATASET.NAME = DATA_NAME
-        CFG.DATASET.TYPE = TimeSeriesForecastingDataset
+        CFG.DATASET.TYPE = DATASET_CLS
         CFG.DATASET.PARAM = EasyDict({{
             'dataset_name': DATA_NAME,
             'train_val_test_ratio': TRAIN_VAL_TEST_RATIO,
             'input_len': INPUT_LEN,
             'output_len': OUTPUT_LEN,
+            'train_recent_days': {repr(train_window_days)},
         }})
 
         CFG.SCALER = EasyDict()
@@ -158,7 +179,7 @@ def write_gwnet_config(
         CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
             'checkpoints',
             MODEL_ARCH.__name__,
-            '_'.join([DATA_NAME, str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)])
+            '_'.join([DATA_NAME, '{run_tag}', str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)])
         )
         CFG.TRAIN.LOSS = masked_mae
         CFG.TRAIN.OPTIM = EasyDict()
@@ -198,14 +219,14 @@ def write_gwnet_config(
     return config_path
 
 
-def find_checkpoint_dir(basicts_root: Path, model_name: str, dataset_name: str) -> Path:
+def find_checkpoint_dir(basicts_root: Path, model_name: str, dataset_name: str, run_tag: str) -> Path:
     parent = basicts_root / "checkpoints" / model_name
     if not parent.exists():
         raise FileNotFoundError(f"checkpoint 根目录不存在: {parent}")
-    matches = sorted(parent.glob(f"{dataset_name}_*"))
+    matches = sorted(parent.glob(f"{dataset_name}_{run_tag}_*"))
     matches = [path for path in matches if path.is_dir()]
     if not matches:
-        raise FileNotFoundError(f"未找到 {dataset_name} 的 checkpoint 目录")
+        raise FileNotFoundError(f"未找到 {dataset_name} ({run_tag}) 的 checkpoint 目录")
     return max(matches, key=lambda path: path.stat().st_mtime)
 
 
@@ -269,15 +290,23 @@ def parse_dataset_name(dataset_name: str) -> dict[str, str]:
     }
 
 
-def summarize_dataset(basicts_root: Path, dataset_name: str, model_name: str) -> dict[str, object]:
+def summarize_dataset(
+    basicts_root: Path,
+    dataset_name: str,
+    model_name: str,
+    run_tag: str,
+    train_window_days: int | None,
+) -> dict[str, object]:
     dataset_dir = basicts_root / "datasets" / dataset_name
-    ckpt_dir = find_checkpoint_dir(basicts_root, model_name, dataset_name)
+    ckpt_dir = find_checkpoint_dir(basicts_root, model_name, dataset_name, run_tag)
     metrics_path = ckpt_dir / "test_metrics.json"
     metrics = load_json(metrics_path)
     overall = metrics.get("overall", {})
 
     row = {
         **parse_dataset_name(dataset_name),
+        "run_tag": run_tag,
+        "train_window_days": train_window_days if train_window_days is not None else "full_train",
         "checkpoint_dir": str(ckpt_dir),
         "overall_mae": overall.get("MAE"),
         "overall_rmse": overall.get("RMSE"),
@@ -303,6 +332,8 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--year", type=int, default=2025, help="Target year, default 2025")
     prepare.add_argument("--full", action="store_true", help="Use dataset names in *_full_{phys,knn} form")
     prepare.add_argument("--last-days", type=int, default=60, help="Number of trailing days used in dataset names")
+    prepare.add_argument("--train-window-days", type=int, nargs="*", default=None, help="Optional recent-train windows in days, e.g. 60 30 7")
+    prepare.add_argument("--include-full-train", action="store_true", help="Also generate a config using the whole train split")
     prepare.add_argument("--basicts-root", type=Path, default=BASICTS_ROOT, help="BasicTS root")
     prepare.add_argument("--epochs", type=int, default=30, help="GWNet training epochs")
     prepare.add_argument("--batch-size", type=int, default=64, help="GWNet batch size")
@@ -313,6 +344,8 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--year", type=int, default=2025, help="Target year, default 2025")
     summarize.add_argument("--full", action="store_true", help="Use dataset names in *_full_{phys,knn} form")
     summarize.add_argument("--last-days", type=int, default=60, help="Number of trailing days used in dataset names")
+    summarize.add_argument("--train-window-days", type=int, nargs="*", default=None, help="Optional recent-train windows in days, e.g. 60 30 7")
+    summarize.add_argument("--include-full-train", action="store_true", help="Also summarize the config using the whole train split")
     summarize.add_argument("--basicts-root", type=Path, default=BASICTS_ROOT, help="BasicTS root")
     summarize.add_argument("--model-name", default="GraphWaveNet", help="Checkpoint subdir name, default GraphWaveNet")
     summarize.add_argument("--output-root", type=Path, default=DEFAULT_RESULTS_ROOT, help="Directory for summary CSVs")
@@ -328,36 +361,49 @@ def main() -> int:
         raise ValueError("--last-days 必须为正整数，或者改用 --full")
 
     dataset_names = dataset_names_for_args(args.districts, args.year, args.last_days, args.full)
+    run_specs = build_run_specs(args.train_window_days, args.include_full_train)
 
     if args.command == "prepare-configs":
         generated = []
         for dataset_name in dataset_names:
-            config_path = write_gwnet_config(
-                basicts_root=args.basicts_root,
-                dataset_name=dataset_name,
-                epochs=args.epochs,
-                batch_size=args.batch_size,
-            )
-            generated.append((dataset_name, config_path))
+            for spec in run_specs:
+                config_path = write_gwnet_config(
+                    basicts_root=args.basicts_root,
+                    dataset_name=dataset_name,
+                    run_tag=str(spec["run_tag"]),
+                    epochs=args.epochs,
+                    batch_size=args.batch_size,
+                    train_window_days=spec["train_window_days"],
+                )
+                generated.append((dataset_name, spec["run_tag"], config_path))
 
         log("已生成 config:")
-        for dataset_name, config_path in generated:
-            log(f"- {dataset_name}: {config_path}")
+        for dataset_name, run_tag, config_path in generated:
+            log(f"- {dataset_name} [{run_tag}]: {config_path}")
 
         log("")
         log(f"训练命令（在 {args.basicts_root} 下执行）:")
         log(f"cd {args.basicts_root}")
-        for dataset_name, _ in generated:
-            log(f"python experiments/train.py -c baselines/GWNet/{dataset_name}.py -g {args.gpus}")
+        for dataset_name, run_tag, _ in generated:
+            log(f"python experiments/train.py -c baselines/GWNet/{dataset_name}_{run_tag}.py -g {args.gpus}")
         return 0
 
     args.output_root = args.output_root.expanduser().resolve()
     rows = []
     for dataset_name in dataset_names:
-        log(f"汇总 {dataset_name}")
-        rows.append(summarize_dataset(args.basicts_root, dataset_name, args.model_name))
+        for spec in run_specs:
+            log(f"汇总 {dataset_name} [{spec['run_tag']}]")
+            rows.append(
+                summarize_dataset(
+                    basicts_root=args.basicts_root,
+                    dataset_name=dataset_name,
+                    model_name=args.model_name,
+                    run_tag=str(spec["run_tag"]),
+                    train_window_days=spec["train_window_days"],
+                )
+            )
 
-    summary_df = pd.DataFrame(rows).sort_values(["district", "graph_type"]).reset_index(drop=True)
+    summary_df = pd.DataFrame(rows).sort_values(["district", "graph_type", "run_tag"]).reset_index(drop=True)
     args.output_root.mkdir(parents=True, exist_ok=True)
     summary_path = args.output_root / "mvp_summary.csv"
     summary_df.to_csv(summary_path, index=False)
@@ -367,6 +413,7 @@ def main() -> int:
         for col in (
             "district",
             "graph_type",
+            "train_window_days",
             "overall_mae",
             "overall_rmse",
             "mae_ml",
