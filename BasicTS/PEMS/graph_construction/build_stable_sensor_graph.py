@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 基于 2025 年全年 PeMS 元数据快照，筛选稳定存在的 ML / OR / FR 节点，
-然后调用本目录下的 graph construction 管线完成匹配、构图，并导出可用于
-BasicTS 训练和可视化分析的文件。
+然后调用本目录下的 graph construction 管线完成匹配，并默认构建
+“物理直接连接图”，导出可用于 BasicTS 训练和可视化分析的文件。
 
 默认原始数据目录:
     /data/yuzhang_fei/PEMS
@@ -39,7 +39,7 @@ GRAPH_ROOT = Path(__file__).resolve().parent
 DEFAULT_DATA_ROOT = Path("/data/yuzhang_fei/PEMS")
 DEFAULT_OUTPUT_ROOT = GRAPH_ROOT / "outputs"
 PIPELINE_SCRIPT = GRAPH_ROOT / "network_graph_pipeline2.7.py"
-BUILD_SCRIPT = GRAPH_ROOT / "build_sensor_graph1.1.py"
+BUILD_SCRIPT = GRAPH_ROOT / "build_sensor_graph_direct.py"
 
 
 def log(message: str) -> None:
