@@ -314,16 +314,66 @@ def build_temporal_features(num_days: int, weekdays: list[int], num_nodes: int) 
     return time_of_day, day_of_week
 
 
+def select_daily_files(
+    files: list[Path],
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+    last_days: int | None,
+) -> tuple[list[Path], dict[str, int], list[float]]:
+    total_days = len(files)
+    test_days = int(total_days * test_ratio)
+    val_days = int(total_days * val_ratio)
+    train_days_full = total_days - val_days - test_days
+    if train_days_full <= 0:
+        raise ValueError("训练天数 <= 0，请调整 train/val/test ratio")
+
+    if last_days is None:
+        selected_files = files
+        train_days = train_days_full
+    else:
+        if last_days > train_days_full:
+            raise ValueError(
+                f"--last-days={last_days} 超过可用训练天数 {train_days_full}"
+            )
+        selected_files = files[train_days_full - last_days :]
+        train_days = last_days
+
+    selected_total_days = len(selected_files)
+    split_counts = {
+        "selected_total_days": selected_total_days,
+        "train_days": train_days,
+        "val_days": val_days,
+        "test_days": test_days,
+        "full_total_days": total_days,
+        "full_train_days": train_days_full,
+    }
+    split_ratios = [
+        train_days / selected_total_days,
+        val_days / selected_total_days,
+        test_days / selected_total_days,
+    ]
+    return selected_files, split_counts, split_ratios
+
+
 def build_flow_dataset(
     district: int,
     year: int,
     data_root: Path,
     sensor_ids: np.ndarray,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
     last_days: int | None,
-) -> tuple[np.ndarray, list[date], float]:
+) -> tuple[np.ndarray, list[date], float, dict[str, int], list[float]]:
     files = resolve_station_5min_files(district, data_root, year)
-    if last_days is not None:
-        files = files[-last_days:]
+    files, split_counts, split_ratios = select_daily_files(
+        files=files,
+        train_ratio=train_ratio,
+        val_ratio=val_ratio,
+        test_ratio=test_ratio,
+        last_days=last_days,
+    )
 
     sensor_to_idx = {int(sensor_id): idx for idx, sensor_id in enumerate(sensor_ids.tolist())}
     day_matrices = []
@@ -355,7 +405,7 @@ def build_flow_dataset(
         ],
         axis=-1,
     )
-    return data, used_dates, missing_ratio
+    return data, used_dates, missing_ratio, split_counts, split_ratios
 
 
 def dump_memmap(path: Path, array: np.ndarray) -> None:
@@ -374,9 +424,8 @@ def save_dataset(
     sensor_catalog: pd.DataFrame,
     used_dates: list[date],
     missing_ratio: float,
-    train_ratio: float,
-    val_ratio: float,
-    test_ratio: float,
+    split_counts: dict[str, int],
+    split_ratios: list[float],
     input_len: int,
     output_len: int,
     graph_type: str,
@@ -398,7 +447,7 @@ def save_dataset(
         "regular_settings": {
             "INPUT_LEN": input_len,
             "OUTPUT_LEN": output_len,
-            "TRAIN_VAL_TEST_RATIO": [train_ratio, val_ratio, test_ratio],
+            "TRAIN_VAL_TEST_RATIO": split_ratios,
             "NORM_EACH_CHANNEL": False,
             "RESCALE": True,
             "METRICS": ["MAE", "RMSE", "MAPE", "WAPE"],
@@ -410,6 +459,7 @@ def save_dataset(
             "start_date": used_dates[0].isoformat(),
             "end_date": used_dates[-1].isoformat(),
             "raw_missing_ratio_before_imputation": missing_ratio,
+            "split_counts": split_counts,
         },
     }
     (dataset_dir / "desc.json").write_text(json.dumps(desc, indent=2), encoding="utf-8")
@@ -454,11 +504,16 @@ def parse_args() -> argparse.Namespace:
         help="BasicTS datasets root",
     )
     parser.add_argument("--full", action="store_true", help="Use all daily files in the target year")
-    parser.add_argument("--last-days", type=int, default=60, help="Use only the last N daily files. Default: 60")
+    parser.add_argument(
+        "--last-days",
+        type=int,
+        default=60,
+        help="Training-window days before fixed val/test splits. Default: 60",
+    )
     parser.add_argument("--k", type=int, default=5, help="k for Euclidean kNN graph. Default: 5")
-    parser.add_argument("--train-ratio", type=float, default=0.6, help="Train split ratio")
-    parser.add_argument("--val-ratio", type=float, default=0.2, help="Validation split ratio")
-    parser.add_argument("--test-ratio", type=float, default=0.2, help="Test split ratio")
+    parser.add_argument("--train-ratio", type=float, default=0.6, help="Full-year train split ratio")
+    parser.add_argument("--val-ratio", type=float, default=0.2, help="Full-year validation split ratio")
+    parser.add_argument("--test-ratio", type=float, default=0.2, help="Full-year test split ratio")
     parser.add_argument("--input-len", type=int, default=12, help="Input length, default 12")
     parser.add_argument("--output-len", type=int, default=12, help="Output length, default 12")
     args = parser.parse_args()
@@ -489,11 +544,14 @@ def main() -> int:
 
         assets = load_graph_assets(district, args.year, args.graph_output_root)
         knn_adj = build_knn_adj(assets.sensor_catalog, args.k)
-        data, used_dates, missing_ratio = build_flow_dataset(
+        data, used_dates, missing_ratio, split_counts, split_ratios = build_flow_dataset(
             district=district,
             year=args.year,
             data_root=args.data_root,
             sensor_ids=assets.sensor_ids,
+            train_ratio=args.train_ratio,
+            val_ratio=args.val_ratio,
+            test_ratio=args.test_ratio,
             last_days=args.last_days,
         )
         dataset_base_name = format_dataset_base_name(
@@ -514,9 +572,8 @@ def main() -> int:
                 sensor_catalog=assets.sensor_catalog,
                 used_dates=used_dates,
                 missing_ratio=missing_ratio,
-                train_ratio=args.train_ratio,
-                val_ratio=args.val_ratio,
-                test_ratio=args.test_ratio,
+                split_counts=split_counts,
+                split_ratios=split_ratios,
                 input_len=args.input_len,
                 output_len=args.output_len,
                 graph_type=graph_type,
