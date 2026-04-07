@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-基于 2025 年全年 PeMS 元数据快照，筛选稳定存在的 ML / OR / FR 节点，
-然后调用本目录下的 graph construction 管线完成匹配，并默认构建
-“物理直接连接图”，导出可用于 BasicTS 训练和可视化分析的文件。
+基于 2025 年全年 PeMS station_5min 每日流量文件，筛选按天稳定存在的
+ML / OR / FR 节点；节点属性仍取自同年的 metadata 快照。之后调用本目录下的
+graph construction 管线完成匹配，并默认构建“物理直接连接图”，导出可用于
+BasicTS 训练和可视化分析的文件。
 
 默认原始数据目录:
     /data/yuzhang_fei/PEMS
@@ -26,6 +27,7 @@ import argparse
 import json
 import math
 import pickle
+import re
 import shlex
 import subprocess
 import sys
@@ -53,33 +55,41 @@ def resolve_existing_path(path_str: str, desc: str) -> Path:
     return path
 
 
-def list_station_meta_dirs(district: int, data_root: Path) -> list[Path]:
+def list_district_data_dirs(district: int, data_root: Path, subdir_name: str) -> list[Path]:
     root = data_root.expanduser().resolve()
     prefix = f"pemsd{district}"
 
-    meta_dirs = []
+    matched_dirs = []
     for entry in sorted(root.iterdir()):
         if not entry.is_dir():
             continue
         if not entry.name.lower().startswith(prefix):
             continue
-        meta_dir = entry / "station_meta"
-        if meta_dir.exists():
-            meta_dirs.append(meta_dir)
+        data_dir = entry / subdir_name
+        if data_dir.exists():
+            matched_dirs.append(data_dir)
 
-    return meta_dirs
+    return matched_dirs
+
+
+def list_station_meta_dirs(district: int, data_root: Path) -> list[Path]:
+    return list_district_data_dirs(district, data_root, "station_meta")
+
+
+def list_station_5min_dirs(district: int, data_root: Path) -> list[Path]:
+    return list_district_data_dirs(district, data_root, "station_5min")
 
 
 def resolve_metadata_files(district: int, data_root: Path, year: int | None = None) -> list[Path]:
     resolved_files: list[Path] = []
-    seen = set()
+    seen_names = set()
 
     for meta_dir in list_station_meta_dirs(district, data_root):
         pattern = f"d{district:02d}_text_meta_{year}_*.txt" if year is not None else f"d{district:02d}_text_meta_*.txt"
         for file_path in sorted(meta_dir.glob(pattern)):
-            if file_path not in seen:
+            if file_path.name not in seen_names:
                 resolved_files.append(file_path)
-                seen.add(file_path)
+                seen_names.add(file_path.name)
 
     return sorted(resolved_files)
 
@@ -100,6 +110,32 @@ def resolve_year_metadata_files(district: int, data_root: Path, year: int) -> li
         raise FileNotFoundError(
             f"未找到 {district} 区 {year} 年元数据文件。"
             f" 请先将对应 District 的数据解压到 /data/yuzhang_fei/PEMS/PEMSD{district}_{year}/station_meta/"
+        )
+    return files
+
+
+def resolve_station_5min_files(district: int, data_root: Path, year: int) -> list[Path]:
+    resolved_files: list[Path] = []
+    seen_names = set()
+    txt_pattern = f"d{district:02d}_text_station_5min_{year}_*.txt"
+    gz_pattern = f"{txt_pattern}.gz"
+
+    for traffic_dir in list_station_5min_dirs(district, data_root):
+        for pattern in (txt_pattern, gz_pattern):
+            for file_path in sorted(traffic_dir.glob(pattern)):
+                if file_path.name not in seen_names:
+                    resolved_files.append(file_path)
+                    seen_names.add(file_path.name)
+
+    return sorted(resolved_files)
+
+
+def resolve_year_station_5min_files(district: int, data_root: Path, year: int) -> list[Path]:
+    files = resolve_station_5min_files(district, data_root, year=year)
+    if not files:
+        raise FileNotFoundError(
+            f"未找到 {district} 区 {year} 年 station_5min 文件。"
+            f" 请先将对应 District 的数据解压到 /data/yuzhang_fei/PEMS/PEMSD{district}_{year}/station_5min/"
         )
     return files
 
@@ -154,25 +190,83 @@ def normalize_metadata_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=col_map)
 
 
+def extract_date_from_station_5min_file(file_path: Path) -> str:
+    match = re.search(r"(\d{4}_\d{2}_\d{2})\.txt(?:\.gz)?$", file_path.name)
+    if match:
+        return match.group(1)
+    return file_path.name
+
+
+def collect_presence_counts_from_station_5min(
+    district: int,
+    args: argparse.Namespace,
+) -> tuple[dict[int, int], int, dict[int, str], dict[int, str]]:
+    files = resolve_year_station_5min_files(district, args.data_root, args.stable_year)
+    presence_counts: dict[int, int] = {}
+    first_seen_dates: dict[int, str] = {}
+    last_seen_dates: dict[int, str] = {}
+
+    log(
+        f"稳定节点筛选: District {district} | 年份 {args.stable_year} | "
+        f"按天统计文件数 {len(files)}"
+    )
+
+    for idx, traffic_file in enumerate(files, start=1):
+        day_label = extract_date_from_station_5min_file(traffic_file)
+        daily_ids: set[int] = set()
+        reader = pd.read_csv(
+            traffic_file,
+            sep=",",
+            header=None,
+            usecols=[1],
+            names=["ID"],
+            compression="infer",
+            chunksize=200_000,
+            low_memory=False,
+        )
+
+        for chunk in reader:
+            chunk["ID"] = pd.to_numeric(chunk["ID"], errors="coerce")
+            valid_ids = chunk["ID"].dropna()
+            if valid_ids.empty:
+                continue
+            daily_ids.update(valid_ids.astype(int).unique().tolist())
+
+        for sensor_id in daily_ids:
+            presence_counts[sensor_id] = presence_counts.get(sensor_id, 0) + 1
+            first_seen_dates.setdefault(sensor_id, day_label)
+            last_seen_dates[sensor_id] = day_label
+
+        if idx == len(files) or idx % 30 == 0:
+            log(
+                f"  已扫描 {idx}/{len(files)} 天 5min 数据，"
+                f"累计发现 {len(presence_counts)} 个传感器"
+            )
+
+    return presence_counts, len(files), first_seen_dates, last_seen_dates
+
+
 def prepare_stable_metadata(
     district: int,
     output_dir: Path,
     args: argparse.Namespace,
 ) -> Path:
-    files = resolve_year_metadata_files(district, args.data_root, args.stable_year)
-    required_count = math.ceil(len(files) * args.presence_ratio)
+    meta_files = resolve_year_metadata_files(district, args.data_root, args.stable_year)
+    presence_counts, total_days, first_seen_dates, last_seen_dates = (
+        collect_presence_counts_from_station_5min(district, args)
+    )
+    required_count = math.ceil(total_days * args.presence_ratio)
     sensor_types = set(args.sensor_types)
 
     log(
         f"稳定节点筛选: District {district} | 年份 {args.stable_year} | "
-        f"快照数 {len(files)} | 最少出现次数 {required_count} | 类型 {sorted(sensor_types)}"
+        f"总天数 {total_days} | 最少出现天数 {required_count} | 类型 {sorted(sensor_types)}"
     )
 
-    presence_counts: dict[int, int] = {}
     latest_rows: dict[int, pd.Series] = {}
     reference_columns: list[str] | None = None
 
-    for meta_file in files:
+    for meta_file in meta_files:
         df = pd.read_csv(meta_file, sep="\t", encoding="latin-1")
         df = normalize_metadata_columns(df)
         required_cols = {"ID", "Type"}
@@ -189,16 +283,13 @@ def prepare_stable_metadata(
         if reference_columns is None:
             reference_columns = list(df.columns)
 
-        for sensor_id in df["ID"].tolist():
-            presence_counts[sensor_id] = presence_counts.get(sensor_id, 0) + 1
-
         for _, row in df.iterrows():
             latest_rows[int(row["ID"])] = row
 
     stable_ids = sorted(
         sensor_id
         for sensor_id, count in presence_counts.items()
-        if count >= required_count
+        if count >= required_count and sensor_id in latest_rows
     )
     if not stable_ids:
         raise ValueError(
@@ -226,7 +317,10 @@ def prepare_stable_metadata(
                 "Fwy": row.get("Fwy"),
                 "Dir": row.get("Dir"),
                 "presence_count": presence_counts[sensor_id],
-                "presence_ratio": presence_counts[sensor_id] / len(files),
+                "presence_ratio": presence_counts[sensor_id] / total_days,
+                "total_days": total_days,
+                "first_seen_date": first_seen_dates.get(sensor_id),
+                "last_seen_date": last_seen_dates.get(sensor_id),
             }
         )
     summary_df = pd.DataFrame(summary_rows).sort_values(
@@ -538,13 +632,13 @@ def parse_args() -> argparse.Namespace:
         "--stable-year",
         type=int,
         default=2025,
-        help="从该年的所有元数据快照中筛稳定节点，默认 2025",
+        help="统计该年的 station_5min 每日文件并筛稳定节点，默认 2025",
     )
     parser.add_argument(
         "--presence-ratio",
         type=float,
         default=1.0,
-        help="稳定节点最小出现比例，默认 1.0 表示全年快照全部出现",
+        help="稳定节点最小出现天数比例，默认 1.0 表示全年每天都有 5min 记录",
     )
     parser.add_argument(
         "--sensor-types",
