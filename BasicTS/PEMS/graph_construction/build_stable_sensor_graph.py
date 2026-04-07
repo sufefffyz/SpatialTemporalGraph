@@ -53,29 +53,53 @@ def resolve_existing_path(path_str: str, desc: str) -> Path:
     return path
 
 
-def find_station_meta_dir(district: int, data_root: Path) -> Path:
+def list_station_meta_dirs(district: int, data_root: Path) -> list[Path]:
     root = data_root.expanduser().resolve()
-    meta_dir = root / f"PEMSD{district}" / "station_meta"
-    if not meta_dir.exists():
-        raise FileNotFoundError(f"未找到 District {district} 的 station_meta 目录: {meta_dir}")
-    return meta_dir
+    prefix = f"pemsd{district}"
+
+    meta_dirs = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        if not entry.name.lower().startswith(prefix):
+            continue
+        meta_dir = entry / "station_meta"
+        if meta_dir.exists():
+            meta_dirs.append(meta_dir)
+
+    return meta_dirs
+
+
+def resolve_metadata_files(district: int, data_root: Path, year: int | None = None) -> list[Path]:
+    resolved_files: list[Path] = []
+    seen = set()
+
+    for meta_dir in list_station_meta_dirs(district, data_root):
+        pattern = f"d{district:02d}_text_meta_{year}_*.txt" if year is not None else f"d{district:02d}_text_meta_*.txt"
+        for file_path in sorted(meta_dir.glob(pattern)):
+            if file_path not in seen:
+                resolved_files.append(file_path)
+                seen.add(file_path)
+
+    return sorted(resolved_files)
 
 
 def resolve_latest_metadata(district: int, data_root: Path) -> Path:
-    meta_dir = find_station_meta_dir(district, data_root)
-    files = sorted(meta_dir.glob("*.txt"))
+    files = resolve_metadata_files(district, data_root, year=None)
     if not files:
-        raise FileNotFoundError(f"元数据目录为空: {meta_dir}")
+        raise FileNotFoundError(
+            f"未找到 District {district} 的元数据文件。"
+            f" 期望目录如 /data/yuzhang_fei/PEMS/PEMSD{district}_2025/station_meta/"
+        )
     return files[-1]
 
 
 def resolve_year_metadata_files(district: int, data_root: Path, year: int) -> list[Path]:
-    meta_dir = find_station_meta_dir(district, data_root)
-    pattern = f"d{district:02d}_text_meta_{year}_*.txt"
-    files = sorted(meta_dir.glob(pattern))
+    files = resolve_metadata_files(district, data_root, year=year)
     if not files:
         raise FileNotFoundError(
-            f"未找到 {district} 区 {year} 年元数据文件: {meta_dir / pattern}"
+            f"未找到 {district} 区 {year} 年元数据文件。"
+            f" 请先将对应 District 的数据解压到 /data/yuzhang_fei/PEMS/PEMSD{district}_{year}/station_meta/"
         )
     return files
 
@@ -317,7 +341,12 @@ def build_jobs(args: argparse.Namespace) -> list[tuple[str, Path, Path]]:
     jobs: list[tuple[str, Path, Path]] = []
 
     for district in args.districts:
-        metadata_file = resolve_latest_metadata(district, args.data_root)
+        if args.stable_year is not None:
+            metadata_file = resolve_year_metadata_files(
+                district, args.data_root, args.stable_year
+            )[-1]
+        else:
+            metadata_file = resolve_latest_metadata(district, args.data_root)
         label = f"PEMSD{district}"
         output_dir = args.output_root / label
         jobs.append((label, metadata_file, output_dir))
