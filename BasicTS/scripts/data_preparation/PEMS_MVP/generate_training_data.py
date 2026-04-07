@@ -413,15 +413,15 @@ def build_flow_dataset(
 
     weekdays = [day.weekday() for day in used_dates]
     tod, dow = build_temporal_features(len(used_dates), weekdays, len(sensor_ids))
-    data = np.stack(
+    flow = flow.astype(np.float32)[..., None]
+    temporal_features = np.stack(
         [
-            flow.astype(np.float32),
-            tod.astype(np.float32),
-            dow.astype(np.float32),
+            tod[:, 0].astype(np.float32),
+            dow[:, 0].astype(np.float32),
         ],
         axis=-1,
     )
-    return data, used_dates, missing_ratio, split_counts, split_ratios
+    return flow, temporal_features, used_dates, missing_ratio, split_counts, split_ratios
 
 
 def dump_memmap(path: Path, array: np.ndarray) -> None:
@@ -434,7 +434,8 @@ def dump_memmap(path: Path, array: np.ndarray) -> None:
 def save_dataset(
     dataset_dir: Path,
     dataset_name: str,
-    data: np.ndarray,
+    flow_data: np.ndarray,
+    temporal_features: np.ndarray,
     adj: np.ndarray,
     sensor_ids: np.ndarray,
     sensor_catalog: pd.DataFrame,
@@ -450,18 +451,20 @@ def save_dataset(
 ) -> None:
     dataset_dir.mkdir(parents=True, exist_ok=True)
     if shared_source_dir is None:
-        dump_memmap(dataset_dir / "data.dat", data)
+        dump_memmap(dataset_dir / "data.dat", flow_data)
+        np.save(dataset_dir / "temporal_features.npy", temporal_features.astype(np.float32))
     else:
         safe_link(shared_source_dir / "data.dat", dataset_dir / "data.dat")
+        safe_link(shared_source_dir / "temporal_features.npy", dataset_dir / "temporal_features.npy")
 
     desc = {
         "name": dataset_name,
         "domain": "traffic flow",
-        "shape": list(data.shape),
-        "num_time_steps": int(data.shape[0]),
-        "num_nodes": int(data.shape[1]),
-        "num_features": int(data.shape[2]),
-        "feature_description": ["flow", "time of day", "day of week"],
+        "shape": list(flow_data.shape),
+        "num_time_steps": int(flow_data.shape[0]),
+        "num_nodes": int(flow_data.shape[1]),
+        "num_features": int(flow_data.shape[2]),
+        "feature_description": ["flow"],
         "has_graph": True,
         "frequency (minutes)": 5,
         "regular_settings": {
@@ -480,6 +483,9 @@ def save_dataset(
             "end_date": used_dates[-1].isoformat(),
             "raw_missing_ratio_before_imputation": missing_ratio,
             "split_counts": split_counts,
+            "assembled_num_features": 3,
+            "assembled_feature_description": ["flow", "time of day", "day of week"],
+            "temporal_feature_file": "temporal_features.npy",
         },
     }
     (dataset_dir / "desc.json").write_text(json.dumps(desc, indent=2), encoding="utf-8")
@@ -569,7 +575,7 @@ def main() -> int:
 
         assets = load_graph_assets(district, args.year, args.graph_output_root)
         knn_adj = build_knn_adj(assets.sensor_catalog, args.k)
-        data, used_dates, missing_ratio, split_counts, split_ratios = build_flow_dataset(
+        flow_data, temporal_features, used_dates, missing_ratio, split_counts, split_ratios = build_flow_dataset(
             district=district,
             year=args.year,
             data_root=args.data_root,
@@ -592,7 +598,8 @@ def main() -> int:
             save_dataset(
                 dataset_dir=dataset_dir,
                 dataset_name=dataset_name,
-                data=data,
+                flow_data=flow_data,
+                temporal_features=temporal_features,
                 adj=adj,
                 sensor_ids=assets.sensor_ids,
                 sensor_catalog=assets.sensor_catalog,

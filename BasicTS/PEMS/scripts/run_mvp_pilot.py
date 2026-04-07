@@ -80,10 +80,7 @@ def write_gwnet_config(
         sys.path.append(os.path.abspath(__file__ + '/../../..'))
 
         from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
-        from basicts.data import (
-            RecentWindowTimeSeriesForecastingDataset,
-            TimeSeriesForecastingDataset,
-        )
+        from basicts.data import RecentWindowTimeSeriesForecastingDataset
         from basicts.runners import SimpleTimeSeriesForecastingRunner
         from basicts.scaler import ZScoreScaler
         from basicts.utils import get_regular_settings, load_adj, load_dataset_desc
@@ -135,11 +132,9 @@ def write_gwnet_config(
         CFG.ENV.CUDNN.BENCHMARK = True
         CFG.ENV.CUDNN.DETERMINISTIC = True
 
-        DATASET_CLS = RecentWindowTimeSeriesForecastingDataset if {repr(train_window_days)} is not None else TimeSeriesForecastingDataset
-
         CFG.DATASET = EasyDict()
         CFG.DATASET.NAME = DATA_NAME
-        CFG.DATASET.TYPE = DATASET_CLS
+        CFG.DATASET.TYPE = RecentWindowTimeSeriesForecastingDataset
         CFG.DATASET.PARAM = EasyDict({{
             'dataset_name': DATA_NAME,
             'train_val_test_ratio': TRAIN_VAL_TEST_RATIO,

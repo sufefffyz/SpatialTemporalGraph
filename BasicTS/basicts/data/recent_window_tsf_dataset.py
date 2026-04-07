@@ -1,6 +1,7 @@
 import inspect
 import json
 import logging
+import os
 from typing import List, Optional
 
 import numpy as np
@@ -39,7 +40,9 @@ class RecentWindowTimeSeriesForecastingDataset(BaseDataset):
 
         self.data_file_path = f'datasets/{dataset_name}/data.dat'
         self.description_file_path = f'datasets/{dataset_name}/desc.json'
+        self.temporal_file_path = f'datasets/{dataset_name}/temporal_features.npy'
         self.description = self._load_description()
+        self.temporal_data = None
         self.data = self._load_data()
 
     def _load_description(self) -> dict:
@@ -81,6 +84,14 @@ class RecentWindowTimeSeriesForecastingDataset(BaseDataset):
         except (FileNotFoundError, ValueError) as e:
             raise ValueError(f'Error loading data file: {self.data_file_path}') from e
 
+        temporal_data = None
+        if os.path.exists(self.temporal_file_path):
+            temporal_data = np.load(self.temporal_file_path, mmap_mode='r')
+            if len(temporal_data) != len(data):
+                raise ValueError(
+                    f'Temporal feature length mismatch: data={len(data)} vs temporal={len(temporal_data)}'
+                )
+
         total_len = len(data)
         valid_len = int(total_len * self.train_val_test_ratio[1])
         test_len = int(total_len * self.train_val_test_ratio[2])
@@ -110,21 +121,45 @@ class RecentWindowTimeSeriesForecastingDataset(BaseDataset):
             train_start = train_len - effective_train_len
             offset = self.output_len if self.overlap else 0
             seg = data[train_start:train_len + offset]
+            temporal_seg = temporal_data[train_start:train_len + offset] if temporal_data is not None else None
         elif self.mode == 'valid':
             offset_left = self.input_len - 1 if self.overlap else 0
             offset_right = self.output_len if self.overlap else 0
             seg = data[train_len - offset_left : train_len + valid_len + offset_right]
+            temporal_seg = (
+                temporal_data[train_len - offset_left : train_len + valid_len + offset_right]
+                if temporal_data is not None else None
+            )
         else:
             offset = self.input_len - 1 if self.overlap else 0
             seg = data[train_len + valid_len - offset:]
+            temporal_seg = temporal_data[train_len + valid_len - offset:] if temporal_data is not None else None
 
         if not self.memmap:
             seg = seg.copy()
+            if temporal_seg is not None:
+                temporal_seg = temporal_seg.copy()
+        self.temporal_data = temporal_seg
         return seg
+
+    def _append_temporal_features(self, flow_slice: np.ndarray, temporal_slice: np.ndarray) -> np.ndarray:
+        num_nodes = flow_slice.shape[1]
+        temporal_broadcast = np.broadcast_to(
+            temporal_slice[:, None, :],
+            (temporal_slice.shape[0], num_nodes, temporal_slice.shape[1]),
+        ).copy()
+        return np.concatenate([flow_slice, temporal_broadcast], axis=-1)
 
     def __getitem__(self, index: int) -> dict:
         history_data = self.data[index:index + self.input_len]
         future_data = self.data[index + self.input_len:index + self.input_len + self.output_len]
+        if self.temporal_data is not None:
+            history_temporal = self.temporal_data[index:index + self.input_len]
+            future_temporal = self.temporal_data[
+                index + self.input_len:index + self.input_len + self.output_len
+            ]
+            history_data = self._append_temporal_features(history_data, history_temporal)
+            future_data = self._append_temporal_features(future_data, future_temporal)
         if self.memmap:
             history_data = history_data.copy()
             future_data = future_data.copy()
