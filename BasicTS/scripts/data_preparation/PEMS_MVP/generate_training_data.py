@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import pickle
 import re
 from dataclasses import dataclass
@@ -314,6 +315,13 @@ def build_temporal_features(num_days: int, weekdays: list[int], num_nodes: int) 
     return time_of_day, day_of_week
 
 
+def safe_link(src: Path, dst: Path) -> None:
+    if dst.exists() or dst.is_symlink():
+        dst.unlink()
+    rel_src = os.path.relpath(src, start=dst.parent)
+    dst.symlink_to(rel_src)
+
+
 def select_daily_files(
     files: list[Path],
     train_ratio: float,
@@ -387,9 +395,17 @@ def build_flow_dataset(
 
     flow = np.stack(day_matrices, axis=0).reshape(len(files) * 288, len(sensor_ids))
     missing_ratio = float(np.isnan(flow).mean())
-
-    sensor_mean = np.nanmean(flow, axis=0)
-    global_mean = float(np.nanmean(sensor_mean))
+    valid_counts = np.sum(~np.isnan(flow), axis=0)
+    sensor_sum = np.nansum(flow, axis=0)
+    sensor_mean = np.divide(
+        sensor_sum,
+        valid_counts,
+        out=np.full(sensor_sum.shape, np.nan, dtype=np.float32),
+        where=valid_counts > 0,
+    )
+    global_mean = float(np.nanmean(flow))
+    if not np.isfinite(global_mean):
+        global_mean = 0.0
     sensor_mean = np.where(np.isfinite(sensor_mean), sensor_mean, global_mean)
     nan_mask = np.isnan(flow)
     if nan_mask.any():
@@ -430,9 +446,13 @@ def save_dataset(
     output_len: int,
     graph_type: str,
     directed_edges_path: Path | None,
+    shared_source_dir: Path | None = None,
 ) -> None:
     dataset_dir.mkdir(parents=True, exist_ok=True)
-    dump_memmap(dataset_dir / "data.dat", data)
+    if shared_source_dir is None:
+        dump_memmap(dataset_dir / "data.dat", data)
+    else:
+        safe_link(shared_source_dir / "data.dat", dataset_dir / "data.dat")
 
     desc = {
         "name": dataset_name,
@@ -467,13 +487,18 @@ def save_dataset(
     with open(dataset_dir / "adj_mx.pkl", "wb") as f:
         pickle.dump(adj.astype(np.float32), f, protocol=4)
 
-    np.save(dataset_dir / "sensor_ids.npy", sensor_ids.astype(np.int64))
-    aligned_catalog = pd.DataFrame({"ID": sensor_ids.tolist()}).merge(sensor_catalog, on="ID", how="left")
-    aligned_catalog.to_csv(dataset_dir / "sensor_catalog.csv", index=False)
-    (dataset_dir / "sensor_ids.txt").write_text(
-        "\n".join(str(int(sensor_id)) for sensor_id in sensor_ids.tolist()) + "\n",
-        encoding="utf-8",
-    )
+    if shared_source_dir is None:
+        np.save(dataset_dir / "sensor_ids.npy", sensor_ids.astype(np.int64))
+        aligned_catalog = pd.DataFrame({"ID": sensor_ids.tolist()}).merge(sensor_catalog, on="ID", how="left")
+        aligned_catalog.to_csv(dataset_dir / "sensor_catalog.csv", index=False)
+        (dataset_dir / "sensor_ids.txt").write_text(
+            "\n".join(str(int(sensor_id)) for sensor_id in sensor_ids.tolist()) + "\n",
+            encoding="utf-8",
+        )
+    else:
+        safe_link(shared_source_dir / "sensor_ids.npy", dataset_dir / "sensor_ids.npy")
+        safe_link(shared_source_dir / "sensor_catalog.csv", dataset_dir / "sensor_catalog.csv")
+        safe_link(shared_source_dir / "sensor_ids.txt", dataset_dir / "sensor_ids.txt")
 
     if directed_edges_path is not None and directed_edges_path.exists():
         directed_edges_df = pd.read_csv(directed_edges_path)
@@ -560,6 +585,7 @@ def main() -> int:
             None if args.full else len(used_dates),
         )
 
+        shared_source_dir = None
         for graph_type, adj in (("phys", assets.physical_adj), ("knn", knn_adj)):
             dataset_name = f"{dataset_base_name}_{graph_type}"
             dataset_dir = args.output_root / dataset_name
@@ -578,7 +604,10 @@ def main() -> int:
                 output_len=args.output_len,
                 graph_type=graph_type,
                 directed_edges_path=assets.directed_edges_path if graph_type == "phys" else None,
+                shared_source_dir=shared_source_dir,
             )
+            if graph_type == "phys":
+                shared_source_dir = dataset_dir
             generated_datasets.append(dataset_name)
             log(f"{dataset_name}: 已写入 {dataset_dir}")
 
