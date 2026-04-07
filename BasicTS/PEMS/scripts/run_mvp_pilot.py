@@ -35,10 +35,10 @@ def resolve_existing_path(path_str: str, desc: str) -> Path:
     return path
 
 
-def dataset_names_for_args(districts: list[int], year: int, last_days: int) -> list[str]:
+def dataset_names_for_args(districts: list[int], year: int, last_days: int | None, full: bool) -> list[str]:
     names = []
     for district in districts:
-        base = f"PEMSD{district}_{year}_last{last_days}"
+        base = f"PEMSD{district}_{year}_full" if full else f"PEMSD{district}_{year}_last{last_days}"
         names.extend([f"{base}_phys", f"{base}_knn"])
     return names
 
@@ -301,6 +301,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare = subparsers.add_parser("prepare-configs", help="Generate fixed-graph GWNet configs and print train commands.")
     prepare.add_argument("--districts", type=int, nargs="+", required=True, help="District IDs, e.g. 3 4")
     prepare.add_argument("--year", type=int, default=2025, help="Target year, default 2025")
+    prepare.add_argument("--full", action="store_true", help="Use dataset names in *_full_{phys,knn} form")
     prepare.add_argument("--last-days", type=int, default=60, help="Number of trailing days used in dataset names")
     prepare.add_argument("--basicts-root", type=Path, default=BASICTS_ROOT, help="BasicTS root")
     prepare.add_argument("--epochs", type=int, default=30, help="GWNet training epochs")
@@ -310,6 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
     summarize = subparsers.add_parser("summarize", help="Summarize checkpoint results into CSV tables.")
     summarize.add_argument("--districts", type=int, nargs="+", required=True, help="District IDs, e.g. 3 4")
     summarize.add_argument("--year", type=int, default=2025, help="Target year, default 2025")
+    summarize.add_argument("--full", action="store_true", help="Use dataset names in *_full_{phys,knn} form")
     summarize.add_argument("--last-days", type=int, default=60, help="Number of trailing days used in dataset names")
     summarize.add_argument("--basicts-root", type=Path, default=BASICTS_ROOT, help="BasicTS root")
     summarize.add_argument("--model-name", default="GraphWaveNet", help="Checkpoint subdir name, default GraphWaveNet")
@@ -322,7 +324,10 @@ def main() -> int:
     args = parser.parse_args()
     args.basicts_root = resolve_existing_path(str(args.basicts_root), "BasicTS root")
 
-    dataset_names = dataset_names_for_args(args.districts, args.year, args.last_days)
+    if not args.full and args.last_days <= 0:
+        raise ValueError("--last-days 必须为正整数，或者改用 --full")
+
+    dataset_names = dataset_names_for_args(args.districts, args.year, args.last_days, args.full)
 
     if args.command == "prepare-configs":
         generated = []

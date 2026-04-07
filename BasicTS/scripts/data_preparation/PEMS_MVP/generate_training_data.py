@@ -3,6 +3,9 @@
 Generate BasicTS-ready MVP datasets from PeMS 2025 raw files and graph-construction outputs.
 
 Outputs per district:
+- datasets/PEMSD{district}_{year}_full_phys/
+- datasets/PEMSD{district}_{year}_full_knn/
+or
 - datasets/PEMSD{district}_{year}_last{N}_phys/
 - datasets/PEMSD{district}_{year}_last{N}_knn/
 
@@ -427,7 +430,9 @@ def save_dataset(
         directed_edges_df.to_csv(dataset_dir / "directed_edges.csv", index=False)
 
 
-def format_dataset_base_name(district: int, year: int, num_days: int) -> str:
+def format_dataset_base_name(district: int, year: int, num_days: int | None) -> str:
+    if num_days is None:
+        return f"PEMSD{district}_{year}_full"
     return f"PEMSD{district}_{year}_last{num_days}"
 
 
@@ -448,6 +453,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_ROOT,
         help="BasicTS datasets root",
     )
+    parser.add_argument("--full", action="store_true", help="Use all daily files in the target year")
     parser.add_argument("--last-days", type=int, default=60, help="Use only the last N daily files. Default: 60")
     parser.add_argument("--k", type=int, default=5, help="k for Euclidean kNN graph. Default: 5")
     parser.add_argument("--train-ratio", type=float, default=0.6, help="Train split ratio")
@@ -464,7 +470,9 @@ def parse_args() -> argparse.Namespace:
     ratio_sum = args.train_ratio + args.val_ratio + args.test_ratio
     if not math.isclose(ratio_sum, 1.0, rel_tol=1e-6, abs_tol=1e-6):
         raise ValueError("train/val/test ratio 之和必须为 1.0")
-    if args.last_days is not None and args.last_days <= 0:
+    if args.full:
+        args.last_days = None
+    elif args.last_days is not None and args.last_days <= 0:
         raise ValueError("--last-days 必须为正整数")
     return args
 
@@ -488,7 +496,11 @@ def main() -> int:
             sensor_ids=assets.sensor_ids,
             last_days=args.last_days,
         )
-        dataset_base_name = format_dataset_base_name(district, args.year, len(used_dates))
+        dataset_base_name = format_dataset_base_name(
+            district,
+            args.year,
+            None if args.full else len(used_dates),
+        )
 
         for graph_type, adj in (("phys", assets.physical_adj), ("knn", knn_adj)):
             dataset_name = f"{dataset_base_name}_{graph_type}"
