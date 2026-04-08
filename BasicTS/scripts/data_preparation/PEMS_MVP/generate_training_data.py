@@ -2,12 +2,10 @@
 """
 Generate BasicTS-ready MVP datasets from PeMS 2025 raw files and graph-construction outputs.
 
-Outputs per district:
+Outputs per district (configurable graph variants), e.g.:
 - datasets/PEMSD{district}_{year}_full_phys/
 - datasets/PEMSD{district}_{year}_full_knn/
-or
-- datasets/PEMSD{district}_{year}_last{N}_phys/
-- datasets/PEMSD{district}_{year}_last{N}_knn/
+- datasets/PEMSD{district}_{year}_full_distthres/
 
 Each dataset contains:
 - data.dat
@@ -26,6 +24,10 @@ import math
 import os
 import pickle
 import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -252,6 +254,119 @@ def build_knn_adj(sensor_catalog: pd.DataFrame, k: int) -> np.ndarray:
     adj = np.maximum(adj, adj.T)
     np.fill_diagonal(adj, 0.0)
     return adj
+
+
+def compute_geodesic_distance_km(sensor_catalog: pd.DataFrame) -> np.ndarray:
+    coords = sensor_catalog[["Latitude", "Longitude"]].apply(pd.to_numeric, errors="coerce")
+    if coords.isna().any().any():
+        missing = sensor_catalog.loc[coords.isna().any(axis=1), "ID"].tolist()[:10]
+        raise ValueError(f"图构建失败：缺少坐标的传感器示例 {missing}")
+
+    lat = np.radians(coords["Latitude"].to_numpy(dtype=float))
+    lon = np.radians(coords["Longitude"].to_numpy(dtype=float))
+    lat1 = lat[:, None]
+    lat2 = lat[None, :]
+    lon1 = lon[:, None]
+    lon2 = lon[None, :]
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+    dist_km = 6371.0 * 2 * np.arctan2(np.sqrt(a), np.sqrt(np.maximum(1 - a, 1e-12)))
+    np.fill_diagonal(dist_km, np.inf)
+    return dist_km
+
+
+def build_distance_threshold_adj(
+    sensor_catalog: pd.DataFrame,
+    osrm_base_url: str,
+    radius_km: float,
+    weight_threshold: float,
+    cache_path: Path | None,
+    batch_size: int,
+    timeout_sec: int,
+) -> np.ndarray:
+    """
+    LargeST-style thresholded Gaussian distance graph.
+
+    We follow the paper's thresholded Gaussian kernel formulation:
+    1. Use geodesic radius filtering to prune candidates.
+    2. Query driving shortest-path distances via OSRM.
+    3. Apply Gaussian kernel and prune weak connections with a threshold.
+    """
+
+    geodesic_dist_km = compute_geodesic_distance_km(sensor_catalog)
+    radius_mask = geodesic_dist_km <= radius_km
+    coords = sensor_catalog[["Latitude", "Longitude"]].apply(pd.to_numeric, errors="coerce")
+    lon_lat = list(zip(coords["Longitude"].to_numpy(dtype=float), coords["Latitude"].to_numpy(dtype=float)))
+    num_nodes = len(sensor_catalog)
+
+    if cache_path is not None and cache_path.exists():
+        road_dist_km = np.load(cache_path)
+        if road_dist_km.shape != (num_nodes, num_nodes):
+            raise ValueError(f"缓存矩阵形状不匹配: {cache_path}")
+    else:
+        road_dist_km = np.full((num_nodes, num_nodes), np.inf, dtype=np.float32)
+        np.fill_diagonal(road_dist_km, 0.0)
+        base_url = osrm_base_url.rstrip("/")
+
+        def _query_osrm_table(src_idx: int, dst_indices: list[int]) -> np.ndarray:
+            coords_batch = [lon_lat[src_idx], *[lon_lat[idx] for idx in dst_indices]]
+            coord_str = ";".join(f"{lon:.6f},{lat:.6f}" for lon, lat in coords_batch)
+            destinations = ";".join(str(i) for i in range(1, len(coords_batch)))
+            query = urllib.parse.urlencode(
+                {
+                    "annotations": "distance",
+                    "sources": "0",
+                    "destinations": destinations,
+                }
+            )
+            url = f"{base_url}/table/v1/driving/{coord_str}?{query}"
+            last_error = None
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(url, timeout=timeout_sec) as resp:
+                        payload = json.loads(resp.read().decode("utf-8"))
+                    distances = payload.get("distances", [[None]])[0]
+                    return np.array(
+                        [np.inf if dist is None else float(dist) / 1000.0 for dist in distances],
+                        dtype=np.float32,
+                    )
+                except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                    last_error = exc
+                    time.sleep(1.0 * (attempt + 1))
+            raise RuntimeError(f"OSRM 查询失败: src={src_idx}, dst_count={len(dst_indices)}") from last_error
+
+        for src_idx in range(num_nodes):
+            dst_indices = np.where(radius_mask[src_idx])[0].tolist()
+            if src_idx in dst_indices:
+                dst_indices.remove(src_idx)
+            if not dst_indices:
+                continue
+            for start in range(0, len(dst_indices), batch_size):
+                batch = dst_indices[start : start + batch_size]
+                dists = _query_osrm_table(src_idx, batch)
+                road_dist_km[src_idx, batch] = dists
+            if src_idx == num_nodes - 1 or (src_idx + 1) % 50 == 0:
+                log(f"  OSRM 路网距离查询进度: {src_idx + 1}/{num_nodes}")
+
+        if cache_path is not None:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            np.save(cache_path, road_dist_km)
+
+    finite_dist = road_dist_km[np.isfinite(road_dist_km) & (road_dist_km > 0)]
+    sigma = float(np.nanstd(finite_dist))
+    if not np.isfinite(sigma) or sigma <= 0:
+        sigma = float(np.nanmean(finite_dist))
+    if not np.isfinite(sigma) or sigma <= 0:
+        sigma = 1.0
+
+    weights = np.zeros_like(road_dist_km, dtype=np.float32)
+    valid_mask = np.isfinite(road_dist_km) & (road_dist_km > 0)
+    weights[valid_mask] = np.exp(-(road_dist_km[valid_mask] ** 2) / (sigma**2 + 1e-12)).astype(np.float32)
+    weights[weights < weight_threshold] = 0.0
+    np.fill_diagonal(weights, 0.0)
+    return weights
 
 
 def build_day_flow_matrix(file_path: Path, sensor_to_idx: dict[int, int], num_nodes: int) -> np.ndarray:
@@ -542,6 +657,43 @@ def parse_args() -> argparse.Namespace:
         help="Training-window days before fixed val/test splits. Default: 60",
     )
     parser.add_argument("--k", type=int, default=5, help="k for Euclidean kNN graph. Default: 5")
+    parser.add_argument(
+        "--graph-variants",
+        nargs="+",
+        default=["phys", "knn"],
+        choices=["phys", "knn", "distthres"],
+        help="Graph variants to materialize. Default: phys knn",
+    )
+    parser.add_argument(
+        "--dist-thres-radius-km",
+        type=float,
+        default=4.0,
+        help="Radius for LargeST-style distance-threshold graph. Default: 4.0 km",
+    )
+    parser.add_argument(
+        "--dist-thres-weight-threshold",
+        type=float,
+        default=0.01,
+        help="Gaussian weight threshold for LargeST-style graph. Default: 0.01",
+    )
+    parser.add_argument(
+        "--osrm-base-url",
+        type=str,
+        default="http://127.0.0.1:5000",
+        help="OSRM base URL for LargeST-style road-network distance queries",
+    )
+    parser.add_argument(
+        "--osrm-batch-size",
+        type=int,
+        default=100,
+        help="Number of destination nodes per OSRM table query. Default: 100",
+    )
+    parser.add_argument(
+        "--osrm-timeout-sec",
+        type=int,
+        default=30,
+        help="OSRM request timeout in seconds. Default: 30",
+    )
     parser.add_argument("--train-ratio", type=float, default=0.6, help="Full-year train split ratio")
     parser.add_argument("--val-ratio", type=float, default=0.2, help="Full-year validation split ratio")
     parser.add_argument("--test-ratio", type=float, default=0.2, help="Full-year test split ratio")
@@ -574,7 +726,28 @@ def main() -> int:
         log("=" * 80)
 
         assets = load_graph_assets(district, args.year, args.graph_output_root)
-        knn_adj = build_knn_adj(assets.sensor_catalog, args.k)
+        graph_payloads = {}
+        if "phys" in args.graph_variants:
+            graph_payloads["phys"] = assets.physical_adj
+        if "knn" in args.graph_variants:
+            graph_payloads["knn"] = build_knn_adj(assets.sensor_catalog, args.k)
+        if "distthres" in args.graph_variants:
+            cache_path = (
+                args.graph_output_root
+                / assets.label
+                / "exports"
+                / "analysis"
+                / f"distthres_road_dist_radius{args.dist_thres_radius_km:.2f}_osrm.npy"
+            )
+            graph_payloads["distthres"] = build_distance_threshold_adj(
+                assets.sensor_catalog,
+                osrm_base_url=args.osrm_base_url,
+                radius_km=args.dist_thres_radius_km,
+                weight_threshold=args.dist_thres_weight_threshold,
+                cache_path=cache_path,
+                batch_size=args.osrm_batch_size,
+                timeout_sec=args.osrm_timeout_sec,
+            )
         flow_data, temporal_features, used_dates, missing_ratio, split_counts, split_ratios = build_flow_dataset(
             district=district,
             year=args.year,
@@ -592,7 +765,7 @@ def main() -> int:
         )
 
         shared_source_dir = None
-        for graph_type, adj in (("phys", assets.physical_adj), ("knn", knn_adj)):
+        for graph_type, adj in graph_payloads.items():
             dataset_name = f"{dataset_base_name}_{graph_type}"
             dataset_dir = args.output_root / dataset_name
             save_dataset(
@@ -613,7 +786,7 @@ def main() -> int:
                 directed_edges_path=assets.directed_edges_path if graph_type == "phys" else None,
                 shared_source_dir=shared_source_dir,
             )
-            if graph_type == "phys":
+            if shared_source_dir is None:
                 shared_source_dir = dataset_dir
             generated_datasets.append(dataset_name)
             log(f"{dataset_name}: 已写入 {dataset_dir}")

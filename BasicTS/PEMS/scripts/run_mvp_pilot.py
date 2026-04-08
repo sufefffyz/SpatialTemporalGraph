@@ -35,11 +35,17 @@ def resolve_existing_path(path_str: str, desc: str) -> Path:
     return path
 
 
-def dataset_names_for_args(districts: list[int], year: int, last_days: int | None, full: bool) -> list[str]:
+def dataset_names_for_args(
+    districts: list[int],
+    year: int,
+    last_days: int | None,
+    full: bool,
+    graph_variants: list[str],
+) -> list[str]:
     names = []
     for district in districts:
         base = f"PEMSD{district}_{year}_full" if full else f"PEMSD{district}_{year}_last{last_days}"
-        names.extend([f"{base}_phys", f"{base}_knn"])
+        names.extend([f"{base}_{graph_type}" for graph_type in graph_variants])
     return names
 
 
@@ -284,7 +290,14 @@ def stratified_eval(dataset_dir: Path, ckpt_dir: Path) -> dict[str, float]:
 
 
 def parse_dataset_name(dataset_name: str) -> dict[str, str]:
-    graph_type = "phys" if dataset_name.endswith("_phys") else "knn" if dataset_name.endswith("_knn") else "unknown"
+    if dataset_name.endswith("_phys"):
+        graph_type = "phys"
+    elif dataset_name.endswith("_knn"):
+        graph_type = "knn"
+    elif dataset_name.endswith("_distthres"):
+        graph_type = "distthres"
+    else:
+        graph_type = "unknown"
     district = dataset_name.split("_")[0]
     return {
         "dataset": dataset_name,
@@ -335,6 +348,13 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--year", type=int, default=2025, help="Target year, default 2025")
     prepare.add_argument("--full", action="store_true", help="Use dataset names in *_full_{phys,knn} form")
     prepare.add_argument("--last-days", type=int, default=60, help="Number of trailing days used in dataset names")
+    prepare.add_argument(
+        "--graph-variants",
+        nargs="+",
+        default=["phys", "knn"],
+        choices=["phys", "knn", "distthres"],
+        help="Graph variants to prepare configs for. Default: phys knn",
+    )
     prepare.add_argument("--train-window-days", type=int, nargs="*", default=None, help="Optional recent-train windows in days, e.g. 60 30 7")
     prepare.add_argument("--include-full-train", action="store_true", help="Also generate a config using the whole train split")
     prepare.add_argument("--basicts-root", type=Path, default=BASICTS_ROOT, help="BasicTS root")
@@ -347,6 +367,13 @@ def build_parser() -> argparse.ArgumentParser:
     summarize.add_argument("--year", type=int, default=2025, help="Target year, default 2025")
     summarize.add_argument("--full", action="store_true", help="Use dataset names in *_full_{phys,knn} form")
     summarize.add_argument("--last-days", type=int, default=60, help="Number of trailing days used in dataset names")
+    summarize.add_argument(
+        "--graph-variants",
+        nargs="+",
+        default=["phys", "knn"],
+        choices=["phys", "knn", "distthres"],
+        help="Graph variants to summarize. Default: phys knn",
+    )
     summarize.add_argument("--train-window-days", type=int, nargs="*", default=None, help="Optional recent-train windows in days, e.g. 60 30 7")
     summarize.add_argument("--include-full-train", action="store_true", help="Also summarize the config using the whole train split")
     summarize.add_argument("--basicts-root", type=Path, default=BASICTS_ROOT, help="BasicTS root")
@@ -363,7 +390,13 @@ def main() -> int:
     if not args.full and args.last_days <= 0:
         raise ValueError("--last-days 必须为正整数，或者改用 --full")
 
-    dataset_names = dataset_names_for_args(args.districts, args.year, args.last_days, args.full)
+    dataset_names = dataset_names_for_args(
+        args.districts,
+        args.year,
+        args.last_days,
+        args.full,
+        args.graph_variants,
+    )
     run_specs = build_run_specs(args.train_window_days, args.include_full_train)
 
     if args.command == "prepare-configs":
