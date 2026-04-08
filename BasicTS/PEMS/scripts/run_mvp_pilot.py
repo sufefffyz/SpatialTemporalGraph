@@ -81,7 +81,7 @@ def write_gwnet_config(
 
         from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
         from basicts.data import RecentWindowTimeSeriesForecastingDataset
-        from basicts.runners import SimpleTimeSeriesForecastingRunner
+        from basicts.runners import PemsWandBTimeSeriesForecastingRunner
         from basicts.scaler import ZScoreScaler
         from basicts.utils import get_regular_settings, load_adj, load_dataset_desc
 
@@ -122,7 +122,7 @@ def write_gwnet_config(
         CFG = EasyDict()
         CFG.DESCRIPTION = 'PeMS MVP pilot on ' + DATA_NAME + ' ({run_tag})'
         CFG.GPU_NUM = 1
-        CFG.RUNNER = SimpleTimeSeriesForecastingRunner
+        CFG.RUNNER = PemsWandBTimeSeriesForecastingRunner
 
         CFG.ENV = EasyDict()
         CFG.ENV.SEED = 42
@@ -131,6 +131,14 @@ def write_gwnet_config(
         CFG.ENV.CUDNN.ENABLED = True
         CFG.ENV.CUDNN.BENCHMARK = True
         CFG.ENV.CUDNN.DETERMINISTIC = True
+
+        CFG.WANDB = EasyDict()
+        CFG.WANDB.PROJECT = os.environ.get('WANDB_PROJECT', 'SpatialTemporalModel')
+        CFG.WANDB.ENTITY = os.environ.get('WANDB_ENTITY', '')
+        CFG.WANDB.MODE = os.environ.get('WANDB_MODE', 'online')
+        CFG.WANDB.RUN_NAME = f'{{MODEL_ARCH.__name__}}_{{DATA_NAME}}_{run_tag}'
+        CFG.WANDB.GROUP = DATA_NAME
+        CFG.WANDB.TAGS = ['pems-mvp', '{run_tag}']
 
         CFG.DATASET = EasyDict()
         CFG.DATASET.NAME = DATA_NAME
