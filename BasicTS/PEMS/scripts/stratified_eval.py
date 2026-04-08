@@ -19,6 +19,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
+
+from basicts.metrics import masked_mae, masked_mape, masked_mse, masked_wape
 
 
 def log(message: str) -> None:
@@ -50,34 +53,61 @@ def load_memmap_array(path: Path, output_len: int, num_nodes: int) -> np.memmap:
     return np.memmap(path, dtype=np.float32, mode="r", shape=shape)
 
 
-def masked_mae_np(pred: np.ndarray, tgt: np.ndarray) -> float:
-    return float(np.mean(np.abs(pred - tgt)))
+def _valid_count(target: np.ndarray, null_val: float, for_mape: bool = False) -> int:
+    if np.isnan(null_val):
+        mask = ~np.isnan(target)
+    else:
+        mask = ~np.isclose(target, null_val, atol=5e-5, rtol=0.0)
+    if for_mape:
+        mask &= ~np.isclose(target, 0.0, atol=5e-5, rtol=0.0)
+    return int(mask.sum())
 
 
-def masked_rmse_np(pred: np.ndarray, tgt: np.ndarray) -> float:
-    return float(np.sqrt(np.mean((pred - tgt) ** 2)))
+def _wape_count(target: np.ndarray) -> int:
+    return int(target.shape[0] * target.shape[2] * target.shape[3])
 
 
-def masked_mape_np(pred: np.ndarray, tgt: np.ndarray) -> float:
-    mask = np.abs(tgt) > 5e-5
-    if not np.any(mask):
-        return float("nan")
-    return float(np.mean(np.abs((pred[mask] - tgt[mask]) / tgt[mask])))
+def _chunk_metrics(pred: np.ndarray, tgt: np.ndarray, null_val: float) -> tuple[dict[str, float], dict[str, int]]:
+    pred_t = torch.from_numpy(np.asarray(pred))
+    tgt_t = torch.from_numpy(np.asarray(tgt))
+    metrics = {
+        "MAE": float(masked_mae(pred_t, tgt_t, null_val=null_val).item()),
+        "MSE": float(masked_mse(pred_t, tgt_t, null_val=null_val).item()),
+        "MAPE": float(masked_mape(pred_t, tgt_t, null_val=null_val).item()),
+        "WAPE": float(masked_wape(pred_t, tgt_t, null_val=null_val).item()),
+    }
+    weights = {
+        "MAE": _valid_count(tgt, null_val, for_mape=False),
+        "MSE": _valid_count(tgt, null_val, for_mape=False),
+        "MAPE": _valid_count(tgt, null_val, for_mape=True),
+        "WAPE": _wape_count(tgt),
+    }
+    return metrics, weights
 
 
-def masked_wape_np(pred: np.ndarray, tgt: np.ndarray) -> float:
-    # Match BasicTS masked_wape implementation: sum along horizon dim then mean.
-    numerator = np.sum(np.abs(pred - tgt), axis=1)
-    denominator = np.sum(np.abs(tgt), axis=1) + 5e-5
-    return float(np.mean(numerator / denominator))
+def compute_metrics_chunked(pred: np.ndarray, tgt: np.ndarray, null_val: float, batch_chunk: int) -> dict[str, float]:
+    sums = {"MAE": 0.0, "MSE": 0.0, "MAPE": 0.0, "WAPE": 0.0}
+    counts = {"MAE": 0, "MSE": 0, "MAPE": 0, "WAPE": 0}
 
+    total_samples = pred.shape[0]
+    for start in range(0, total_samples, batch_chunk):
+        end = min(total_samples, start + batch_chunk)
+        chunk_metrics, chunk_weights = _chunk_metrics(pred[start:end], tgt[start:end], null_val)
+        for key in sums:
+            if chunk_weights[key] > 0:
+                sums[key] += chunk_metrics[key] * chunk_weights[key]
+                counts[key] += chunk_weights[key]
 
-def compute_metrics(pred: np.ndarray, tgt: np.ndarray) -> dict[str, float]:
+    mae = sums["MAE"] / counts["MAE"] if counts["MAE"] > 0 else float("nan")
+    mse = sums["MSE"] / counts["MSE"] if counts["MSE"] > 0 else float("nan")
+    mape = sums["MAPE"] / counts["MAPE"] if counts["MAPE"] > 0 else float("nan")
+    wape = sums["WAPE"] / counts["WAPE"] if counts["WAPE"] > 0 else float("nan")
+    rmse = float(np.sqrt(mse)) if np.isfinite(mse) else float("nan")
     return {
-        "MAE": masked_mae_np(pred, tgt),
-        "RMSE": masked_rmse_np(pred, tgt),
-        "MAPE": masked_mape_np(pred, tgt),
-        "WAPE": masked_wape_np(pred, tgt),
+        "MAE": mae,
+        "RMSE": rmse,
+        "MAPE": mape,
+        "WAPE": wape,
     }
 
 
@@ -109,16 +139,19 @@ def evaluate_run(
     ckpt_dir: Path,
     dataset_dir: Path,
     horizons: list[int],
+    batch_chunk: int,
 ) -> pd.DataFrame:
     desc = load_json(dataset_dir / "desc.json")
     output_len = int(desc["regular_settings"]["OUTPUT_LEN"])
     num_nodes = int(desc["num_nodes"])
+    null_val = float(desc["regular_settings"].get("NULL_VAL", 0.0))
 
     pred_path = ckpt_dir / "test_results" / "predictions.npy"
     tgt_path = ckpt_dir / "test_results" / "targets.npy"
-    if not pred_path.exists() or not tgt_path.exists():
+    inputs_path = ckpt_dir / "test_results" / "inputs.npy"
+    if not pred_path.exists() or not tgt_path.exists() or not inputs_path.exists():
         raise FileNotFoundError(
-            f"{label} 缺少 test_results/predictions.npy 或 targets.npy，请先运行 evaluate 并开启 SAVE_RESULTS"
+            f"{label} 缺少 test_results/inputs.npy、predictions.npy 或 targets.npy，请先运行 evaluate 并开启 SAVE_RESULTS"
         )
 
     pred = load_memmap_array(pred_path, output_len, num_nodes)
@@ -135,7 +168,7 @@ def evaluate_run(
         group_pred = pred[:, :, mask, :]
         group_tgt = tgt[:, :, mask, :]
 
-        overall_metrics = compute_metrics(group_pred, group_tgt)
+        overall_metrics = compute_metrics_chunked(group_pred, group_tgt, null_val, batch_chunk)
         rows.append(
             {
                 "run": label,
@@ -152,7 +185,7 @@ def evaluate_run(
                 continue
             pred_h = group_pred[:, horizon_idx : horizon_idx + 1, :, :]
             tgt_h = group_tgt[:, horizon_idx : horizon_idx + 1, :, :]
-            horizon_metrics = compute_metrics(pred_h, tgt_h)
+            horizon_metrics = compute_metrics_chunked(pred_h, tgt_h, null_val, batch_chunk)
             rows.append(
                 {
                     "run": label,
@@ -191,6 +224,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional output CSV path. Default: <dataset-dir>/stratified_eval.csv",
     )
+    parser.add_argument(
+        "--batch-chunk",
+        type=int,
+        default=256,
+        help="Chunk size on sample dimension when computing metrics. Default: 256",
+    )
     return parser
 
 
@@ -207,7 +246,7 @@ def main() -> int:
     for spec in args.run:
         label, ckpt_dir = parse_run_spec(spec)
         log(f"评估 {label}: {ckpt_dir}")
-        frames.append(evaluate_run(label, ckpt_dir, dataset_dir, args.horizons))
+        frames.append(evaluate_run(label, ckpt_dir, dataset_dir, args.horizons, args.batch_chunk))
 
     result_df = pd.concat(frames, ignore_index=True)
     result_df = result_df.sort_values(["group", "horizon", "run"]).reset_index(drop=True)
