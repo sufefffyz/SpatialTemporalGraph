@@ -437,6 +437,20 @@ def safe_link(src: Path, dst: Path) -> None:
     dst.symlink_to(rel_src)
 
 
+def find_existing_shared_source(output_root: Path, dataset_base_name: str) -> Path | None:
+    candidate = output_root / f"{dataset_base_name}_phys"
+    required = [
+        candidate / "data.dat",
+        candidate / "temporal_features.npy",
+        candidate / "sensor_ids.npy",
+        candidate / "sensor_ids.txt",
+        candidate / "sensor_catalog.csv",
+    ]
+    if candidate.exists() and all(path.exists() for path in required):
+        return candidate
+    return None
+
+
 def select_daily_files(
     files: list[Path],
     train_ratio: float,
@@ -764,7 +778,9 @@ def main() -> int:
             None if args.full else len(used_dates),
         )
 
-        shared_source_dir = None
+        shared_source_dir = find_existing_shared_source(args.output_root, dataset_base_name)
+        if shared_source_dir is not None:
+            log(f"{dataset_base_name}: 复用已有 payload {shared_source_dir}")
         for graph_type, adj in graph_payloads.items():
             dataset_name = f"{dataset_base_name}_{graph_type}"
             dataset_dir = args.output_root / dataset_name
