@@ -163,7 +163,12 @@ def build_html_table(df: pd.DataFrame, run_order: list[str], include_all: bool) 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Format stratified evaluation CSV into a readable Markdown table.")
     parser.add_argument("--input-csv", required=True, help="Input stratified_eval CSV path")
-    parser.add_argument("--run-order", nargs=2, required=True, help="Two run names in display order, e.g. physical adaptive")
+    parser.add_argument(
+        "--run-order",
+        nargs="+",
+        required=True,
+        help="Run names in display order, e.g. physical adaptive directedscale",
+    )
     parser.add_argument("--include-all", action="store_true", help="Also include ALL group")
     parser.add_argument("--output-prefix", default="", help="Output prefix; default is based on input filename")
     return parser
@@ -171,6 +176,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
+    if len(args.run_order) < 2:
+        raise ValueError("--run-order 至少需要 2 个方法")
     input_csv = resolve_existing_path(args.input_csv, "input csv")
     df = pd.read_csv(input_csv)
 
