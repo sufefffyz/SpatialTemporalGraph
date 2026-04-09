@@ -49,6 +49,15 @@ def dataset_names_for_args(
     return names
 
 
+def model_variants_for_dataset(dataset_name: str, requested_variants: list[str]) -> list[str]:
+    variants = []
+    for variant in requested_variants:
+        if variant == "maskedattn" and not dataset_name.endswith("_distthres"):
+            continue
+        variants.append(variant)
+    return variants
+
+
 def build_run_specs(train_window_days: list[int] | None, include_full_train: bool) -> list[dict[str, object]]:
     specs = []
     if include_full_train or not train_window_days:
@@ -72,10 +81,39 @@ def write_gwnet_config(
     epochs: int,
     batch_size: int,
     train_window_days: int | None,
+    model_variant: str = "gwnet",
 ) -> Path:
     desc = load_json(basicts_root / "datasets" / dataset_name / "desc.json")
-    config_name = f"{dataset_name}_{run_tag}"
+    config_name = (
+        f"{dataset_name}_{run_tag}"
+        if model_variant == "gwnet"
+        else f"{dataset_name}_{model_variant}_{run_tag}"
+    )
     config_path = basicts_root / "baselines" / "GWNet" / f"{config_name}.py"
+    group_name = f"{dataset_name.rsplit('_', 1)[0]}_{run_tag}"
+
+    if model_variant == "maskedattn":
+        arch_import = "MaskedGraphWaveNet"
+        adj_load_line = "_, prior_adj = load_adj('datasets/' + DATA_NAME + '/adj_mx.pkl', 'original')"
+        model_param_extra = textwrap.dedent(
+            """\
+            'prior_adj': torch.tensor(prior_adj, dtype=torch.float32),
+            'attention_embed_dim': 10,
+            'attention_order': 2,
+            """
+        ).strip()
+    else:
+        arch_import = "GraphWaveNet"
+        adj_load_line = "adj_mx, _ = load_adj('datasets/' + DATA_NAME + '/adj_mx.pkl', 'doubletransition')"
+        model_param_extra = textwrap.dedent(
+            """\
+            'supports': [torch.tensor(i, dtype=torch.float32) for i in adj_mx],
+            'gcn_bool': True,
+            'addaptadj': False,
+            'aptinit': None,
+            """
+        ).strip()
+    model_param_extra = textwrap.indent(model_param_extra, "            ")
 
     config_text = textwrap.dedent(
         f"""\
@@ -91,7 +129,7 @@ def write_gwnet_config(
         from basicts.scaler import ZScoreScaler
         from basicts.utils import get_regular_settings, load_adj, load_dataset_desc
 
-        from .arch import GraphWaveNet
+        from .arch import {arch_import}
 
         DATA_NAME = '{dataset_name}'
         regular_settings = get_regular_settings(DATA_NAME)
@@ -102,18 +140,14 @@ def write_gwnet_config(
         RESCALE = regular_settings['RESCALE']
         NULL_VAL = regular_settings['NULL_VAL']
 
-        MODEL_ARCH = GraphWaveNet
-        adj_mx, _ = load_adj('datasets/' + DATA_NAME + '/adj_mx.pkl', 'doubletransition')
+        MODEL_ARCH = {arch_import}
+        {adj_load_line}
         desc = load_dataset_desc(DATA_NAME)
         NUM_NODES = desc['num_nodes']
 
         MODEL_PARAM = {{
             'num_nodes': NUM_NODES,
-            'supports': [torch.tensor(i, dtype=torch.float32) for i in adj_mx],
             'dropout': 0.3,
-            'gcn_bool': True,
-            'addaptadj': False,
-            'aptinit': None,
             'in_dim': 3,
             'out_dim': OUTPUT_LEN,
             'residual_channels': 32,
@@ -123,6 +157,7 @@ def write_gwnet_config(
             'kernel_size': 2,
             'blocks': 4,
             'layers': 2,
+{model_param_extra}
         }}
 
         CFG = EasyDict()
@@ -143,8 +178,8 @@ def write_gwnet_config(
         CFG.WANDB.ENTITY = os.environ.get('WANDB_ENTITY', '')
         CFG.WANDB.MODE = os.environ.get('WANDB_MODE', 'online')
         CFG.WANDB.RUN_NAME = f'{{MODEL_ARCH.__name__}}_{{DATA_NAME}}_{run_tag}'
-        CFG.WANDB.GROUP = DATA_NAME
-        CFG.WANDB.TAGS = ['pems-mvp', '{run_tag}']
+        CFG.WANDB.GROUP = '{group_name}'
+        CFG.WANDB.TAGS = ['pems-mvp', '{run_tag}', '{model_variant}']
 
         CFG.DATASET = EasyDict()
         CFG.DATASET.NAME = DATA_NAME
@@ -355,6 +390,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["phys", "knn", "distthres"],
         help="Graph variants to prepare configs for. Default: phys knn",
     )
+    prepare.add_argument(
+        "--model-variants",
+        nargs="+",
+        default=["gwnet"],
+        choices=["gwnet", "maskedattn"],
+        help="Model variants to prepare. maskedattn only applies to distthres datasets.",
+    )
     prepare.add_argument("--train-window-days", type=int, nargs="*", default=None, help="Optional recent-train windows in days, e.g. 60 30 7")
     prepare.add_argument("--include-full-train", action="store_true", help="Also generate a config using the whole train split")
     prepare.add_argument("--basicts-root", type=Path, default=BASICTS_ROOT, help="BasicTS root")
@@ -402,26 +444,33 @@ def main() -> int:
     if args.command == "prepare-configs":
         generated = []
         for dataset_name in dataset_names:
-            for spec in run_specs:
-                config_path = write_gwnet_config(
-                    basicts_root=args.basicts_root,
-                    dataset_name=dataset_name,
-                    run_tag=str(spec["run_tag"]),
-                    epochs=args.epochs,
-                    batch_size=args.batch_size,
-                    train_window_days=spec["train_window_days"],
-                )
-                generated.append((dataset_name, spec["run_tag"], config_path))
+            for model_variant in model_variants_for_dataset(dataset_name, args.model_variants):
+                for spec in run_specs:
+                    config_path = write_gwnet_config(
+                        basicts_root=args.basicts_root,
+                        dataset_name=dataset_name,
+                        run_tag=str(spec["run_tag"]),
+                        epochs=args.epochs,
+                        batch_size=args.batch_size,
+                        train_window_days=spec["train_window_days"],
+                        model_variant=model_variant,
+                    )
+                    generated.append((dataset_name, model_variant, spec["run_tag"], config_path))
 
         log("已生成 config:")
-        for dataset_name, run_tag, config_path in generated:
-            log(f"- {dataset_name} [{run_tag}]: {config_path}")
+        for dataset_name, model_variant, run_tag, config_path in generated:
+            log(f"- {dataset_name} [{model_variant}/{run_tag}]: {config_path}")
 
         log("")
         log(f"训练命令（在 {args.basicts_root} 下执行）:")
         log(f"cd {args.basicts_root}")
-        for dataset_name, run_tag, _ in generated:
-            log(f"python experiments/train.py -c baselines/GWNet/{dataset_name}_{run_tag}.py -g {args.gpus}")
+        for dataset_name, model_variant, run_tag, _ in generated:
+            config_name = (
+                f"{dataset_name}_{run_tag}"
+                if model_variant == "gwnet"
+                else f"{dataset_name}_{model_variant}_{run_tag}"
+            )
+            log(f"python experiments/train.py -c baselines/GWNet/{config_name}.py -g {args.gpus}")
         return 0
 
     args.output_root = args.output_root.expanduser().resolve()
