@@ -59,6 +59,17 @@ def highlight_best(values: list[float], lower_better: bool = True, markdown: boo
     return formatted
 
 
+def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    flat = df.copy()
+    flat.columns = [
+        "_".join(str(part) for part in col if str(part) != "").strip("_")
+        if isinstance(col, tuple)
+        else str(col)
+        for col in flat.columns
+    ]
+    return flat
+
+
 def build_readable_table(df: pd.DataFrame, run_order: list[str], include_all: bool) -> pd.DataFrame:
     group_order = GROUP_ORDER if include_all else [g for g in GROUP_ORDER if g != "ALL"]
     df = df[df["group"].isin(group_order)].copy()
@@ -71,7 +82,7 @@ def build_readable_table(df: pd.DataFrame, run_order: list[str], include_all: bo
     wide = wide.swaplevel(0, 1, axis=1)
     desired_cols = pd.MultiIndex.from_product([run_order, METRIC_ORDER])
     wide = wide.reindex(columns=desired_cols)
-    wide = wide.reset_index()
+    wide = flatten_columns(wide.reset_index())
 
     has_two_runs = len(run_order) == 2
     rows = []
@@ -82,7 +93,7 @@ def build_readable_table(df: pd.DataFrame, run_order: list[str], include_all: bo
             "Nodes": int(row["num_nodes"]),
         }
         for metric in METRIC_ORDER:
-            values = [row[(run, metric)] for run in run_order]
+            values = [row[f"{run}_{metric}"] for run in run_order]
             highlighted = highlight_best(values, lower_better=True, markdown=True)
             for run, val in zip(run_order, highlighted):
                 row_dict[f"{run}_{metric}"] = val
@@ -109,7 +120,7 @@ def build_html_table(df: pd.DataFrame, run_order: list[str], include_all: bool) 
     wide = wide.swaplevel(0, 1, axis=1)
     desired_cols = pd.MultiIndex.from_product([run_order, METRIC_ORDER])
     wide = wide.reindex(columns=desired_cols)
-    wide = wide.reset_index().sort_values(["group", "horizon"]).reset_index(drop=True)
+    wide = flatten_columns(wide.reset_index()).sort_values(["group", "horizon"]).reset_index(drop=True)
 
     rowspans = wide.groupby("group").size().to_dict()
     html_parts = [
@@ -150,7 +161,7 @@ def build_html_table(df: pd.DataFrame, run_order: list[str], include_all: bool) 
         html_parts.append(f"<td class='horizon'>{html.escape(str(row['horizon']))}</td>")
         html_parts.append(f"<td>{int(row['num_nodes'])}</td>")
         for metric in METRIC_ORDER:
-            values = [row[(run, metric)] for run in run_order]
+            values = [row[f"{run}_{metric}"] for run in run_order]
             highlighted = highlight_best(values, lower_better=True, markdown=False)
             for val in highlighted:
                 html_parts.append(f"<td>{val}</td>")
