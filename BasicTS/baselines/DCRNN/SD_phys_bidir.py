@@ -12,7 +12,7 @@ sys.path.append(os.path.abspath(__file__ + "/../../.."))
 
 from basicts.data import TimeSeriesForecastingDataset
 from basicts.metrics import masked_mae, masked_mape, masked_rmse
-from basicts.runners import SimpleTimeSeriesForecastingRunner
+from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
 from basicts.utils.adjacent_matrix_norm import calculate_transition_matrix
 from basicts.utils.serialization import load_pkl
@@ -64,7 +64,7 @@ NUM_EPOCHS = 30
 CFG = EasyDict()
 CFG.DESCRIPTION = "DCRNN on SD_phys with undirected physical graph"
 CFG.GPU_NUM = 1
-CFG.RUNNER = SimpleTimeSeriesForecastingRunner
+CFG.RUNNER = WandBTimeSeriesForecastingRunner
 CFG._ = random.randint(-1000000, 1000000)
 
 CFG.ENV = EasyDict()

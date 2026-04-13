@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath(__file__ + "/../../.."))
 
 from basicts.data import TimeSeriesForecastingDataset
 from basicts.metrics import masked_mae, masked_mape, masked_rmse
-from basicts.runners import SimpleTimeSeriesForecastingRunner
+from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
 from basicts.utils import load_adj
 
@@ -48,7 +48,7 @@ NUM_EPOCHS = 30
 CFG = EasyDict()
 CFG.DESCRIPTION = "DCRNN on LargeST SD original graph"
 CFG.GPU_NUM = 1
-CFG.RUNNER = SimpleTimeSeriesForecastingRunner
+CFG.RUNNER = WandBTimeSeriesForecastingRunner
 CFG._ = random.randint(-1000000, 1000000)
 
 CFG.ENV = EasyDict()
