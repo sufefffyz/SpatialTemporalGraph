@@ -9,7 +9,7 @@ GPU="${1:-0}"
 shift || true
 
 if [ "$#" -eq 0 ]; then
-  EXPERIMENTS=(DCRNN_original GWNet_original)
+  EXPERIMENTS=(DCRNN_original GWNet_distthre)
 else
   EXPERIMENTS=("$@")
 fi
@@ -22,9 +22,13 @@ for EXPERIMENT in "${EXPERIMENTS[@]}"; do
       CONFIG="baselines/DCRNN/SD.py"
       LABEL="DCRNN_original"
       ;;
-    GWNet|GWNET|gwnet|GWNet_original)
+    GWNet_distthre)
+      CONFIG="baselines/GWNet/SD_fixed.py"
+      LABEL="GWNet_distthre"
+      ;;
+    GWNet|GWNET|gwnet|GWNet_original|GWNet_original_adaptive)
       CONFIG="baselines/GWNet/SD.py"
-      LABEL="GWNet_original"
+      LABEL="GWNet_original_adaptive"
       ;;
     *)
       echo "Unsupported experiment: ${EXPERIMENT}" >&2

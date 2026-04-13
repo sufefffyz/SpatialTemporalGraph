@@ -29,9 +29,9 @@ if [[ "$#" -eq 0 ]]; then
     "phys:DCRNN_bidir"
     "phys:GWNet_directed"
     "phys:GWNet_bidir"
-    "phys:GWNet_adaptive"
+    "phys:GWNet_phys_adaptive"
     "large:DCRNN_original"
-    "large:GWNet_original"
+    "large:GWNet_distthre"
   )
 else
   TASKS=("$@")

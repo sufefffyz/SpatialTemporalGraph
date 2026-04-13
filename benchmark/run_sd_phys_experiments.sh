@@ -14,7 +14,7 @@ if [ "$#" -eq 0 ]; then
     DCRNN_bidir
     GWNet_directed
     GWNet_bidir
-    GWNet_adaptive
+    GWNet_phys_adaptive
   )
 else
   EXPERIMENTS=("$@")
@@ -32,9 +32,13 @@ for EXPERIMENT in "${EXPERIMENTS[@]}"; do
       CONFIG="baselines/DCRNN/SD_phys_bidir.py"
       LABEL="DCRNN_bidir"
       ;;
-    GWNet|GWNET|gwnet|GWNet_adaptive)
+    GWNet|GWNET|gwnet|GWNet_phys_adaptive)
+      CONFIG="baselines/GWNet/SD_phys_adaptive_plus.py"
+      LABEL="GWNet_phys_adaptive"
+      ;;
+    GWNet_adaptive_only)
       CONFIG="baselines/GWNet/SD_phys_adaptive.py"
-      LABEL="GWNet_adaptive"
+      LABEL="GWNet_adaptive_only"
       ;;
     GWNet_directed)
       CONFIG="baselines/GWNet/SD_phys_directed.py"
