@@ -12,6 +12,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CHECK_INTERVAL="${CHECK_INTERVAL:-60}"
+MAX_JOBS_PER_GPU="${MAX_JOBS_PER_GPU:-1}"
+POST_LAUNCH_WAIT="${POST_LAUNCH_WAIT:-15}"
 LOG_DIR="${REPO_ROOT}/benchmark/logs/sd_queue"
 mkdir -p "${LOG_DIR}"
 
@@ -42,6 +44,16 @@ fi
 
 if ! [[ "${CHECK_INTERVAL}" =~ ^[0-9]+$ ]] || [[ "${CHECK_INTERVAL}" -le 0 ]]; then
   echo "CHECK_INTERVAL must be a positive integer, got: ${CHECK_INTERVAL}" >&2
+  exit 1
+fi
+
+if ! [[ "${MAX_JOBS_PER_GPU}" =~ ^[0-9]+$ ]] || [[ "${MAX_JOBS_PER_GPU}" -le 0 ]]; then
+  echo "MAX_JOBS_PER_GPU must be a positive integer, got: ${MAX_JOBS_PER_GPU}" >&2
+  exit 1
+fi
+
+if ! [[ "${POST_LAUNCH_WAIT}" =~ ^[0-9]+$ ]] || [[ "${POST_LAUNCH_WAIT}" -lt 0 ]]; then
+  echo "POST_LAUNCH_WAIT must be a non-negative integer, got: ${POST_LAUNCH_WAIT}" >&2
   exit 1
 fi
 
@@ -84,9 +96,90 @@ build_command() {
   esac
 }
 
-declare -A GPU_PID=()
-declare -A GPU_TASK=()
-declare -A GPU_LOG=()
+join_by_pipe() {
+  local IFS='|'
+  echo "$*"
+}
+
+active_count() {
+  local gpu="$1"
+  local pid_blob="${GPU_PIDS[$gpu]:-}"
+  if [[ -z "${pid_blob}" ]]; then
+    echo 0
+    return
+  fi
+  read -r -a pid_array <<< "${pid_blob}"
+  echo "${#pid_array[@]}"
+}
+
+cleanup_gpu_state() {
+  local gpu="$1"
+  local pid_blob="${GPU_PIDS[$gpu]:-}"
+  local task_blob="${GPU_TASKS[$gpu]:-}"
+  local log_blob="${GPU_LOGS[$gpu]:-}"
+
+  if [[ -z "${pid_blob}" ]]; then
+    return
+  fi
+
+  read -r -a pid_array <<< "${pid_blob}"
+  local old_ifs="${IFS}"
+  IFS='|' read -r -a task_array <<< "${task_blob}"
+  IFS='|' read -r -a log_array <<< "${log_blob}"
+  IFS="${old_ifs}"
+
+  local kept_pids=()
+  local kept_tasks=()
+  local kept_logs=()
+  local idx
+  for idx in "${!pid_array[@]}"; do
+    local pid="${pid_array[$idx]}"
+    local task="${task_array[$idx]:-unknown}"
+    local log="${log_array[$idx]:-unknown}"
+    if kill -0 "${pid}" 2>/dev/null; then
+      kept_pids+=("${pid}")
+      kept_tasks+=("${task}")
+      kept_logs+=("${log}")
+    else
+      echo "$(timestamp) Finished ${task} on GPU ${gpu} (log: ${log})"
+    fi
+  done
+
+  if [[ "${#kept_pids[@]}" -eq 0 ]]; then
+    unset GPU_PIDS["$gpu"]
+    unset GPU_TASKS["$gpu"]
+    unset GPU_LOGS["$gpu"]
+  else
+    GPU_PIDS["$gpu"]="${kept_pids[*]}"
+    GPU_TASKS["$gpu"]="$(join_by_pipe "${kept_tasks[@]}")"
+    GPU_LOGS["$gpu"]="$(join_by_pipe "${kept_logs[@]}")"
+  fi
+}
+
+append_gpu_state() {
+  local gpu="$1"
+  local pid="$2"
+  local task="$3"
+  local log_file="$4"
+
+  local pid_blob="${GPU_PIDS[$gpu]:-}"
+  local task_blob="${GPU_TASKS[$gpu]:-}"
+  local log_blob="${GPU_LOGS[$gpu]:-}"
+
+  if [[ -z "${pid_blob}" ]]; then
+    GPU_PIDS["$gpu"]="${pid}"
+    GPU_TASKS["$gpu"]="${task}"
+    GPU_LOGS["$gpu"]="${log_file}"
+  else
+    GPU_PIDS["$gpu"]="${pid_blob} ${pid}"
+    GPU_TASKS["$gpu"]="${task_blob}|${task}"
+    GPU_LOGS["$gpu"]="${log_blob}|${log_file}"
+  fi
+}
+
+declare -A GPU_PIDS=()
+declare -A GPU_TASKS=()
+declare -A GPU_LOGS=()
 
 pending_index=0
 total_tasks="${#TASKS[@]}"
@@ -95,24 +188,20 @@ echo "Queue started at $(timestamp)"
 echo "GPUs           : ${GPUS[*]}"
 echo "MIN_FREE_MB    : ${MIN_FREE_MB}"
 echo "CHECK_INTERVAL : ${CHECK_INTERVAL}"
+echo "MAX_JOBS_PER_GPU: ${MAX_JOBS_PER_GPU}"
+echo "POST_LAUNCH_WAIT: ${POST_LAUNCH_WAIT}"
 echo "Tasks          : ${TASKS[*]}"
 echo "Log dir        : ${LOG_DIR}"
 
 while true; do
   for gpu in "${GPUS[@]}"; do
-    pid="${GPU_PID[$gpu]:-}"
-    if [[ -n "${pid}" ]] && ! kill -0 "${pid}" 2>/dev/null; then
-      echo "$(timestamp) Finished ${GPU_TASK[$gpu]} on GPU ${gpu} (log: ${GPU_LOG[$gpu]})"
-      unset GPU_PID["$gpu"]
-      unset GPU_TASK["$gpu"]
-      unset GPU_LOG["$gpu"]
-    fi
+    cleanup_gpu_state "${gpu}"
   done
 
   if [[ "${pending_index}" -ge "${total_tasks}" ]]; then
     all_idle=1
     for gpu in "${GPUS[@]}"; do
-      if [[ -n "${GPU_PID[$gpu]:-}" ]]; then
+      if [[ "$(active_count "${gpu}")" -gt 0 ]]; then
         all_idle=0
         break
       fi
@@ -129,7 +218,7 @@ while true; do
     if [[ "${pending_index}" -ge "${total_tasks}" ]]; then
       break
     fi
-    if [[ -n "${GPU_PID[$gpu]:-}" ]]; then
+    if [[ "$(active_count "${gpu}")" -ge "${MAX_JOBS_PER_GPU}" ]]; then
       continue
     fi
 
@@ -147,16 +236,16 @@ while true; do
     pending_index=$((pending_index + 1))
     log_file="${LOG_DIR}/$(date +%Y%m%d-%H%M%S)_gpu${gpu}_$(sanitize_task_name "${task}").log"
     cmd="$(build_command "${task}" "${gpu}")"
-    echo "$(timestamp) Launch ${task} on GPU ${gpu} (free=${free_mb}MB)"
+    echo "$(timestamp) Launch ${task} on GPU ${gpu} (free=${free_mb}MB, active=$(active_count "${gpu}")/${MAX_JOBS_PER_GPU})"
     nohup bash -lc "${cmd}" > "${log_file}" 2>&1 &
-    GPU_PID["$gpu"]=$!
-    GPU_TASK["$gpu"]="${task}"
-    GPU_LOG["$gpu"]="${log_file}"
+    append_gpu_state "${gpu}" "$!" "${task}" "${log_file}"
     launched_any=1
   done
 
   if [[ "${launched_any}" -eq 0 ]]; then
     sleep "${CHECK_INTERVAL}"
+  elif [[ "${POST_LAUNCH_WAIT}" -gt 0 ]]; then
+    sleep "${POST_LAUNCH_WAIT}"
   fi
 done
 
