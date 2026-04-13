@@ -9,7 +9,7 @@ GPU="${1:-0}"
 shift || true
 
 if [ "$#" -eq 0 ]; then
-  EXPERIMENTS=(DCRNN_original GWNet_distthre)
+  EXPERIMENTS=(DCRNN_distthre GWNet_distthre)
 else
   EXPERIMENTS=("$@")
 fi
@@ -18,9 +18,9 @@ cd "${BASICTS_ROOT}"
 
 for EXPERIMENT in "${EXPERIMENTS[@]}"; do
   case "${EXPERIMENT}" in
-    DCRNN|DCRNN_original)
+    DCRNN|DCRNN_original|DCRNN_distthre)
       CONFIG="baselines/DCRNN/SD.py"
-      LABEL="DCRNN_original"
+      LABEL="DCRNN_distthre"
       ;;
     GWNet_distthre)
       CONFIG="baselines/GWNet/SD_fixed.py"

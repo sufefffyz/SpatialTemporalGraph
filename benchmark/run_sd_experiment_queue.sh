@@ -30,7 +30,7 @@ if [[ "$#" -eq 0 ]]; then
     "phys:GWNet_directed"
     "phys:GWNet_bidir"
     "phys:GWNet_phys_adaptive"
-    "large:DCRNN_original"
+    "large:DCRNN_distthre"
     "large:GWNet_distthre"
   )
 else
