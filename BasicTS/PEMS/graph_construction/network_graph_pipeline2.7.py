@@ -289,6 +289,14 @@ def save_phase0_correction_map(sensors_df, correction_details_df, output_dir, po
 
     details_by_id = correction_details_df.set_index("sensor_id")
 
+    def detail_value(sensor_id, column, default=np.nan):
+        if column not in details_by_id.columns or sensor_id not in details_by_id.index:
+            return default
+        value = details_by_id.loc[sensor_id, column]
+        if isinstance(value, pd.Series):
+            return value.iloc[0]
+        return value
+
     if postmile_gdf is not None and len(postmile_gdf) > 0:
         anchor_rows = []
         for _, detail in correction_details_df.iterrows():
@@ -353,11 +361,11 @@ def save_phase0_correction_map(sensors_df, correction_details_df, output_dir, po
         correction_dist_m = sensor.get("correction_dist_m")
         status = "unknown"
         if sensor_id in details_by_id.index:
-            status = details_by_id.at[sensor_id, "status"]
-            lower_anchor_lat = pd.to_numeric(details_by_id.at[sensor_id, "lower_anchor_lat"], errors="coerce")
-            lower_anchor_lon = pd.to_numeric(details_by_id.at[sensor_id, "lower_anchor_lon"], errors="coerce")
-            upper_anchor_lat = pd.to_numeric(details_by_id.at[sensor_id, "upper_anchor_lat"], errors="coerce")
-            upper_anchor_lon = pd.to_numeric(details_by_id.at[sensor_id, "upper_anchor_lon"], errors="coerce")
+            status = detail_value(sensor_id, "status", "unknown")
+            lower_anchor_lat = pd.to_numeric(detail_value(sensor_id, "lower_anchor_lat"), errors="coerce")
+            lower_anchor_lon = pd.to_numeric(detail_value(sensor_id, "lower_anchor_lon"), errors="coerce")
+            upper_anchor_lat = pd.to_numeric(detail_value(sensor_id, "upper_anchor_lat"), errors="coerce")
+            upper_anchor_lon = pd.to_numeric(detail_value(sensor_id, "upper_anchor_lon"), errors="coerce")
         else:
             lower_anchor_lat = np.nan
             lower_anchor_lon = np.nan
