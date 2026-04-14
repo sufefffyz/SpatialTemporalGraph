@@ -10,11 +10,18 @@ shift || true
 
 if [ "$#" -eq 0 ]; then
   EXPERIMENTS=(
-    DCRNN_directed
-    DCRNN_bidir
-    GWNet_directed
-    GWNet_bidir
-    GWNet_phys_adaptive
+    DCRNN_directed_full
+    DCRNN_directed_1m
+    DCRNN_bidir_full
+    DCRNN_bidir_1m
+    GWNet_directed_full
+    GWNet_directed_1m
+    GWNet_bidir_full
+    GWNet_bidir_1m
+    GWNet_adaptive_only_full
+    GWNet_adaptive_only_1m
+    GWNet_phys_adaptive_full
+    GWNet_phys_adaptive_1m
   )
 else
   EXPERIMENTS=("$@")
@@ -23,30 +30,39 @@ fi
 cd "${BASICTS_ROOT}"
 
 for EXPERIMENT in "${EXPERIMENTS[@]}"; do
+  WINDOW="full"
   case "${EXPERIMENT}" in
-    DCRNN|DCRNN_directed)
-      CONFIG="baselines/DCRNN/SD_phys.py"
-      LABEL="DCRNN_directed"
+    *_1m)
+      WINDOW="1m"
       ;;
-    DCRNN_bidir)
-      CONFIG="baselines/DCRNN/SD_phys_bidir.py"
-      LABEL="DCRNN_bidir"
+    *_full)
+      WINDOW="full"
       ;;
-    GWNet|GWNET|gwnet|GWNet_phys_adaptive)
-      CONFIG="baselines/GWNet/SD_phys_adaptive_plus.py"
-      LABEL="GWNet_phys_adaptive"
+  esac
+  case "${EXPERIMENT}" in
+    DCRNN|DCRNN_directed|DCRNN_directed_full|DCRNN_directed_1m)
+      CONFIG="baselines/DCRNN/SD_LargeST_${WINDOW}_physical_forward.py"
+      LABEL="DCRNN_directed_${WINDOW}"
       ;;
-    GWNet_adaptive_only)
-      CONFIG="baselines/GWNet/SD_phys_adaptive.py"
-      LABEL="GWNet_adaptive_only"
+    DCRNN_bidir|DCRNN_bidir_full|DCRNN_bidir_1m)
+      CONFIG="baselines/DCRNN/SD_LargeST_${WINDOW}_physical_bidir.py"
+      LABEL="DCRNN_bidir_${WINDOW}"
       ;;
-    GWNet_directed)
-      CONFIG="baselines/GWNet/SD_phys_directed.py"
-      LABEL="GWNet_directed"
+    GWNet|GWNET|gwnet|GWNet_phys_adaptive|GWNet_phys_adaptive_full|GWNet_phys_adaptive_1m)
+      CONFIG="baselines/GWNet/SD_LargeST_${WINDOW}_adaptive_plus_phys.py"
+      LABEL="GWNet_phys_adaptive_${WINDOW}"
       ;;
-    GWNet_bidir)
-      CONFIG="baselines/GWNet/SD_phys_bidir.py"
-      LABEL="GWNet_bidir"
+    GWNet_adaptive_only|GWNet_adaptive_only_full|GWNet_adaptive_only_1m)
+      CONFIG="baselines/GWNet/SD_LargeST_${WINDOW}_adaptive_only.py"
+      LABEL="GWNet_adaptive_only_${WINDOW}"
+      ;;
+    GWNet_directed|GWNet_directed_full|GWNet_directed_1m)
+      CONFIG="baselines/GWNet/SD_LargeST_${WINDOW}_physical_forward.py"
+      LABEL="GWNet_directed_${WINDOW}"
+      ;;
+    GWNet_bidir|GWNet_bidir_full|GWNet_bidir_1m)
+      CONFIG="baselines/GWNet/SD_LargeST_${WINDOW}_physical_bidir.py"
+      LABEL="GWNet_bidir_${WINDOW}"
       ;;
     *)
       echo "Unsupported experiment: ${EXPERIMENT}" >&2

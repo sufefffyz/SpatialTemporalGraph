@@ -9,7 +9,12 @@ GPU="${1:-0}"
 shift || true
 
 if [ "$#" -eq 0 ]; then
-  EXPERIMENTS=(DCRNN_distthre GWNet_distthre)
+  EXPERIMENTS=(
+    DCRNN_distthre_full
+    DCRNN_distthre_1m
+    GWNet_distthre_full
+    GWNet_distthre_1m
+  )
 else
   EXPERIMENTS=("$@")
 fi
@@ -17,18 +22,27 @@ fi
 cd "${BASICTS_ROOT}"
 
 for EXPERIMENT in "${EXPERIMENTS[@]}"; do
+  WINDOW="full"
   case "${EXPERIMENT}" in
-    DCRNN|DCRNN_original|DCRNN_distthre)
-      CONFIG="baselines/DCRNN/SD.py"
-      LABEL="DCRNN_distthre"
+    *_1m)
+      WINDOW="1m"
       ;;
-    GWNet_distthre)
-      CONFIG="baselines/GWNet/SD_fixed.py"
-      LABEL="GWNet_distthre"
+    *_full)
+      WINDOW="full"
+      ;;
+  esac
+  case "${EXPERIMENT}" in
+    DCRNN|DCRNN_original|DCRNN_distthre|DCRNN_distthre_full|DCRNN_distthre_1m)
+      CONFIG="baselines/DCRNN/SD_LargeST_${WINDOW}_largeST_original.py"
+      LABEL="DCRNN_distthre_${WINDOW}"
+      ;;
+    GWNet_distthre|GWNet_distthre_full|GWNet_distthre_1m)
+      CONFIG="baselines/GWNet/SD_LargeST_${WINDOW}_largeST_original.py"
+      LABEL="GWNet_distthre_${WINDOW}"
       ;;
     GWNet|GWNET|gwnet|GWNet_original|GWNet_original_adaptive)
-      CONFIG="baselines/GWNet/SD.py"
-      LABEL="GWNet_original_adaptive"
+      CONFIG="baselines/GWNet/SD_LargeST_${WINDOW}_largeST_original.py"
+      LABEL="GWNet_original_adaptive_${WINDOW}"
       ;;
     *)
       echo "Unsupported experiment: ${EXPERIMENT}" >&2
