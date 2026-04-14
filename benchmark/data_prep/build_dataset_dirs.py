@@ -17,9 +17,7 @@ DEFAULT_WINDOWS = ("full", "1m")
 DEFAULT_GRAPHS = (
     "largeST_original",
     "physical_forward",
-    "physical_reverse",
     "physical_bidir",
-    "physical_ML_only",
     "adaptive_only",
     "adaptive_plus_phys",
 )
