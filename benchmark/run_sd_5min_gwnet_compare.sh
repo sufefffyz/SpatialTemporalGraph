@@ -2,6 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BASICTS_ROOT="${REPO_ROOT}/BasicTS"
 
 GPU="${1:-0}"
 shift || true
@@ -23,11 +25,14 @@ for WINDOW in "${WINDOWS[@]}"; do
   esac
 done
 
+GRAPHS=(distthre directed undirected adaptive adaptive_plus_phys)
+
+cd "${BASICTS_ROOT}"
+
 for WINDOW in "${WINDOWS[@]}"; do
-  bash "${SCRIPT_DIR}/run_sd_largest_experiments.sh" "${GPU}" "GWNet_distthre_${WINDOW}"
-  bash "${SCRIPT_DIR}/run_sd_phys_experiments.sh" "${GPU}" \
-    "GWNet_directed_${WINDOW}" \
-    "GWNet_bidir_${WINDOW}" \
-    "GWNet_adaptive_only_${WINDOW}" \
-    "GWNet_phys_adaptive_${WINDOW}"
+  for GRAPH in "${GRAPHS[@]}"; do
+    echo "[$(date '+%F %T')] Running GWNet on SD_5min: graph=${GRAPH}, window=${WINDOW}"
+    SD_BENCH_GRAPH="${GRAPH}" SD_BENCH_WINDOW="${WINDOW}" \
+      python experiments/train.py -c ../benchmark/configs/GWNet_SD_5min.py -g "${GPU}"
+  done
 done

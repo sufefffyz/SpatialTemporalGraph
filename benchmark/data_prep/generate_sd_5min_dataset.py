@@ -12,7 +12,7 @@ import pandas as pd
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_INPUT_DIR = REPO_ROOT / "datasets" / "SD_5min_raw"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "datasets" / "SD_5min_full"
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD_5min_full"
 DEFAULT_EXISTING_SD_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD"
 DEFAULT_EXISTING_SD_PHYS_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD_phys"
 DEFAULT_GRAPH_ROOT = REPO_ROOT / "graphs" / "SD"
@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input-len", type=int, default=12, help="Sequence input length")
     parser.add_argument("--output-len", type=int, default=12, help="Sequence output length")
     parser.add_argument("--steps-per-day", type=int, default=288, help="5-minute steps per day")
+    parser.add_argument("--days-1m", type=int, default=31, help="Train days kept for the 1m split")
     parser.add_argument(
         "--graph-root",
         type=Path,
@@ -193,6 +194,25 @@ def dump_memmap(path: Path, array: np.ndarray) -> None:
     del fp
 
 
+def build_split_indices(total_len: int, days_1m: int = 31, steps_per_day: int = 288) -> dict[str, dict[str, np.ndarray]]:
+    valid_len = int(total_len * 0.2)
+    test_len = int(total_len * 0.2)
+    full_train_len = total_len - valid_len - test_len
+    month_train_len = min(days_1m * steps_per_day, full_train_len)
+
+    full = {
+        "train_idx": np.arange(0, full_train_len, dtype=np.int64),
+        "val_idx": np.arange(full_train_len, full_train_len + valid_len, dtype=np.int64),
+        "test_idx": np.arange(full_train_len + valid_len, total_len, dtype=np.int64),
+    }
+    onemonth = {
+        "train_idx": np.arange(full_train_len - month_train_len, full_train_len, dtype=np.int64),
+        "val_idx": full["val_idx"].copy(),
+        "test_idx": full["test_idx"].copy(),
+    }
+    return {"full": full, "1m": onemonth}
+
+
 def main() -> None:
     args = parse_args()
     input_dir = ensure_exists(args.input_dir, "Input raw bundle directory")
@@ -253,6 +273,14 @@ def main() -> None:
         with (output_dir / "adj_mx_physical_directed.pkl").open("wb") as fp:
             pickle.dump(physical_adj, fp, protocol=4)
 
+    split_variants = build_split_indices(
+        total_len=data.shape[0],
+        days_1m=args.days_1m,
+        steps_per_day=args.steps_per_day,
+    )
+    for split_name, split_payload in split_variants.items():
+        np.savez_compressed(output_dir / f"split_indices_{split_name}.npz", **split_payload)
+
     graph_exports = export_graph_bundle(
         graph_root=graph_root,
         sensor_ids=sensor_ids,
@@ -291,6 +319,10 @@ def main() -> None:
         "meta_path": str(output_dir / "meta.csv"),
         "adj_path": str(output_dir / "adj_mx_largeST_original.pkl"),
         "physical_adj_path": str(output_dir / "adj_mx_physical_directed.pkl") if physical_adj is not None else None,
+        "split_files": {
+            split_name: str(output_dir / f"split_indices_{split_name}.npz")
+            for split_name in split_variants
+        },
         "graph_exports": graph_exports,
     }
     (output_dir / "build_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
