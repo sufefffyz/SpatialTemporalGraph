@@ -25,7 +25,7 @@ for WINDOW in "${WINDOWS[@]}"; do
   esac
 done
 
-GRAPHS=(distthre directed undirected adaptive adaptive_plus_phys)
+GRAPHS=(distthre phys_dir phys_bidir adaptive phys+adaptive distthre+adaptive)
 
 cd "${BASICTS_ROOT}"
 

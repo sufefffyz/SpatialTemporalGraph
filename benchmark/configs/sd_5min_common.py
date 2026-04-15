@@ -32,10 +32,14 @@ SEED = int(os.environ.get("SD_BENCH_SEED", "42"))
 GRAPH_PATHS = {
     "distthre": GRAPH_ROOT / "adj_mx_largeST_original.pkl",
     "directed": GRAPH_ROOT / "adj_mx_physical_forward.pkl",
+    "phys_dir": GRAPH_ROOT / "adj_mx_physical_forward.pkl",
     "undirected": GRAPH_ROOT / "adj_mx_physical_bidir.pkl",
+    "phys_bidir": GRAPH_ROOT / "adj_mx_physical_bidir.pkl",
     "adaptive": None,
     "adaptive_only": None,
     "adaptive_plus_phys": GRAPH_ROOT / "adj_mx_physical_forward.pkl",
+    "phys+adaptive": GRAPH_ROOT / "adj_mx_physical_forward.pkl",
+    "distthre+adaptive": GRAPH_ROOT / "adj_mx_largeST_original.pkl",
 }
 
 
@@ -135,11 +139,11 @@ def build_gwnet_cfg() -> EasyDict:
     graph_path = GRAPH_PATHS[GRAPH_VARIANT]
     supports = None
     addaptadj = True
-    if GRAPH_VARIANT in {"distthre", "directed", "undirected"}:
+    if GRAPH_VARIANT in {"distthre", "directed", "phys_dir", "undirected", "phys_bidir"}:
         adj_mx, _ = load_adj(str(graph_path), "doubletransition")
         supports = [torch.tensor(item, dtype=torch.float32) for item in adj_mx]
         addaptadj = False
-    elif GRAPH_VARIANT == "adaptive_plus_phys":
+    elif GRAPH_VARIANT in {"adaptive_plus_phys", "phys+adaptive", "distthre+adaptive"}:
         adj_mx, _ = load_adj(str(graph_path), "doubletransition")
         supports = [torch.tensor(item, dtype=torch.float32) for item in adj_mx]
         addaptadj = True
