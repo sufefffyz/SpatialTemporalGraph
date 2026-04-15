@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Output dataset directory")
     parser.add_argument(
         "--input-h5-name",
-        default="sd_his_5min_2019.h5",
+        default="sd_his_2019.h5",
         help="Input HDF filename inside input-dir",
     )
     parser.add_argument("--dataset-name", default="SD_5min_full", help="Dataset name written into desc.json")
