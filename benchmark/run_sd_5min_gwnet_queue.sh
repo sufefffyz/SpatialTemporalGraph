@@ -82,8 +82,8 @@ build_command() {
   local gpu="$2"
   local graph="${task%%:*}"
   local window="${task#*:}"
-  printf 'cd %q && SD_BENCH_GRAPH=%q SD_BENCH_WINDOW=%q python experiments/train.py -c ../benchmark/configs/GWNet_SD_5min.py -g %q' \
-    "${BASICTS_ROOT}" "${graph}" "${window}" "${gpu}"
+  printf 'cd %q && PYTHONPATH=%q SD_BENCH_GRAPH=%q SD_BENCH_WINDOW=%q python experiments/train.py -c benchmark.configs.GWNet_SD_5min -g %q' \
+    "${BASICTS_ROOT}" "${REPO_ROOT}:${BASICTS_ROOT}:${PYTHONPATH:-}" "${graph}" "${window}" "${gpu}"
 }
 
 join_by_pipe() {

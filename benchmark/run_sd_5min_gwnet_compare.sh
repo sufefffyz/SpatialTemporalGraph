@@ -32,7 +32,8 @@ cd "${BASICTS_ROOT}"
 for WINDOW in "${WINDOWS[@]}"; do
   for GRAPH in "${GRAPHS[@]}"; do
     echo "[$(date '+%F %T')] Running GWNet on SD_5min: graph=${GRAPH}, window=${WINDOW}"
-    SD_BENCH_GRAPH="${GRAPH}" SD_BENCH_WINDOW="${WINDOW}" \
-      python experiments/train.py -c ../benchmark/configs/GWNet_SD_5min.py -g "${GPU}"
+    PYTHONPATH="${REPO_ROOT}:${BASICTS_ROOT}:${PYTHONPATH:-}" \
+      SD_BENCH_GRAPH="${GRAPH}" SD_BENCH_WINDOW="${WINDOW}" \
+      python experiments/train.py -c benchmark.configs.GWNet_SD_5min -g "${GPU}"
   done
 done
