@@ -34,6 +34,12 @@ def parse_args() -> argparse.Namespace:
         default=["GWNet", "DCRNN"],
         help="Model directories to scan under checkpoints root.",
     )
+    parser.add_argument(
+        "--result-path",
+        action="append",
+        default=[],
+        help="Explicit result path(s): either a test_metrics.json file or a run directory containing it. Can be repeated.",
+    )
     return parser.parse_args()
 
 
@@ -73,6 +79,41 @@ def get_metric(payload: dict, section: str, key: str):
     return payload.get(section, {}).get(key)
 
 
+def infer_model_from_path(path: Path) -> str | None:
+    parts = [part.lower() for part in path.parts]
+    if "gwnet" in parts:
+        return "GWNet"
+    if "dcrnn" in parts:
+        return "DCRNN"
+    return None
+
+
+def build_row(model_name: str, metrics_path: Path, path_text: str) -> dict | None:
+    experiment = classify_experiment(model_name, path_text)
+    if experiment is None:
+        return None
+
+    payload = load_metrics(metrics_path)
+    return {
+        "model": model_name,
+        "experiment": experiment,
+        "run_dir": str(metrics_path.parent),
+        "metrics_path": str(metrics_path),
+        "overall_MAE": get_metric(payload, "overall", "MAE"),
+        "overall_RMSE": get_metric(payload, "overall", "RMSE"),
+        "overall_MAPE": get_metric(payload, "overall", "MAPE"),
+        "h3_MAE": get_metric(payload, "horizon_3", "MAE"),
+        "h3_RMSE": get_metric(payload, "horizon_3", "RMSE"),
+        "h3_MAPE": get_metric(payload, "horizon_3", "MAPE"),
+        "h6_MAE": get_metric(payload, "horizon_6", "MAE"),
+        "h6_RMSE": get_metric(payload, "horizon_6", "RMSE"),
+        "h6_MAPE": get_metric(payload, "horizon_6", "MAPE"),
+        "h12_MAE": get_metric(payload, "horizon_12", "MAE"),
+        "h12_RMSE": get_metric(payload, "horizon_12", "RMSE"),
+        "h12_MAPE": get_metric(payload, "horizon_12", "MAPE"),
+    }
+
+
 def collect_rows(checkpoints_root: Path, models: list[str]) -> list[dict]:
     rows: list[dict] = []
     for model_name in models:
@@ -80,31 +121,36 @@ def collect_rows(checkpoints_root: Path, models: list[str]) -> list[dict]:
         if not model_root.exists():
             continue
         for metrics_path in sorted(model_root.rglob("test_metrics.json")):
-            run_dir = metrics_path.parent
             relative_text = str(metrics_path.relative_to(model_root))
-            experiment = classify_experiment(model_name, relative_text)
-            if experiment is None:
-                continue
+            row = build_row(model_name, metrics_path, relative_text)
+            if row is not None:
+                rows.append(row)
+    return rows
 
-            payload = load_metrics(metrics_path)
-            row = {
-                "model": model_name,
-                "experiment": experiment,
-                "run_dir": str(run_dir),
-                "metrics_path": str(metrics_path),
-                "overall_MAE": get_metric(payload, "overall", "MAE"),
-                "overall_RMSE": get_metric(payload, "overall", "RMSE"),
-                "overall_MAPE": get_metric(payload, "overall", "MAPE"),
-                "h3_MAE": get_metric(payload, "horizon_3", "MAE"),
-                "h3_RMSE": get_metric(payload, "horizon_3", "RMSE"),
-                "h3_MAPE": get_metric(payload, "horizon_3", "MAPE"),
-                "h6_MAE": get_metric(payload, "horizon_6", "MAE"),
-                "h6_RMSE": get_metric(payload, "horizon_6", "RMSE"),
-                "h6_MAPE": get_metric(payload, "horizon_6", "MAPE"),
-                "h12_MAE": get_metric(payload, "horizon_12", "MAE"),
-                "h12_RMSE": get_metric(payload, "horizon_12", "RMSE"),
-                "h12_MAPE": get_metric(payload, "horizon_12", "MAPE"),
-            }
+
+def resolve_metrics_path(path: Path) -> Path:
+    if path.is_dir():
+        candidate = path / "test_metrics.json"
+        if candidate.exists():
+            return candidate
+        raise FileNotFoundError(f"No test_metrics.json under directory: {path}")
+    if path.is_file():
+        if path.name != "test_metrics.json":
+            raise ValueError(f"Expected test_metrics.json or a run directory, got: {path}")
+        return path
+    raise FileNotFoundError(f"Result path not found: {path}")
+
+
+def collect_rows_from_explicit_paths(paths: list[str]) -> list[dict]:
+    rows: list[dict] = []
+    for raw_path in paths:
+        resolved_input = Path(raw_path).expanduser().resolve()
+        metrics_path = resolve_metrics_path(resolved_input)
+        model_name = infer_model_from_path(metrics_path)
+        if model_name is None:
+            raise ValueError(f"Unable to infer model name from path: {metrics_path}")
+        row = build_row(model_name, metrics_path, str(metrics_path))
+        if row is not None:
             rows.append(row)
     return rows
 
@@ -126,7 +172,11 @@ def main() -> None:
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = collect_rows(checkpoints_root, args.models)
+    rows = (
+        collect_rows_from_explicit_paths(args.result_path)
+        if args.result_path
+        else collect_rows(checkpoints_root, args.models)
+    )
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values(["model", "experiment"]).reset_index(drop=True)
