@@ -85,6 +85,17 @@ def get_metric(payload: dict, section: str, key: str):
     return payload.get(section, {}).get(key)
 
 
+def flatten_metrics(payload: dict) -> dict:
+    flattened = {}
+    for section, metrics in payload.items():
+        if not isinstance(metrics, dict):
+            continue
+        prefix = "overall" if section == "overall" else section
+        for metric_name, value in metrics.items():
+            flattened[f"{prefix}_{metric_name}"] = value
+    return flattened
+
+
 def infer_model_from_path(path: Path) -> str | None:
     parts = [part.lower() for part in path.parts]
     if "gwnet" in parts:
@@ -100,24 +111,14 @@ def build_row(model_name: str, metrics_path: Path, path_text: str) -> dict | Non
         return None
 
     payload = load_metrics(metrics_path)
-    return {
+    row = {
         "model": model_name,
         "experiment": experiment,
         "run_dir": str(metrics_path.parent),
         "metrics_path": str(metrics_path),
-        "overall_MAE": get_metric(payload, "overall", "MAE"),
-        "overall_RMSE": get_metric(payload, "overall", "RMSE"),
-        "overall_MAPE": get_metric(payload, "overall", "MAPE"),
-        "h3_MAE": get_metric(payload, "horizon_3", "MAE"),
-        "h3_RMSE": get_metric(payload, "horizon_3", "RMSE"),
-        "h3_MAPE": get_metric(payload, "horizon_3", "MAPE"),
-        "h6_MAE": get_metric(payload, "horizon_6", "MAE"),
-        "h6_RMSE": get_metric(payload, "horizon_6", "RMSE"),
-        "h6_MAPE": get_metric(payload, "horizon_6", "MAPE"),
-        "h12_MAE": get_metric(payload, "horizon_12", "MAE"),
-        "h12_RMSE": get_metric(payload, "horizon_12", "RMSE"),
-        "h12_MAPE": get_metric(payload, "horizon_12", "MAPE"),
     }
+    row.update(flatten_metrics(payload))
+    return row
 
 
 def collect_rows(checkpoints_root: Path, models: list[str]) -> list[dict]:
@@ -193,26 +194,14 @@ def collect_rows_from_labeled_results(items: list[str]) -> list[dict]:
             raise ValueError(f"Unable to infer model name from path: {metrics_path}")
 
         payload = load_metrics(metrics_path)
-        rows.append(
-            {
-                "model": model_name,
-                "experiment": experiment,
-                "run_dir": str(metrics_path.parent),
-                "metrics_path": str(metrics_path),
-                "overall_MAE": get_metric(payload, "overall", "MAE"),
-                "overall_RMSE": get_metric(payload, "overall", "RMSE"),
-                "overall_MAPE": get_metric(payload, "overall", "MAPE"),
-                "h3_MAE": get_metric(payload, "horizon_3", "MAE"),
-                "h3_RMSE": get_metric(payload, "horizon_3", "RMSE"),
-                "h3_MAPE": get_metric(payload, "horizon_3", "MAPE"),
-                "h6_MAE": get_metric(payload, "horizon_6", "MAE"),
-                "h6_RMSE": get_metric(payload, "horizon_6", "RMSE"),
-                "h6_MAPE": get_metric(payload, "horizon_6", "MAPE"),
-                "h12_MAE": get_metric(payload, "horizon_12", "MAE"),
-                "h12_RMSE": get_metric(payload, "horizon_12", "RMSE"),
-                "h12_MAPE": get_metric(payload, "horizon_12", "MAPE"),
-            }
-        )
+        row = {
+            "model": model_name,
+            "experiment": experiment,
+            "run_dir": str(metrics_path.parent),
+            "metrics_path": str(metrics_path),
+        }
+        row.update(flatten_metrics(payload))
+        rows.append(row)
     return rows
 
 
@@ -225,6 +214,59 @@ def make_markdown_table(df: pd.DataFrame) -> str:
     for col in numeric_cols:
         display[col] = display[col].map(lambda value: f"{value:.4f}" if pd.notna(value) else "/")
     return display.to_markdown(index=False) + "\n"
+
+
+def metric_sort_key(column_name: str) -> tuple[int, int, int, str]:
+    if column_name.startswith("overall_"):
+        metric_name = column_name[len("overall_") :]
+        metric_order = {"MAE": 0, "RMSE": 1, "MAPE": 2}.get(metric_name, 99)
+        return (0, 0, metric_order, metric_name)
+    if column_name.startswith("horizon_"):
+        parts = column_name.split("_")
+        try:
+            horizon = int(parts[1])
+        except ValueError:
+            horizon = 999
+        metric_name = "_".join(parts[2:])
+        metric_order = {"MAE": 0, "RMSE": 1, "MAPE": 2}.get(metric_name, 99)
+        return (1, horizon, metric_order, metric_name)
+    return (2, 999, 999, column_name)
+
+
+def build_summary_columns(df: pd.DataFrame) -> list[str]:
+    metric_columns = [col for col in df.columns if col not in {"model", "experiment", "run_dir", "metrics_path"}]
+    return ["model", "experiment", *sorted(metric_columns, key=metric_sort_key)]
+
+
+def make_grouped_markdown(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "No matching old-SD results found.\n"
+
+    graph_rows = ["distthre", "phys_dir", "phys_bidir"]
+    adaptive_rows = ["adaptive", "distthre+adaptive", "phys+adaptive", "phys_forward+adaptive"]
+    summary_columns = build_summary_columns(df)
+    sections = []
+
+    for model_name in sorted(df["model"].unique().tolist()):
+        model_df = df[df["model"] == model_name].copy()
+        model_df = model_df[summary_columns]
+        sections.append(f"## {model_name}\n")
+
+        graph_df = model_df[model_df["experiment"].isin(graph_rows)].copy()
+        if not graph_df.empty:
+            graph_df["experiment"] = pd.Categorical(graph_df["experiment"], categories=graph_rows, ordered=True)
+            graph_df = graph_df.sort_values("experiment")
+            sections.append("### Graph Structure Comparison\n")
+            sections.append(make_markdown_table(graph_df))
+
+        adaptive_df = model_df[model_df["experiment"].isin(adaptive_rows)].copy()
+        if not adaptive_df.empty:
+            adaptive_df["experiment"] = pd.Categorical(adaptive_df["experiment"], categories=adaptive_rows, ordered=True)
+            adaptive_df = adaptive_df.sort_values("experiment")
+            sections.append("### Adaptive Comparison\n")
+            sections.append(make_markdown_table(adaptive_df))
+
+    return "\n".join(sections)
 
 
 def main() -> None:
@@ -246,30 +288,22 @@ def main() -> None:
     full_csv = output_dir / "old_sd_results_full.csv"
     summary_csv = output_dir / "old_sd_results_summary.csv"
     summary_md = output_dir / "old_sd_results_summary.md"
+    grouped_md = output_dir / "old_sd_results_grouped.md"
 
     if df.empty:
         pd.DataFrame().to_csv(full_csv, index=False)
         pd.DataFrame().to_csv(summary_csv, index=False)
         summary_md.write_text("No matching old-SD results found.\n", encoding="utf-8")
+        grouped_md.write_text("No matching old-SD results found.\n", encoding="utf-8")
         print(json.dumps({"rows": 0, "output_dir": str(output_dir)}, indent=2))
         return
 
     df.to_csv(full_csv, index=False)
 
-    summary_df = df[
-        [
-            "model",
-            "experiment",
-            "overall_MAE",
-            "overall_RMSE",
-            "overall_MAPE",
-            "h3_MAE",
-            "h6_MAE",
-            "h12_MAE",
-        ]
-    ].copy()
+    summary_df = df[build_summary_columns(df)].copy()
     summary_df.to_csv(summary_csv, index=False)
     summary_md.write_text(make_markdown_table(summary_df), encoding="utf-8")
+    grouped_md.write_text(make_grouped_markdown(df), encoding="utf-8")
 
     print(
         json.dumps(
@@ -278,6 +312,7 @@ def main() -> None:
                 "full_csv": str(full_csv),
                 "summary_csv": str(summary_csv),
                 "summary_md": str(summary_md),
+                "grouped_md": str(grouped_md),
             },
             indent=2,
         )
