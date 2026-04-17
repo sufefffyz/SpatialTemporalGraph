@@ -37,8 +37,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def classify_experiment(model_name: str, run_name: str) -> str | None:
-    lower = run_name.lower()
+def classify_experiment(model_name: str, path_text: str) -> str | None:
+    lower = path_text.lower()
     if model_name.lower() == "gwnet":
         if "phys_adaptive_forward" in lower or "forward_adaptive" in lower:
             return "phys_forward+adaptive"
@@ -79,10 +79,10 @@ def collect_rows(checkpoints_root: Path, models: list[str]) -> list[dict]:
         model_root = checkpoints_root / model_name
         if not model_root.exists():
             continue
-        for metrics_path in sorted(model_root.glob("*/test_metrics.json")):
+        for metrics_path in sorted(model_root.rglob("test_metrics.json")):
             run_dir = metrics_path.parent
-            run_name = run_dir.name
-            experiment = classify_experiment(model_name, run_name)
+            relative_text = str(metrics_path.relative_to(model_root))
+            experiment = classify_experiment(model_name, relative_text)
             if experiment is None:
                 continue
 
