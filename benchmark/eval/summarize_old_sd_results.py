@@ -40,6 +40,12 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="Explicit result path(s): either a test_metrics.json file or a run directory containing it. Can be repeated.",
     )
+    parser.add_argument(
+        "--result",
+        action="append",
+        default=[],
+        help="Labeled result in the form experiment=PATH or model:experiment=PATH. Can be repeated.",
+    )
     return parser.parse_args()
 
 
@@ -155,6 +161,61 @@ def collect_rows_from_explicit_paths(paths: list[str]) -> list[dict]:
     return rows
 
 
+def parse_labeled_result(raw_value: str) -> tuple[str | None, str, Path]:
+    if "=" not in raw_value:
+        raise ValueError(
+            f"Expected labeled result in the form experiment=PATH or model:experiment=PATH, got: {raw_value}"
+        )
+    label, raw_path = raw_value.split("=", 1)
+    label = label.strip()
+    raw_path = raw_path.strip()
+    if not label or not raw_path:
+        raise ValueError(f"Invalid labeled result: {raw_value}")
+
+    if ":" in label:
+        model_name, experiment = label.split(":", 1)
+        model_name = model_name.strip()
+        experiment = experiment.strip()
+        if not model_name or not experiment:
+            raise ValueError(f"Invalid labeled result: {raw_value}")
+        return model_name, experiment, Path(raw_path).expanduser().resolve()
+
+    return None, label, Path(raw_path).expanduser().resolve()
+
+
+def collect_rows_from_labeled_results(items: list[str]) -> list[dict]:
+    rows: list[dict] = []
+    for raw_item in items:
+        model_name_hint, experiment, resolved_input = parse_labeled_result(raw_item)
+        metrics_path = resolve_metrics_path(resolved_input)
+        model_name = model_name_hint or infer_model_from_path(metrics_path)
+        if model_name is None:
+            raise ValueError(f"Unable to infer model name from path: {metrics_path}")
+
+        payload = load_metrics(metrics_path)
+        rows.append(
+            {
+                "model": model_name,
+                "experiment": experiment,
+                "run_dir": str(metrics_path.parent),
+                "metrics_path": str(metrics_path),
+                "overall_MAE": get_metric(payload, "overall", "MAE"),
+                "overall_RMSE": get_metric(payload, "overall", "RMSE"),
+                "overall_MAPE": get_metric(payload, "overall", "MAPE"),
+                "h3_MAE": get_metric(payload, "horizon_3", "MAE"),
+                "h3_RMSE": get_metric(payload, "horizon_3", "RMSE"),
+                "h3_MAPE": get_metric(payload, "horizon_3", "MAPE"),
+                "h6_MAE": get_metric(payload, "horizon_6", "MAE"),
+                "h6_RMSE": get_metric(payload, "horizon_6", "RMSE"),
+                "h6_MAPE": get_metric(payload, "horizon_6", "MAPE"),
+                "h12_MAE": get_metric(payload, "horizon_12", "MAE"),
+                "h12_RMSE": get_metric(payload, "horizon_12", "RMSE"),
+                "h12_MAPE": get_metric(payload, "horizon_12", "MAPE"),
+            }
+        )
+    return rows
+
+
 def make_markdown_table(df: pd.DataFrame) -> str:
     if df.empty:
         return "No matching old-SD results found.\n"
@@ -172,11 +233,12 @@ def main() -> None:
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = (
-        collect_rows_from_explicit_paths(args.result_path)
-        if args.result_path
-        else collect_rows(checkpoints_root, args.models)
-    )
+    if args.result:
+        rows = collect_rows_from_labeled_results(args.result)
+    elif args.result_path:
+        rows = collect_rows_from_explicit_paths(args.result_path)
+    else:
+        rows = collect_rows(checkpoints_root, args.models)
     df = pd.DataFrame(rows)
     if not df.empty:
         df = df.sort_values(["model", "experiment"]).reset_index(drop=True)
