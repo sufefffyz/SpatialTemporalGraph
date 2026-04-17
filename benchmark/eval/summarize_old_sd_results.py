@@ -244,12 +244,10 @@ def make_grouped_markdown(df: pd.DataFrame) -> str:
 
     graph_rows = ["distthre", "phys_dir", "phys_bidir"]
     adaptive_rows = ["adaptive", "distthre+adaptive", "phys+adaptive", "phys_forward+adaptive"]
-    summary_columns = build_summary_columns(df)
     sections = []
 
     for model_name in sorted(df["model"].unique().tolist()):
         model_df = df[df["model"] == model_name].copy()
-        model_df = model_df[summary_columns]
         sections.append(f"## {model_name}\n")
 
         graph_df = model_df[model_df["experiment"].isin(graph_rows)].copy()
@@ -257,14 +255,16 @@ def make_grouped_markdown(df: pd.DataFrame) -> str:
             graph_df["experiment"] = pd.Categorical(graph_df["experiment"], categories=graph_rows, ordered=True)
             graph_df = graph_df.sort_values("experiment")
             sections.append("### Graph Structure Comparison\n")
-            sections.append(make_markdown_table(graph_df))
+            graph_pivot = build_pivot_table(graph_df.reset_index(drop=True))
+            sections.append(format_pivot_for_markdown(graph_pivot).to_markdown(index=False) + "\n")
 
         adaptive_df = model_df[model_df["experiment"].isin(adaptive_rows)].copy()
         if not adaptive_df.empty:
             adaptive_df["experiment"] = pd.Categorical(adaptive_df["experiment"], categories=adaptive_rows, ordered=True)
             adaptive_df = adaptive_df.sort_values("experiment")
             sections.append("### Adaptive Comparison\n")
-            sections.append(make_markdown_table(adaptive_df))
+            adaptive_pivot = build_pivot_table(adaptive_df.reset_index(drop=True))
+            sections.append(format_pivot_for_markdown(adaptive_pivot).to_markdown(index=False) + "\n")
 
     return "\n".join(sections)
 
