@@ -269,6 +269,45 @@ def make_grouped_markdown(df: pd.DataFrame) -> str:
     return "\n".join(sections)
 
 
+def iter_metric_horizon_rows(df: pd.DataFrame):
+    metric_names = ["MAE", "RMSE", "MAPE"]
+    horizon_pairs = [("overall", "overall"), ("horizon_3", "h3"), ("horizon_6", "h6"), ("horizon_12", "h12")]
+    for metric_name in metric_names:
+        first_row = True
+        for section_name, horizon_label in horizon_pairs:
+            column_name = f"{section_name}_{metric_name}"
+            if column_name in df.columns:
+                yield {
+                    "metric": metric_name if first_row else "",
+                    "horizon": horizon_label,
+                    "column_name": column_name,
+                }
+                first_row = False
+
+
+def build_pivot_table(model_df: pd.DataFrame) -> pd.DataFrame:
+    experiments = model_df["experiment"].tolist()
+    rows = []
+    for row_def in iter_metric_horizon_rows(model_df):
+        row = {
+            "metric": row_def["metric"],
+            "horizon": row_def["horizon"],
+        }
+        for _, experiment_row in model_df.iterrows():
+            row[experiment_row["experiment"]] = experiment_row.get(row_def["column_name"])
+        rows.append(row)
+    return pd.DataFrame(rows, columns=["metric", "horizon", *experiments])
+
+
+def format_pivot_for_markdown(pivot_df: pd.DataFrame) -> pd.DataFrame:
+    display = pivot_df.copy()
+    for column in display.columns:
+        if column in {"metric", "horizon"}:
+            continue
+        display[column] = display[column].map(lambda value: f"{value:.4f}" if pd.notna(value) else "/")
+    return display
+
+
 def main() -> None:
     args = parse_args()
     checkpoints_root = args.checkpoints_root.expanduser().resolve()
@@ -289,6 +328,7 @@ def main() -> None:
     summary_csv = output_dir / "old_sd_results_summary.csv"
     summary_md = output_dir / "old_sd_results_summary.md"
     grouped_md = output_dir / "old_sd_results_grouped.md"
+    pivot_paths = []
 
     if df.empty:
         pd.DataFrame().to_csv(full_csv, index=False)
@@ -305,6 +345,15 @@ def main() -> None:
     summary_md.write_text(make_markdown_table(summary_df), encoding="utf-8")
     grouped_md.write_text(make_grouped_markdown(df), encoding="utf-8")
 
+    for model_name in sorted(df["model"].unique().tolist()):
+        model_df = df[df["model"] == model_name].copy().sort_values("experiment").reset_index(drop=True)
+        pivot_df = build_pivot_table(model_df)
+        pivot_csv = output_dir / f"old_sd_results_{model_name.lower()}_pivot.csv"
+        pivot_md = output_dir / f"old_sd_results_{model_name.lower()}_pivot.md"
+        pivot_df.to_csv(pivot_csv, index=False)
+        pivot_md.write_text(format_pivot_for_markdown(pivot_df).to_markdown(index=False) + "\n", encoding="utf-8")
+        pivot_paths.append({"model": model_name, "csv": str(pivot_csv), "md": str(pivot_md)})
+
     print(
         json.dumps(
             {
@@ -313,6 +362,7 @@ def main() -> None:
                 "summary_csv": str(summary_csv),
                 "summary_md": str(summary_md),
                 "grouped_md": str(grouped_md),
+                "pivot_tables": pivot_paths,
             },
             indent=2,
         )
