@@ -35,6 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps-per-day", type=int, default=288, help="5-minute steps per day")
     parser.add_argument("--days-1m", type=int, default=31, help="Train days kept for the 1m split")
     parser.add_argument(
+        "--fillna-value",
+        type=float,
+        default=0.0,
+        help="Fill value used for missing flow entries before exporting the dataset.",
+    )
+    parser.add_argument(
         "--graph-root",
         type=Path,
         default=DEFAULT_GRAPH_ROOT,
@@ -213,6 +219,19 @@ def build_split_indices(total_len: int, days_1m: int = 31, steps_per_day: int = 
     return {"full": full, "1m": onemonth}
 
 
+def fill_missing_flow(flow_df: pd.DataFrame, fillna_value: float) -> tuple[pd.DataFrame, dict[str, float | int]]:
+    nan_count_before = int(flow_df.isna().sum().sum())
+    filled_df = flow_df.fillna(fillna_value)
+    nan_count_after = int(filled_df.isna().sum().sum())
+    summary = {
+        "fillna_value": float(fillna_value),
+        "nan_count_before": nan_count_before,
+        "nan_count_after": nan_count_after,
+        "filled_ratio": float(nan_count_before / filled_df.size) if filled_df.size else 0.0,
+    }
+    return filled_df, summary
+
+
 def main() -> None:
     args = parse_args()
     input_dir = ensure_exists(args.input_dir, "Input raw bundle directory")
@@ -238,6 +257,7 @@ def main() -> None:
         physical_adj_path = (DEFAULT_EXISTING_SD_PHYS_DIR / "adj_mx.pkl").resolve()
 
     flow_df = pd.read_hdf(input_h5)
+    flow_df, missing_value_summary = fill_missing_flow(flow_df, args.fillna_value)
     sensor_ids = load_sensor_ids(input_dir, meta_path, flow_df.shape[1])
     if flow_df.shape[1] != len(sensor_ids):
         raise ValueError(
@@ -323,6 +343,7 @@ def main() -> None:
             split_name: str(output_dir / f"split_indices_{split_name}.npz")
             for split_name in split_variants
         },
+        "missing_value_summary": missing_value_summary,
         "graph_exports": graph_exports,
     }
     (output_dir / "build_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
