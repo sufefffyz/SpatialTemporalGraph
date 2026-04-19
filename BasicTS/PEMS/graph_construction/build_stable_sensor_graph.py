@@ -94,6 +94,13 @@ def resolve_metadata_files(district: int, data_root: Path, year: int | None = No
     return sorted(resolved_files)
 
 
+def extract_metadata_snapshot_key(file_path: Path) -> tuple[int, int, int] | None:
+    match = re.search(r"text_meta_(\d{4})_(\d{2})_(\d{2})\.txt$", file_path.name)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
 def resolve_latest_metadata(district: int, data_root: Path) -> Path:
     files = resolve_metadata_files(district, data_root, year=None)
     if not files:
@@ -107,11 +114,69 @@ def resolve_latest_metadata(district: int, data_root: Path) -> Path:
 def resolve_year_metadata_files(district: int, data_root: Path, year: int) -> list[Path]:
     files = resolve_metadata_files(district, data_root, year=year)
     if not files:
-        raise FileNotFoundError(
-            f"未找到 {district} 区 {year} 年元数据文件。"
-            f" 请先将对应 District 的数据解压到 /data/yuzhang_fei/PEMS/PEMSD{district}_{year}/station_meta/"
+        fallback = resolve_metadata_files(district, data_root, year=None)
+        if not fallback:
+            raise FileNotFoundError(
+                f"未找到 {district} 区 {year} 年元数据文件。"
+                f" 请先将对应 District 的数据解压到 /data/yuzhang_fei/PEMS/PEMSD{district}_{year}/station_meta/"
+            )
+
+        latest = fallback[-1]
+        log(
+            f"警告: {district} 区未找到 {year} 年 metadata，"
+            f"自动回退到最新可用文件: {latest.name}",
+            level="WARN",
         )
-    return files
+        return [latest]
+
+    all_files = resolve_metadata_files(district, data_root, year=None)
+    if not all_files:
+        return files
+
+    keyed_all_files = []
+    for file_path in all_files:
+        snapshot_key = extract_metadata_snapshot_key(file_path)
+        if snapshot_key is None:
+            continue
+        keyed_all_files.append((snapshot_key, file_path))
+    keyed_all_files.sort(key=lambda item: item[0])
+
+    if not keyed_all_files:
+        return files
+
+    first_current_year = None
+    for snapshot_key, file_path in keyed_all_files:
+        if snapshot_key[0] == year:
+            first_current_year = (snapshot_key, file_path)
+            break
+
+    if first_current_year is None:
+        return files
+
+    previous_file = None
+    for snapshot_key, file_path in keyed_all_files:
+        if snapshot_key < first_current_year[0]:
+            previous_file = file_path
+        else:
+            break
+
+    if previous_file is None:
+        return files
+
+    merged = [previous_file, *files]
+    deduped = []
+    seen = set()
+    for file_path in merged:
+        if file_path.name in seen:
+            continue
+        deduped.append(file_path)
+        seen.add(file_path.name)
+
+    log(
+        f"检测到 {year} 年 metadata，额外纳入紧邻上一份 snapshot: {previous_file.name}",
+        level="INFO",
+    )
+    return deduped
 
 
 def resolve_station_5min_files(district: int, data_root: Path, year: int) -> list[Path]:
