@@ -122,11 +122,7 @@ def resolve_year_metadata_files(district: int, data_root: Path, year: int) -> li
             )
 
         latest = fallback[-1]
-        log(
-            f"警告: {district} 区未找到 {year} 年 metadata，"
-            f"自动回退到最新可用文件: {latest.name}",
-            level="WARN",
-        )
+        log(f"[WARN] {district} 区未找到 {year} 年 metadata，自动回退到最新可用文件: {latest.name}")
         return [latest]
 
     all_files = resolve_metadata_files(district, data_root, year=None)
@@ -172,10 +168,7 @@ def resolve_year_metadata_files(district: int, data_root: Path, year: int) -> li
         deduped.append(file_path)
         seen.add(file_path.name)
 
-    log(
-        f"检测到 {year} 年 metadata，额外纳入紧邻上一份 snapshot: {previous_file.name}",
-        level="INFO",
-    )
+    log(f"检测到 {year} 年 metadata，额外纳入紧邻上一份 snapshot: {previous_file.name}")
     return deduped
 
 
