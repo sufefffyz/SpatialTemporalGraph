@@ -24,6 +24,7 @@ BasicTS 训练和可视化分析的文件。
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import pickle
@@ -248,6 +249,51 @@ def normalize_metadata_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=col_map)
 
 
+def read_metadata_file_robust(meta_file: Path) -> pd.DataFrame:
+    try:
+        return pd.read_csv(meta_file, sep="\t", encoding="latin-1")
+    except pd.errors.ParserError as exc:
+        log(f"[WARN] metadata 解析失败，启用容错模式: {meta_file.name} ({exc})")
+
+    with meta_file.open("r", encoding="latin-1", newline="") as fp:
+        reader = csv.reader(fp, delimiter="\t")
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise ValueError(f"metadata 文件为空: {meta_file}") from exc
+
+        expected_cols = len(header)
+        rows: list[list[str]] = []
+        malformed_count = 0
+
+        for line_no, row in enumerate(reader, start=2):
+            if len(row) == expected_cols:
+                rows.append(row)
+                continue
+
+            malformed_count += 1
+            if len(row) > expected_cols:
+                extra_fields = row[expected_cols:]
+                if any(field.strip() for field in extra_fields):
+                    fixed_row = row[: expected_cols - 1] + [" ".join(row[expected_cols - 1 :]).strip()]
+                else:
+                    fixed_row = row[:expected_cols]
+            else:
+                fixed_row = row + [""] * (expected_cols - len(row))
+
+            rows.append(fixed_row)
+            if malformed_count <= 5:
+                log(
+                    f"[WARN] 修复 metadata 异常行: {meta_file.name}:{line_no} "
+                    f"(字段数 {len(row)} -> {expected_cols})"
+                )
+
+    if malformed_count:
+        log(f"[WARN] {meta_file.name} 共修复 {malformed_count} 行 metadata 异常记录")
+
+    return pd.DataFrame(rows, columns=header)
+
+
 def extract_date_from_station_5min_file(file_path: Path) -> str:
     match = re.search(r"(\d{4}_\d{2}_\d{2})\.txt(?:\.gz)?$", file_path.name)
     if match:
@@ -325,7 +371,7 @@ def prepare_stable_metadata(
     reference_columns: list[str] | None = None
 
     for meta_file in meta_files:
-        df = pd.read_csv(meta_file, sep="\t", encoding="latin-1")
+        df = read_metadata_file_robust(meta_file)
         df = normalize_metadata_columns(df)
         required_cols = {"ID", "Type"}
         missing_cols = required_cols - set(df.columns)
