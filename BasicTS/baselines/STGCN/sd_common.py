@@ -39,6 +39,10 @@ def _build_gso(data_name: str, graph_variant: str) -> torch.Tensor:
     if graph_variant == "distthre":
         adj_mx, _ = load_adj(str(adj_path), "normlap")
         return torch.tensor(adj_mx[0], dtype=torch.float32)
+    if graph_variant == "identity":
+        raw_adj = np.eye(_load_desc(data_name)["num_nodes"], dtype=np.float32)
+        gso = calculate_symmetric_normalized_laplacian(raw_adj).astype(np.float32).todense()
+        return torch.tensor(gso, dtype=torch.float32)
 
     raw_adj = _unwrap_adj_payload(load_pkl(str(adj_path)))
     if graph_variant == "phys_bidir":
@@ -55,6 +59,10 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
         data_name = "SD"
         description = "STGCN on SD with LargeST distance-threshold graph"
         ckpt_tag = "original"
+    elif graph_variant == "identity":
+        data_name = "SD"
+        description = "STGCN on SD with identity adjacency"
+        ckpt_tag = "identity"
     elif graph_variant == "phys_dir":
         data_name = "SD_phys"
         description = "STGCN on SD_phys with directed physical graph"
