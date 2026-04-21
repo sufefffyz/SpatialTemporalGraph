@@ -177,7 +177,7 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
     cfg.TRAIN.DATA = EasyDict()
     cfg.TRAIN.DATA.BATCH_SIZE = 64
     cfg.TRAIN.DATA.SHUFFLE = True
-    cfg.TRAIN.EARLY_STOPPING_PATIENCE = 15
+    cfg.TRAIN.EARLY_STOPPING_PATIENCE = 50
 
     cfg.VAL = EasyDict()
     cfg.VAL.INTERVAL = 1
@@ -185,7 +185,7 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
     cfg.VAL.DATA.BATCH_SIZE = 64
 
     cfg.TEST = EasyDict()
-    cfg.TEST.INTERVAL = 1
+    cfg.TEST.INTERVAL = 10
     cfg.TEST.DATA = EasyDict()
     cfg.TEST.DATA.BATCH_SIZE = 64
 
