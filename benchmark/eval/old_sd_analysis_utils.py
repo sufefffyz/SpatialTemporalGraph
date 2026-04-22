@@ -12,6 +12,8 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SD_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD"
 DEFAULT_SD_PHYS_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD_phys"
+DEFAULT_SD_5MIN_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD_5min_full"
+DEFAULT_SD_5MIN_GRAPH_ROOT = REPO_ROOT / "graphs" / "SD"
 
 
 def resolve_existing_path(path: str | Path, desc: str) -> Path:
@@ -69,6 +71,44 @@ def build_graph_matrices(sd_dir: str | Path = DEFAULT_SD_DIR, sd_phys_dir: str |
 
     distthre = strip_self_loops(unwrap_adj(load_pkl(sd_dir / "adj_mx.pkl")))
     phys_dir = strip_self_loops(unwrap_adj(load_pkl(sd_phys_dir / "adj_mx.pkl")))
+    phys_bidir = np.maximum(phys_dir, phys_dir.T)
+    identity = np.eye(distthre.shape[0], dtype=np.float32)
+    np.fill_diagonal(identity, 0.0)
+    return {
+        "identity": identity,
+        "distthre": distthre,
+        "phys_dir": phys_dir,
+        "phys_bidir": phys_bidir,
+    }
+
+
+def build_sd_5min_graph_matrices(
+    dataset_dir: str | Path = DEFAULT_SD_5MIN_DIR,
+    graph_root: str | Path = DEFAULT_SD_5MIN_GRAPH_ROOT,
+) -> dict[str, np.ndarray]:
+    dataset_dir = resolve_existing_path(dataset_dir, "SD_5min dataset dir")
+    graph_root = Path(graph_root).expanduser().resolve()
+
+    def _resolve_adj(*candidates: Path) -> Path:
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        raise FileNotFoundError(
+            "Unable to find adjacency file in any of: "
+            + ", ".join(str(candidate) for candidate in candidates)
+        )
+
+    distthre_path = _resolve_adj(
+        dataset_dir / "adj_mx_largeST_original.pkl",
+        graph_root / "adj_mx_largeST_original.pkl",
+    )
+    phys_dir_path = _resolve_adj(
+        dataset_dir / "adj_mx_physical_directed.pkl",
+        graph_root / "adj_mx_physical_directed.pkl",
+    )
+
+    distthre = strip_self_loops(unwrap_adj(load_pkl(distthre_path)))
+    phys_dir = strip_self_loops(unwrap_adj(load_pkl(phys_dir_path)))
     phys_bidir = np.maximum(phys_dir, phys_dir.T)
     identity = np.eye(distthre.shape[0], dtype=np.float32)
     np.fill_diagonal(identity, 0.0)
