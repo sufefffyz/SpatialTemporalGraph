@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.interpolate import CubicSpline
+from tqdm.auto import tqdm
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -355,6 +356,7 @@ def compute_delay_distribution(
     interp_minutes: int = 5,
     max_lag_minutes: int = 60,
     interpolation_method: str = "natural_cubic_spline",
+    show_progress: bool = True,
 ) -> pd.DataFrame:
     adj = strip_self_loops(adj)
     flow_interp, _ = interpolate_series_matrix(
@@ -367,7 +369,11 @@ def compute_delay_distribution(
     edges = np.argwhere(adj > 0)
 
     rows = []
-    for src_idx, dst_idx in edges:
+    iterator = edges
+    if show_progress:
+        iterator = tqdm(edges, total=len(edges), desc=f"{graph_name} edges", leave=False)
+
+    for src_idx, dst_idx in iterator:
         src = flow_interp[:, int(src_idx)]
         dst = flow_interp[:, int(dst_idx)]
         lag_steps, corr_peak = max_cross_correlation_delay(src, dst, max_lag_steps)
@@ -398,11 +404,16 @@ def compute_daily_delay_distributions(
     interp_minutes: int = 5,
     max_lag_minutes: int = 60,
     interpolation_method: str = "natural_cubic_spline",
+    show_progress: bool = True,
 ) -> pd.DataFrame:
     window_flow, meta = slice_flow_by_day_window(flow, native_minutes, start_day=start_day, num_days=num_days)
     steps_per_day = meta["steps_per_day"]
     frames = []
-    for offset in range(meta["num_days_actual"]):
+    iterator = range(meta["num_days_actual"])
+    if show_progress:
+        iterator = tqdm(iterator, total=meta["num_days_actual"], desc=f"{graph_name} daily windows", leave=False)
+
+    for offset in iterator:
         day_start = offset * steps_per_day
         day_end = day_start + steps_per_day
         day_flow = np.asarray(window_flow[day_start:day_end]).copy()
@@ -415,6 +426,7 @@ def compute_daily_delay_distributions(
             interp_minutes=interp_minutes,
             max_lag_minutes=max_lag_minutes,
             interpolation_method=interpolation_method,
+            show_progress=show_progress,
         )
         day_df["day_offset"] = int(start_day + offset)
         day_df["day_in_window"] = int(offset)
