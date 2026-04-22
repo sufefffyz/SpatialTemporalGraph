@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.interpolate import CubicSpline
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -270,7 +271,12 @@ def evaluate_run_groups(
     return pd.DataFrame(rows)
 
 
-def interpolate_series_matrix(flow: np.ndarray, native_minutes: int, interp_minutes: int) -> tuple[np.ndarray, np.ndarray]:
+def interpolate_series_matrix(
+    flow: np.ndarray,
+    native_minutes: int,
+    interp_minutes: int,
+    method: str = "natural_cubic_spline",
+) -> tuple[np.ndarray, np.ndarray]:
     if interp_minutes == native_minutes:
         old_t = np.arange(flow.shape[0], dtype=np.float64) * native_minutes
         return flow.astype(np.float32), old_t
@@ -279,7 +285,13 @@ def interpolate_series_matrix(flow: np.ndarray, native_minutes: int, interp_minu
     new_t = np.arange(0, old_t[-1] + interp_minutes, interp_minutes, dtype=np.float64)
     interp = np.empty((len(new_t), flow.shape[1]), dtype=np.float32)
     for node_idx in range(flow.shape[1]):
-        interp[:, node_idx] = np.interp(new_t, old_t, flow[:, node_idx]).astype(np.float32)
+        if method == "linear":
+            interp[:, node_idx] = np.interp(new_t, old_t, flow[:, node_idx]).astype(np.float32)
+        elif method == "natural_cubic_spline":
+            spline = CubicSpline(old_t, flow[:, node_idx], bc_type="natural")
+            interp[:, node_idx] = spline(new_t).astype(np.float32)
+        else:
+            raise ValueError(f"Unsupported interpolation method: {method}")
     return interp, new_t
 
 
@@ -316,9 +328,15 @@ def compute_delay_distribution(
     native_minutes: int,
     interp_minutes: int = 5,
     max_lag_minutes: int = 60,
+    interpolation_method: str = "natural_cubic_spline",
 ) -> pd.DataFrame:
     adj = strip_self_loops(adj)
-    flow_interp, _ = interpolate_series_matrix(flow, native_minutes, interp_minutes)
+    flow_interp, _ = interpolate_series_matrix(
+        flow,
+        native_minutes,
+        interp_minutes,
+        method=interpolation_method,
+    )
     max_lag_steps = max(0, int(max_lag_minutes // interp_minutes))
     edges = np.argwhere(adj > 0)
 
@@ -337,6 +355,7 @@ def compute_delay_distribution(
                 "delay_steps": int(lag_steps),
                 "delay_minutes": int(lag_steps * interp_minutes),
                 "corr_peak": corr_peak,
+                "interpolation_method": interpolation_method,
             }
         )
     return pd.DataFrame(rows)
