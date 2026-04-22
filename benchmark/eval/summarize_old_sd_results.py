@@ -52,6 +52,8 @@ def parse_args() -> argparse.Namespace:
 def classify_experiment(model_name: str, path_text: str) -> str | None:
     lower = path_text.lower()
     if model_name.lower() == "gwnet":
+        if "identity" in lower:
+            return "identity"
         if "phys_adaptive_forward" in lower or "forward_adaptive" in lower:
             return "phys_forward+adaptive"
         if "phys_adaptive" in lower:
@@ -67,12 +69,23 @@ def classify_experiment(model_name: str, path_text: str) -> str | None:
         if "bidir" in lower:
             return "phys_bidir"
     if model_name.lower() == "dcrnn":
+        if "identity" in lower:
+            return "identity"
         if "original" in lower:
             return "distthre"
         if "directed" in lower:
             return "phys_dir"
         if "bidir" in lower:
             return "phys_bidir"
+    if model_name.lower() == "stgcn":
+        if "identity" in lower:
+            return "identity"
+        if "bidir" in lower:
+            return "phys_bidir"
+        if "directed" in lower:
+            return "phys_dir"
+        if "original" in lower or "distthre" in lower:
+            return "distthre"
     return None
 
 
@@ -242,7 +255,7 @@ def make_grouped_markdown(df: pd.DataFrame) -> str:
     if df.empty:
         return "No matching old-SD results found.\n"
 
-    graph_rows = ["distthre", "phys_dir", "phys_bidir"]
+    graph_rows = ["identity", "distthre", "phys_dir", "phys_bidir"]
     adaptive_rows = ["adaptive", "distthre+adaptive", "phys+adaptive", "phys_forward+adaptive"]
     sections = []
 
