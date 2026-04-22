@@ -10,6 +10,16 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CHECKPOINTS_ROOT = REPO_ROOT / "BasicTS" / "checkpoints"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "benchmark" / "eval"
+EXPERIMENT_ORDER = [
+    "identity",
+    "distthre",
+    "phys_dir",
+    "phys_bidir",
+    "adaptive",
+    "distthre+adaptive",
+    "phys+adaptive",
+    "phys_forward+adaptive",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -251,6 +261,22 @@ def build_summary_columns(df: pd.DataFrame) -> list[str]:
     return ["model", "experiment", *sorted(metric_columns, key=metric_sort_key)]
 
 
+def sort_by_experiment_order(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "experiment" not in df.columns:
+        return df
+    working = df.copy()
+    categories = [*EXPERIMENT_ORDER, *[exp for exp in working["experiment"].tolist() if exp not in EXPERIMENT_ORDER]]
+    deduped_categories = []
+    seen = set()
+    for category in categories:
+        if category in seen:
+            continue
+        deduped_categories.append(category)
+        seen.add(category)
+    working["experiment"] = pd.Categorical(working["experiment"], categories=deduped_categories, ordered=True)
+    return working.sort_values("experiment").reset_index(drop=True)
+
+
 def make_grouped_markdown(df: pd.DataFrame) -> str:
     if df.empty:
         return "No matching old-SD results found.\n"
@@ -299,6 +325,7 @@ def iter_metric_horizon_rows(df: pd.DataFrame):
 
 
 def build_pivot_table(model_df: pd.DataFrame) -> pd.DataFrame:
+    model_df = sort_by_experiment_order(model_df)
     experiments = model_df["experiment"].tolist()
     rows = []
     for row_def in iter_metric_horizon_rows(model_df):
@@ -335,7 +362,11 @@ def main() -> None:
         rows = collect_rows(checkpoints_root, args.models)
     df = pd.DataFrame(rows)
     if not df.empty:
-        df = df.sort_values(["model", "experiment"]).reset_index(drop=True)
+        df = (
+            df.groupby("model", group_keys=False)
+            .apply(sort_by_experiment_order)
+            .reset_index(drop=True)
+        )
 
     full_csv = output_dir / "old_sd_results_full.csv"
     summary_csv = output_dir / "old_sd_results_summary.csv"
@@ -359,7 +390,7 @@ def main() -> None:
     grouped_md.write_text(make_grouped_markdown(df), encoding="utf-8")
 
     for model_name in sorted(df["model"].unique().tolist()):
-        model_df = df[df["model"] == model_name].copy().sort_values("experiment").reset_index(drop=True)
+        model_df = sort_by_experiment_order(df[df["model"] == model_name].copy())
         pivot_df = build_pivot_table(model_df)
         pivot_csv = output_dir / f"old_sd_results_{model_name.lower()}_pivot.csv"
         pivot_md = output_dir / f"old_sd_results_{model_name.lower()}_pivot.md"
