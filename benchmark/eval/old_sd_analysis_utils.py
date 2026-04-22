@@ -121,6 +121,32 @@ def build_sd_5min_graph_matrices(
     }
 
 
+def slice_flow_by_day_window(
+    flow: np.ndarray,
+    native_minutes: int,
+    start_day: int,
+    num_days: int,
+) -> tuple[np.ndarray, dict[str, int]]:
+    steps_per_day = (24 * 60) // native_minutes
+    start_idx = int(start_day * steps_per_day)
+    end_idx = int((start_day + num_days) * steps_per_day)
+    if start_idx < 0 or start_idx >= flow.shape[0]:
+        raise ValueError(f"start_day={start_day} is out of range for flow length {flow.shape[0]}.")
+    end_idx = min(end_idx, flow.shape[0])
+    if end_idx <= start_idx:
+        raise ValueError(f"Invalid day window: start_day={start_day}, num_days={num_days}.")
+    sliced = np.asarray(flow[start_idx:end_idx]).copy()
+    meta = {
+        "steps_per_day": int(steps_per_day),
+        "start_day": int(start_day),
+        "num_days_requested": int(num_days),
+        "num_days_actual": int((end_idx - start_idx) // steps_per_day),
+        "start_index": int(start_idx),
+        "end_index": int(end_idx),
+    }
+    return sliced, meta
+
+
 def compute_degree_catalog(graph_name: str, adj: np.ndarray, sensor_ids: np.ndarray, hub_ratio: float = 0.15) -> pd.DataFrame:
     adj = np.asarray(adj, dtype=np.float32)
     out_degree = (adj > 0).sum(axis=1).astype(int)
@@ -359,6 +385,43 @@ def compute_delay_distribution(
             }
         )
     return pd.DataFrame(rows)
+
+
+def compute_daily_delay_distributions(
+    graph_name: str,
+    adj: np.ndarray,
+    flow: np.ndarray,
+    sensor_ids: np.ndarray,
+    native_minutes: int,
+    start_day: int,
+    num_days: int,
+    interp_minutes: int = 5,
+    max_lag_minutes: int = 60,
+    interpolation_method: str = "natural_cubic_spline",
+) -> pd.DataFrame:
+    window_flow, meta = slice_flow_by_day_window(flow, native_minutes, start_day=start_day, num_days=num_days)
+    steps_per_day = meta["steps_per_day"]
+    frames = []
+    for offset in range(meta["num_days_actual"]):
+        day_start = offset * steps_per_day
+        day_end = day_start + steps_per_day
+        day_flow = np.asarray(window_flow[day_start:day_end]).copy()
+        day_df = compute_delay_distribution(
+            graph_name=graph_name,
+            adj=adj,
+            flow=day_flow,
+            sensor_ids=sensor_ids,
+            native_minutes=native_minutes,
+            interp_minutes=interp_minutes,
+            max_lag_minutes=max_lag_minutes,
+            interpolation_method=interpolation_method,
+        )
+        day_df["day_offset"] = int(start_day + offset)
+        day_df["day_in_window"] = int(offset)
+        frames.append(day_df)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
 
 
 def summarize_delay_distribution(delay_df: pd.DataFrame) -> pd.DataFrame:
