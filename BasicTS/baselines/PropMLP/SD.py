@@ -3,16 +3,18 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 from easydict import EasyDict
 
 sys.path.append(os.path.abspath(__file__ + "/../../.."))
 
 from basicts.data import TimeSeriesForecastingDataset
+from basicts.utils.adjacent_matrix_norm import calculate_transition_matrix
 from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
 from basicts.runners import SimpleTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
-from basicts.utils.serialization import load_adj
+from basicts.utils.serialization import load_pkl
 
 from .arch import PropMLP
 
@@ -33,6 +35,7 @@ MAX_ORDER = int(os.environ.get("PROP_MAX_ORDER", "1"))
 HIDDEN_DIM = int(os.environ.get("PROP_HIDDEN_DIM", "128"))
 DROPOUT = float(os.environ.get("PROP_DROPOUT", "0.1"))
 SEED = int(os.environ.get("PROP_SEED", "42"))
+ADD_SELF_LOOP = os.environ.get("PROP_ADD_SELF_LOOP", "0").lower() in {"1", "true", "yes", "on"}
 
 
 def _graph_path() -> str:
@@ -43,9 +46,26 @@ def _graph_path() -> str:
     raise ValueError(f"Unsupported PROP_GRAPH_VARIANT: {GRAPH_VARIANT}")
 
 
+def _unwrap_adj_payload(raw_adj):
+    if isinstance(raw_adj, (list, tuple)):
+        if len(raw_adj) == 3:
+            raw_adj = raw_adj[2]
+        elif len(raw_adj) == 1:
+            raw_adj = raw_adj[0]
+    return np.asarray(raw_adj, dtype=np.float32)
+
+
 def _supports():
-    adj_mx, _ = load_adj(_graph_path(), "doubletransition")
-    return [torch.tensor(item, dtype=torch.float32) for item in adj_mx]
+    raw_adj = _unwrap_adj_payload(load_pkl(_graph_path()))
+    if ADD_SELF_LOOP:
+        raw_adj = raw_adj + np.eye(raw_adj.shape[0], dtype=np.float32)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        support_forward = np.asarray(calculate_transition_matrix(raw_adj).T, dtype=np.float32)
+        support_backward = np.asarray(calculate_transition_matrix(raw_adj.T).T, dtype=np.float32)
+    return [
+        torch.tensor(support_forward, dtype=torch.float32),
+        torch.tensor(support_backward, dtype=torch.float32),
+    ]
 
 
 SUPPORTS = _supports()
@@ -75,7 +95,10 @@ MODEL_PARAM = {
 NUM_EPOCHS = 100
 
 CFG = EasyDict()
-CFG.DESCRIPTION = f"PropMLP on old SD: graph={GRAPH_VARIANT}, mode={FEATURE_MODE}, order={MAX_ORDER}"
+CFG.DESCRIPTION = (
+    f"PropMLP on old SD: graph={GRAPH_VARIANT}, mode={FEATURE_MODE}, "
+    f"order={MAX_ORDER}, self_loop={ADD_SELF_LOOP}"
+)
 CFG.GPU_NUM = 1
 CFG.RUNNER = SimpleTimeSeriesForecastingRunner
 
@@ -134,7 +157,18 @@ CFG.TRAIN.NUM_EPOCHS = NUM_EPOCHS
 CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
     "checkpoints",
     MODEL_ARCH.__name__,
-    "_".join([DATA_NAME, GRAPH_VARIANT, FEATURE_MODE, f"k{MAX_ORDER}", str(NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)]),
+    "_".join(
+        [
+            DATA_NAME,
+            GRAPH_VARIANT,
+            FEATURE_MODE,
+            f"k{MAX_ORDER}",
+            "selfloop" if ADD_SELF_LOOP else "noselfloop",
+            str(NUM_EPOCHS),
+            str(INPUT_LEN),
+            str(OUTPUT_LEN),
+        ]
+    ),
 )
 CFG.TRAIN.LOSS = masked_mae
 CFG.TRAIN.OPTIM = EasyDict()
