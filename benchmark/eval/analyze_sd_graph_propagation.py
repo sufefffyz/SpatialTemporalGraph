@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -11,10 +13,13 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BASICTS_ROOT = REPO_ROOT / "BasicTS"
+if str(BASICTS_ROOT) not in sys.path:
+    sys.path.append(str(BASICTS_ROOT))
+
 from basicts.utils.adjacent_matrix_norm import calculate_transition_matrix
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SD_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD"
 DEFAULT_SD_PHYS_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD_phys"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "benchmark" / "eval" / "sd_graph_propagation_analysis"
