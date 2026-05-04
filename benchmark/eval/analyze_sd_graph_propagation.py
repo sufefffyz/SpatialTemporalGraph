@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -100,13 +101,13 @@ def build_graphs(sd_dir: Path, sd_phys_dir: Path) -> tuple[dict[str, np.ndarray]
         "distthre": distthre_adj,
         "physical_dir": phys_dir_adj,
     }
-    supports = {
-        graph_name: [
-            np.asarray(calculate_transition_matrix(adj).T, dtype=np.float32),
-            np.asarray(calculate_transition_matrix(adj.T).T, dtype=np.float32),
-        ]
-        for graph_name, adj in graphs.items()
-    }
+    supports = {}
+    for graph_name, adj in graphs.items():
+        with np.errstate(divide="ignore", invalid="ignore"):
+            supports[graph_name] = [
+                np.asarray(calculate_transition_matrix(adj).T, dtype=np.float32),
+                np.asarray(calculate_transition_matrix(adj.T).T, dtype=np.float32),
+            ]
     return graphs, supports
 
 
