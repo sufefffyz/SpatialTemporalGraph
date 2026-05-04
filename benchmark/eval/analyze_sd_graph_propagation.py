@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from tqdm.auto import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASICTS_ROOT = REPO_ROOT / "BasicTS"
@@ -24,6 +25,10 @@ from basicts.utils.adjacent_matrix_norm import calculate_transition_matrix
 DEFAULT_SD_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD"
 DEFAULT_SD_PHYS_DIR = REPO_ROOT / "BasicTS" / "datasets" / "SD_phys"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "benchmark" / "eval" / "sd_graph_propagation_analysis"
+
+
+def log(message: str) -> None:
+    print(message, flush=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -289,6 +294,17 @@ def main() -> None:
     val_x, val_y = subsample_windows(*windows["val"], max_samples=args.max_eval_samples)
     test_x, test_y = subsample_windows(*windows["test"], max_samples=args.max_eval_samples)
 
+    log(f"Dataset: SD | input_len={input_len} | output_len={output_len}")
+    log(
+        "Window counts after subsampling: "
+        f"train={len(train_x)}, val={len(val_x)}, test={len(test_x)}"
+    )
+    log(
+        "Running feature modes: "
+        + ", ".join(args.feature_modes)
+        + f" | max_order={args.max_order}"
+    )
+
     feature_stats_rows = []
     plot_rows = []
     probe_rows = []
@@ -299,6 +315,10 @@ def main() -> None:
     x_only_test_feat = np.expand_dims(test_x, axis=-1)
 
     for feature_mode in args.feature_modes:
+        log("")
+        log("=" * 80)
+        log(f"Feature mode: {feature_mode}")
+        log("=" * 80)
         if feature_mode == "x_only":
             train_flat, train_target = flatten_for_probe(x_only_train_feat, train_y)
             val_flat, val_target = flatten_for_probe(x_only_val_feat, val_y)
@@ -310,7 +330,7 @@ def main() -> None:
             best_val_mae = float("inf")
             best_weight = None
             best_bias = None
-            for alpha in args.alphas:
+            for alpha in tqdm(args.alphas, desc=f"{feature_mode} alphas", leave=False):
                 weight, bias = fit_ridge(train_std, train_target, alpha)
                 pred_val = predict_ridge(val_std, weight, bias)
                 val_metrics = compute_metrics(pred_val, val_target, null_val)
@@ -322,6 +342,13 @@ def main() -> None:
 
             pred_test = predict_ridge(test_std, best_weight, best_bias)
             test_metrics = compute_metrics(pred_test, test_target, null_val)
+            log(
+                f"{feature_mode}: best_alpha={best_alpha}, "
+                f"val_MAE={best_val_mae:.4f}, "
+                f"test_MAE={test_metrics['MAE']:.4f}, "
+                f"test_RMSE={test_metrics['RMSE']:.4f}, "
+                f"test_MAPE={test_metrics['MAPE']:.4f}"
+            )
             probe_rows.append(
                 {
                     "graph": "none",
@@ -335,6 +362,7 @@ def main() -> None:
             continue
 
         for graph_name, adj in graphs.items():
+            log(f"Graph: {graph_name}")
             train_blocks = build_feature_blocks(train_x, supports[graph_name], args.max_order)
             val_blocks = build_feature_blocks(val_x, supports[graph_name], args.max_order)
             test_blocks = build_feature_blocks(test_x, supports[graph_name], args.max_order)
@@ -363,7 +391,7 @@ def main() -> None:
             best_val_mae = float("inf")
             best_weight = None
             best_bias = None
-            for alpha in args.alphas:
+            for alpha in tqdm(args.alphas, desc=f"{feature_mode}/{graph_name} alphas", leave=False):
                 weight, bias = fit_ridge(train_std, train_target, alpha)
                 pred_val = predict_ridge(val_std, weight, bias)
                 val_metrics = compute_metrics(pred_val, val_target, null_val)
@@ -375,6 +403,13 @@ def main() -> None:
 
             pred_test = predict_ridge(test_std, best_weight, best_bias)
             test_metrics = compute_metrics(pred_test, test_target, null_val)
+            log(
+                f"{feature_mode}/{graph_name}: best_alpha={best_alpha}, "
+                f"val_MAE={best_val_mae:.4f}, "
+                f"test_MAE={test_metrics['MAE']:.4f}, "
+                f"test_RMSE={test_metrics['RMSE']:.4f}, "
+                f"test_MAPE={test_metrics['MAPE']:.4f}"
+            )
             probe_rows.append(
                 {
                     "graph": graph_name,
@@ -418,6 +453,8 @@ def main() -> None:
         },
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    log("")
+    log(f"Outputs written to: {output_dir}")
     print(json.dumps(summary, indent=2))
 
 
