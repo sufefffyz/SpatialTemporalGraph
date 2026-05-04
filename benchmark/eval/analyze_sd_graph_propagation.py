@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
         default=[0.0, 1e-4, 1e-3, 1e-2, 1e-1, 1.0],
         help="Ridge alphas for linear probe selection on validation set.",
     )
+    parser.add_argument(
+        "--add-self-loop",
+        action="store_true",
+        help="Add identity matrix before building forward/backward transition matrices.",
+    )
     parser.add_argument("--max-train-samples", type=int, default=20000, help="Cap number of train windows for probe fitting.")
     parser.add_argument("--max-eval-samples", type=int, default=5000, help="Cap number of val/test windows for probe evaluation.")
     return parser.parse_args()
@@ -98,9 +103,13 @@ def load_flow(dataset_dir: Path) -> tuple[np.ndarray, dict]:
     return flow, desc
 
 
-def build_graphs(sd_dir: Path, sd_phys_dir: Path) -> tuple[dict[str, np.ndarray], dict[str, list[np.ndarray]]]:
+def build_graphs(sd_dir: Path, sd_phys_dir: Path, add_self_loop: bool = False) -> tuple[dict[str, np.ndarray], dict[str, list[np.ndarray]]]:
     distthre_adj = strip_self_loops(unwrap_adj(load_pkl(sd_dir / "adj_mx.pkl")))
     phys_dir_adj = strip_self_loops(unwrap_adj(load_pkl(sd_phys_dir / "adj_mx.pkl")))
+
+    if add_self_loop:
+        distthre_adj = distthre_adj + np.eye(distthre_adj.shape[0], dtype=np.float32)
+        phys_dir_adj = phys_dir_adj + np.eye(phys_dir_adj.shape[0], dtype=np.float32)
 
     graphs = {
         "distthre": distthre_adj,
@@ -288,7 +297,7 @@ def main() -> None:
     split_ratio = desc["regular_settings"]["TRAIN_VAL_TEST_RATIO"]
     null_val = float(desc["regular_settings"].get("NULL_VAL", 0.0))
 
-    graphs, supports = build_graphs(sd_dir, sd_phys_dir)
+    graphs, supports = build_graphs(sd_dir, sd_phys_dir, add_self_loop=args.add_self_loop)
     windows = build_windows(flow, input_len=input_len, output_len=output_len, train_val_test_ratio=split_ratio)
     train_x, train_y = subsample_windows(*windows["train"], max_samples=args.max_train_samples)
     val_x, val_y = subsample_windows(*windows["val"], max_samples=args.max_eval_samples)
@@ -302,7 +311,7 @@ def main() -> None:
     log(
         "Running feature modes: "
         + ", ".join(args.feature_modes)
-        + f" | max_order={args.max_order}"
+        + f" | max_order={args.max_order} | self_loop={args.add_self_loop}"
     )
 
     feature_stats_rows = []
@@ -439,6 +448,7 @@ def main() -> None:
         "input_len": input_len,
         "output_len": output_len,
         "max_order": args.max_order,
+        "add_self_loop": args.add_self_loop,
         "feature_modes": args.feature_modes,
         "graphs": list(graphs.keys()),
         "train_windows": int(len(train_x)),
