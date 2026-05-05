@@ -1105,7 +1105,7 @@ def render_offline_svg_map(
   </style>
 </head>
 <body>
-  <svg id="offline-map" aria-label="{html.escape(title)}">
+  <svg id="offline-map" width="100%" height="100%" preserveAspectRatio="none" aria-label="{html.escape(title)}">
     <g id="offline-grid"></g>
     <g id="offline-sensor-layer"></g>
   </svg>
@@ -1134,6 +1134,16 @@ def render_offline_svg_map(
     let currentStep = 0;
     let timer = null;
 
+    function syncSvgViewport() {{
+      const rect = svg.getBoundingClientRect();
+      const width = Math.max(320, Math.round(rect.width || window.innerWidth || 960));
+      const height = Math.max(240, Math.round(rect.height || window.innerHeight || 640));
+      svg.setAttribute("width", width);
+      svg.setAttribute("height", height);
+      svg.setAttribute("viewBox", `0 0 ${{width}} ${{height}}`);
+      return [width, height];
+    }}
+
     function colorForHeight(height) {{
       const ratio = Math.max(0, Math.min(1, height / Math.max(maxHeight, 1)));
       if (ratio < 0.5) {{
@@ -1150,9 +1160,9 @@ def render_offline_svg_map(
     }}
 
     function project(lat, lon) {{
-      const rect = svg.getBoundingClientRect();
-      const width = Math.max(320, rect.width);
-      const height = Math.max(240, rect.height);
+      const size = syncSvgViewport();
+      const width = size[0];
+      const height = size[1];
       const pad = Math.max(58, Math.min(width, height) * 0.07);
       const lonRange = Math.max(1e-9, maxLon - minLon);
       const latRange = Math.max(1e-9, maxLat - minLat);
@@ -1209,6 +1219,7 @@ def render_offline_svg_map(
     }}
 
     function updatePositions() {{
+      syncSvgViewport();
       drawGrid();
       for (const item of nodes) {{
         const p = project(item.sensor.lat, item.sensor.lon);
