@@ -106,7 +106,13 @@ def parse_args() -> argparse.Namespace:
         "--num-steps",
         type=int,
         default=96,
-        help="Number of time steps to include. Default: 96.",
+        help="Number of rendered time steps to include after applying --time-stride. Default: 96.",
+    )
+    parser.add_argument(
+        "--time-stride",
+        type=int,
+        default=1,
+        help="Render every Nth time step from the source data. Use 6 on 5min data for 30min frames.",
     )
     parser.add_argument(
         "--step-minutes",
@@ -464,16 +470,20 @@ def resolve_start_index(
     return synthetic_index, "synthetic-week"
 
 
-def validate_window(start_index: int, num_steps: int, total_steps: int) -> None:
+def validate_window(start_index: int, num_steps: int, time_stride: int, total_steps: int) -> None:
     if start_index < 0:
         raise ValueError(f"Start index must be non-negative, got {start_index}.")
     if num_steps <= 0:
         raise ValueError(f"--num-steps must be positive, got {num_steps}.")
+    if time_stride <= 0:
+        raise ValueError(f"--time-stride must be positive, got {time_stride}.")
     if start_index >= total_steps:
         raise ValueError(f"Start index {start_index} is outside data with {total_steps} time steps.")
-    if start_index + num_steps > total_steps:
+    end_index = start_index + (num_steps - 1) * time_stride + 1
+    if end_index > total_steps:
         raise ValueError(
-            f"Requested window [{start_index}, {start_index + num_steps}) exceeds data length {total_steps}."
+            f"Requested window [{start_index}, {end_index}) with --num-steps={num_steps} "
+            f"and --time-stride={time_stride} exceeds data length {total_steps}."
         )
 
 
@@ -488,18 +498,19 @@ def extract_window(
     data: np.memmap,
     start_index: int,
     num_steps: int,
+    time_stride: int,
     node_indices: np.ndarray,
     channel: int,
 ) -> np.ndarray:
-    time_slice = slice(start_index, start_index + num_steps)
+    indices = start_index + np.arange(num_steps, dtype=int) * time_stride
     if data.ndim == 2:
         if channel != 0:
             raise ValueError(f"--channel {channel} requested but data has shape {data.shape}.")
-        values = np.asarray(data[time_slice, :][:, node_indices], dtype=np.float32)
+        values = np.asarray(data[indices, :][:, node_indices], dtype=np.float32)
     elif data.ndim == 3:
         if channel < 0 or channel >= data.shape[2]:
             raise ValueError(f"--channel {channel} is outside data feature dimension {data.shape[2]}.")
-        values = np.asarray(data[time_slice, :, channel][:, node_indices], dtype=np.float32)
+        values = np.asarray(data[indices, :, channel][:, node_indices], dtype=np.float32)
     else:
         raise ValueError(f"Unsupported data shape: {data.shape}")
     return values
@@ -547,13 +558,16 @@ def build_time_labels(
     desc: dict[str, Any],
     start_index: int,
     num_steps: int,
+    time_stride: int,
     step_minutes: int,
     dataset_start_datetime: str | None,
 ) -> list[str]:
     if dataset_start_datetime is not None:
         start_dt = parse_datetime(dataset_start_datetime, "--dataset-start-datetime")
         return [
-            (start_dt + timedelta(minutes=(start_index + offset) * step_minutes)).strftime("%Y-%m-%d %H:%M")
+            (start_dt + timedelta(minutes=(start_index + offset * time_stride) * step_minutes)).strftime(
+                "%Y-%m-%d %H:%M"
+            )
             for offset in range(num_steps)
         ]
 
@@ -566,7 +580,7 @@ def build_time_labels(
             and tod_channel < data.shape[2]
             and dow_channel < data.shape[2]
         ):
-            indices = np.arange(start_index, start_index + num_steps)
+            indices = start_index + np.arange(num_steps, dtype=int) * time_stride
             tod_values = np.asarray(data[indices, 0, tod_channel], dtype=np.float64)
             dow_values = np.asarray(data[indices, 0, dow_channel], dtype=np.float64)
             labels = []
@@ -575,7 +589,7 @@ def build_time_labels(
                 labels.append(f"{DAY_NAMES[day_index]} {format_minutes_from_fraction(tod_value, step_minutes)}")
             return labels
 
-    return [f"step {start_index + offset}" for offset in range(num_steps)]
+    return [f"step {start_index + offset * time_stride}" for offset in range(num_steps)]
 
 
 def optional_meta_value(row: pd.Series, candidates: list[str]) -> str | None:
@@ -1128,7 +1142,7 @@ def main() -> None:
     num_nodes = int(data.shape[1])
     step_minutes = resolve_step_minutes(desc, args.step_minutes)
     start_index, start_mode = resolve_start_index(args, data, desc, step_minutes)
-    validate_window(start_index, args.num_steps, total_steps)
+    validate_window(start_index, args.num_steps, args.time_stride, total_steps)
 
     meta_df, id_column, lat_column, lon_column, valid_node_count = build_meta_frame(
         meta_path,
@@ -1140,7 +1154,7 @@ def main() -> None:
         args.max_nodes,
     )
     node_indices = meta_df["node_index"].to_numpy(dtype=int)
-    values = extract_window(data, start_index, args.num_steps, node_indices, args.channel)
+    values = extract_window(data, start_index, args.num_steps, args.time_stride, node_indices, args.channel)
     value_scale, reference_value = compute_scale(values, args)
     values_by_node, heights_by_node = prepare_bar_arrays(
         values,
@@ -1162,6 +1176,7 @@ def main() -> None:
         desc,
         start_index,
         args.num_steps,
+        args.time_stride,
         step_minutes,
         args.dataset_start_datetime,
     )
@@ -1188,6 +1203,8 @@ def main() -> None:
     summary["id_column"] = id_column
     summary["lat_column"] = lat_column
     summary["lon_column"] = lon_column
+    summary["time_stride"] = int(args.time_stride)
+    summary["effective_step_minutes"] = int(step_minutes * args.time_stride)
 
     render_map(sensors, time_labels, meta_df, lat_column, lon_column, args, output_html, summary)
     print(json.dumps(summary, indent=2))
