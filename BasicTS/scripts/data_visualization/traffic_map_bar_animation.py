@@ -219,6 +219,21 @@ def parse_args() -> argparse.Namespace:
             "'offline' writes a self-contained SVG map with no external resources."
         ),
     )
+    parser.add_argument(
+        "--offline-tile-url",
+        default="",
+        help=(
+            "Optional tile URL template for --renderer offline, e.g. "
+            "'https://tile.openstreetmap.org/{z}/{x}/{y}.png'. "
+            "This avoids Leaflet/CDN but still needs tile network access."
+        ),
+    )
+    parser.add_argument(
+        "--offline-tile-zoom",
+        type=int,
+        default=10,
+        help="Tile zoom used by --offline-tile-url. Default: 10.",
+    )
     return parser.parse_args()
 
 
@@ -1102,10 +1117,14 @@ def render_offline_svg_map(
     stroke: rgba(15, 23, 42, 0.35);
     stroke-width: 0.7;
   }}
+  .offline-tile {{
+    opacity: 0.86;
+  }}
   </style>
 </head>
 <body>
   <svg id="offline-map" width="100%" height="100%" preserveAspectRatio="none" aria-label="{html.escape(title)}">
+    <g id="offline-tile-layer"></g>
     <g id="offline-grid"></g>
     <g id="offline-sensor-layer"></g>
   </svg>
@@ -1121,7 +1140,10 @@ def render_offline_svg_map(
     const maxLon = {max_lon:.9f};
     const barWidth = {bar_width:.6f};
     const maxHeight = {max_height:.6f};
+    const tileUrlTemplate = {json.dumps(args.offline_tile_url)};
+    const tileZoom = {int(args.offline_tile_zoom)};
     const svg = document.getElementById("offline-map");
+    const tileLayer = document.getElementById("offline-tile-layer");
     const gridLayer = document.getElementById("offline-grid");
     const sensorLayer = document.getElementById("offline-sensor-layer");
     const slider = document.getElementById("{map_id}-slider");
@@ -1159,16 +1181,90 @@ def render_offline_svg_map(
       return `rgb(${{r}}, ${{g}}, ${{bl}})`;
     }}
 
-    function project(lat, lon) {{
+    function clampLat(lat) {{
+      return Math.max(-85.05112878, Math.min(85.05112878, lat));
+    }}
+
+    function mercatorNorm(lat, lon) {{
+      const clampedLat = clampLat(lat);
+      const sinLat = Math.sin((clampedLat * Math.PI) / 180);
+      const x = (lon + 180) / 360;
+      const y = 0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI);
+      return [x, y];
+    }}
+
+    function mercatorBounds() {{
+      const nw = mercatorNorm(maxLat, minLon);
+      const se = mercatorNorm(minLat, maxLon);
+      return {{
+        minX: Math.min(nw[0], se[0]),
+        maxX: Math.max(nw[0], se[0]),
+        minY: Math.min(nw[1], se[1]),
+        maxY: Math.max(nw[1], se[1])
+      }};
+    }}
+
+    function projectNorm(normX, normY) {{
       const size = syncSvgViewport();
       const width = size[0];
       const height = size[1];
       const pad = Math.max(58, Math.min(width, height) * 0.07);
-      const lonRange = Math.max(1e-9, maxLon - minLon);
-      const latRange = Math.max(1e-9, maxLat - minLat);
-      const x = pad + ((lon - minLon) / lonRange) * Math.max(1, width - 2 * pad);
-      const y = pad + ((maxLat - lat) / latRange) * Math.max(1, height - 2 * pad);
+      const bounds = mercatorBounds();
+      const xRange = Math.max(1e-12, bounds.maxX - bounds.minX);
+      const yRange = Math.max(1e-12, bounds.maxY - bounds.minY);
+      const x = pad + ((normX - bounds.minX) / xRange) * Math.max(1, width - 2 * pad);
+      const y = pad + ((normY - bounds.minY) / yRange) * Math.max(1, height - 2 * pad);
       return [x, y, width, height, pad];
+    }}
+
+    function project(lat, lon) {{
+      const p = mercatorNorm(lat, lon);
+      return projectNorm(p[0], p[1]);
+    }}
+
+    function tileUrl(x, y, z) {{
+      const subdomains = ["a", "b", "c", "d"];
+      const s = subdomains[Math.abs(x + y) % subdomains.length];
+      return tileUrlTemplate
+        .replaceAll("{{z}}", String(z))
+        .replaceAll("{{x}}", String(x))
+        .replaceAll("{{y}}", String(y))
+        .replaceAll("{{s}}", s);
+    }}
+
+    function drawTiles() {{
+      while (tileLayer.firstChild) {{
+        tileLayer.removeChild(tileLayer.firstChild);
+      }}
+      if (!tileUrlTemplate) {{
+        return;
+      }}
+      const z = Math.max(0, Math.min(20, Number(tileZoom) || 10));
+      const n = Math.pow(2, z);
+      const bounds = mercatorBounds();
+      const xStart = Math.floor(bounds.minX * n) - 1;
+      const xEnd = Math.floor(bounds.maxX * n) + 1;
+      const yStart = Math.floor(bounds.minY * n) - 1;
+      const yEnd = Math.floor(bounds.maxY * n) + 1;
+      for (let x = xStart; x <= xEnd; x += 1) {{
+        for (let y = yStart; y <= yEnd; y += 1) {{
+          if (y < 0 || y >= n) {{
+            continue;
+          }}
+          const wrappedX = ((x % n) + n) % n;
+          const p0 = projectNorm(x / n, y / n);
+          const p1 = projectNorm((x + 1) / n, (y + 1) / n);
+          const image = document.createElementNS(svgNS, "image");
+          image.setAttribute("class", "offline-tile");
+          image.setAttribute("href", tileUrl(wrappedX, y, z));
+          image.setAttribute("x", Math.min(p0[0], p1[0]));
+          image.setAttribute("y", Math.min(p0[1], p1[1]));
+          image.setAttribute("width", Math.abs(p1[0] - p0[0]) + 1);
+          image.setAttribute("height", Math.abs(p1[1] - p0[1]) + 1);
+          image.setAttribute("preserveAspectRatio", "none");
+          tileLayer.appendChild(image);
+        }}
+      }}
     }}
 
     function drawGrid() {{
@@ -1220,6 +1316,7 @@ def render_offline_svg_map(
 
     function updatePositions() {{
       syncSvgViewport();
+      drawTiles();
       drawGrid();
       for (const item of nodes) {{
         const p = project(item.sensor.lat, item.sensor.lon);
