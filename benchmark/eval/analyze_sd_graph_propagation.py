@@ -58,6 +58,25 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Add identity matrix before building forward/backward transition matrices.",
     )
+    parser.add_argument(
+        "--stats-window-samples",
+        type=int,
+        default=512,
+        help="Maximum number of windows used to build node-level feature matrices for expensive diagnostics.",
+    )
+    parser.add_argument(
+        "--mad-pairs",
+        type=int,
+        default=5000,
+        help="Maximum number of edge/non-edge pairs sampled for MADGap diagnostics.",
+    )
+    parser.add_argument(
+        "--embedding-methods",
+        nargs="+",
+        default=["pca"],
+        choices=["pca", "tsne"],
+        help="Low-dimensional embedding methods for node signal visualization.",
+    )
     parser.add_argument("--max-train-samples", type=int, default=20000, help="Cap number of train windows for probe fitting.")
     parser.add_argument("--max-eval-samples", type=int, default=5000, help="Cap number of val/test windows for probe evaluation.")
     return parser.parse_args()
@@ -250,8 +269,117 @@ def mean_neighbor_gap(block: np.ndarray, adj: np.ndarray) -> float:
     return float(np.mean(np.stack(diffs, axis=0)))
 
 
-def block_statistics(block: np.ndarray, adj: np.ndarray, graph_name: str, block_name: str) -> dict[str, float | str]:
+def node_feature_matrix(block: np.ndarray, max_windows: int) -> np.ndarray:
+    num_windows = min(block.shape[0], max_windows)
+    matrix = np.transpose(block[:num_windows], (2, 0, 1)).reshape(block.shape[2], num_windows * block.shape[1])
+    return matrix.astype(np.float32)
+
+
+def variance_across_nodes(block: np.ndarray) -> float:
+    return float(np.var(block, axis=2).mean())
+
+
+def effective_rank(matrix: np.ndarray) -> float:
+    centered = matrix - matrix.mean(axis=0, keepdims=True)
+    _, s, _ = np.linalg.svd(centered, full_matrices=False)
+    s = s[s > 1e-12]
+    if len(s) == 0:
+        return 0.0
+    p = s / s.sum()
+    entropy = -np.sum(p * np.log(p + 1e-12))
+    return float(np.exp(entropy))
+
+
+def directed_dirichlet_energy(block: np.ndarray, adj: np.ndarray) -> float:
+    edges = np.argwhere(adj > 0)
+    if len(edges) == 0:
+        return float("nan")
+    energy_terms = []
+    for src_idx, dst_idx in edges:
+        diff = block[:, :, int(src_idx)] - block[:, :, int(dst_idx)]
+        weight = float(adj[int(src_idx), int(dst_idx)])
+        energy_terms.append(weight * (diff ** 2))
+    return float(np.mean(np.stack(energy_terms, axis=0)))
+
+
+def cosine_distances_for_pairs(node_matrix: np.ndarray, pairs: np.ndarray) -> np.ndarray:
+    x = node_matrix[pairs[:, 0]]
+    y = node_matrix[pairs[:, 1]]
+    x_norm = np.linalg.norm(x, axis=1, keepdims=True)
+    y_norm = np.linalg.norm(y, axis=1, keepdims=True)
+    x_norm[x_norm < 1e-8] = 1.0
+    y_norm[y_norm < 1e-8] = 1.0
+    sim = np.sum((x / x_norm) * (y / y_norm), axis=1)
+    return 1.0 - sim
+
+
+def mad_gap(node_matrix: np.ndarray, adj: np.ndarray, max_pairs: int, rng: np.random.Generator) -> tuple[float, float, float]:
+    num_nodes = adj.shape[0]
+    edge_pairs = np.argwhere(adj > 0)
+    if len(edge_pairs) == 0:
+        return float("nan"), float("nan"), float("nan")
+    if len(edge_pairs) > max_pairs:
+        edge_pairs = edge_pairs[rng.choice(len(edge_pairs), size=max_pairs, replace=False)]
+
+    non_edge_pairs = []
+    target_count = len(edge_pairs)
+    attempts = 0
+    seen = set()
+    while len(non_edge_pairs) < target_count and attempts < target_count * 20:
+        i = int(rng.integers(0, num_nodes))
+        j = int(rng.integers(0, num_nodes))
+        attempts += 1
+        if i == j:
+            continue
+        if adj[i, j] > 0:
+            continue
+        key = (i, j)
+        if key in seen:
+            continue
+        seen.add(key)
+        non_edge_pairs.append(key)
+
+    if not non_edge_pairs:
+        return float("nan"), float("nan"), float("nan")
+
+    edge_d = cosine_distances_for_pairs(node_matrix, edge_pairs)
+    non_edge_d = cosine_distances_for_pairs(node_matrix, np.asarray(non_edge_pairs, dtype=int))
+    edge_mean = float(np.mean(edge_d))
+    non_edge_mean = float(np.mean(non_edge_d))
+    return edge_mean, non_edge_mean, float(non_edge_mean - edge_mean)
+
+
+def self_retention(node_matrix: np.ndarray, base_matrix: np.ndarray) -> float:
+    x = node_matrix.reshape(-1)
+    y = base_matrix.reshape(-1)
+    if np.std(x) < 1e-8 or np.std(y) < 1e-8:
+        return float("nan")
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def block_statistics(
+    block: np.ndarray,
+    adj: np.ndarray,
+    graph_name: str,
+    block_name: str,
+    base_block: np.ndarray,
+    paired_block: np.ndarray | None,
+    stats_window_samples: int,
+    max_mad_pairs: int,
+    rng: np.random.Generator,
+) -> dict[str, float | str]:
     values = block.reshape(-1)
+    node_matrix = node_feature_matrix(block, stats_window_samples)
+    base_matrix = node_feature_matrix(base_block, stats_window_samples)
+    var_ratio = variance_across_nodes(block) / max(variance_across_nodes(base_block), 1e-12)
+    edge_mad, non_edge_mad, madgap = mad_gap(node_matrix, adj, max_mad_pairs, rng)
+    directional_gap = float("nan")
+    if paired_block is not None:
+        paired_matrix = node_feature_matrix(paired_block, stats_window_samples)
+        directional_gap = float(
+            np.linalg.norm(node_matrix - paired_matrix) / max(np.linalg.norm(base_matrix), 1e-12)
+        )
+
     return {
         "graph": graph_name,
         "block": block_name,
@@ -261,6 +389,15 @@ def block_statistics(block: np.ndarray, adj: np.ndarray, graph_name: str, block_
         "p90": float(np.quantile(values, 0.9)),
         "p99": float(np.quantile(values, 0.99)),
         "mean_neighbor_gap": mean_neighbor_gap(block, adj),
+        "var_nodes": variance_across_nodes(block),
+        "var_ratio": float(var_ratio),
+        "effective_rank": effective_rank(node_matrix),
+        "dirichlet_energy": directed_dirichlet_energy(block, adj),
+        "mad_edge": edge_mad,
+        "mad_non_edge": non_edge_mad,
+        "mad_gap": madgap,
+        "self_retention": self_retention(node_matrix, base_matrix),
+        "directional_gap": directional_gap,
     }
 
 
@@ -280,6 +417,67 @@ def smoothness_plot(stats_df: pd.DataFrame, output_path: Path) -> None:
     plt.tight_layout()
     plt.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close()
+
+
+def metric_bar_plot(stats_df: pd.DataFrame, metric: str, title: str, output_path: Path) -> None:
+    plt.figure(figsize=(10, 5))
+    sns.barplot(data=stats_df, x="block", y=metric, hue="graph")
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+
+def node_embedding_plot(
+    embedding_df: pd.DataFrame,
+    method: str,
+    output_path: Path,
+) -> None:
+    blocks = list(dict.fromkeys(embedding_df["block"].tolist()))
+    fig, axes = plt.subplots(len(blocks), 2, figsize=(12, 4 * len(blocks)))
+    if len(blocks) == 1:
+        axes = np.asarray([axes])
+    for row_idx, block in enumerate(blocks):
+        for col_idx, graph_name in enumerate(["distthre", "physical_dir"]):
+            ax = axes[row_idx, col_idx]
+            sub = embedding_df[(embedding_df["block"] == block) & (embedding_df["graph"] == graph_name)]
+            if sub.empty:
+                ax.axis("off")
+                continue
+            sc = ax.scatter(
+                sub["dim1"],
+                sub["dim2"],
+                c=sub["color_value"],
+                s=12,
+                cmap="viridis",
+                alpha=0.8,
+            )
+            ax.set_title(f"{method.upper()} | {graph_name} | {block}")
+            ax.set_xlabel("dim1")
+            ax.set_ylabel("dim2")
+        fig.colorbar(sc, ax=axes[row_idx, :], fraction=0.02, pad=0.02)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close()
+
+
+def compute_embedding(node_matrix: np.ndarray, method: str, random_state: int = 42) -> np.ndarray:
+    if method == "pca":
+        from sklearn.decomposition import PCA
+
+        return PCA(n_components=2, random_state=random_state).fit_transform(node_matrix)
+    if method == "tsne":
+        from sklearn.manifold import TSNE
+
+        perplexity = min(30, max(5, node_matrix.shape[0] // 20))
+        return TSNE(
+            n_components=2,
+            perplexity=perplexity,
+            init="pca",
+            learning_rate="auto",
+            random_state=random_state,
+        ).fit_transform(node_matrix)
+    raise ValueError(f"Unsupported embedding method: {method}")
 
 
 def main() -> None:
@@ -317,6 +515,8 @@ def main() -> None:
     feature_stats_rows = []
     plot_rows = []
     probe_rows = []
+    embedding_rows = []
+    rng = np.random.default_rng(42)
 
     # X-only baseline once
     x_only_train_feat = np.expand_dims(train_x, axis=-1)
@@ -377,7 +577,25 @@ def main() -> None:
             test_blocks = build_feature_blocks(test_x, supports[graph_name], args.max_order)
 
             for block_name, block_value in train_blocks.items():
-                feature_stats_rows.append(block_statistics(block_value, adj, graph_name, block_name))
+                paired_block = None
+                if block_name.startswith("pf_"):
+                    paired_block = train_blocks.get(block_name.replace("pf_", "pb_"))
+                elif block_name.startswith("pb_"):
+                    paired_block = train_blocks.get(block_name.replace("pb_", "pf_"))
+
+                feature_stats_rows.append(
+                    block_statistics(
+                        block_value,
+                        adj,
+                        graph_name,
+                        block_name,
+                        base_block=train_blocks["x"],
+                        paired_block=paired_block,
+                        stats_window_samples=args.stats_window_samples,
+                        max_mad_pairs=args.mad_pairs,
+                        rng=rng,
+                    )
+                )
                 sample = block_value.reshape(-1)
                 if sample.size > 50000:
                     sample = sample[:: max(1, sample.size // 50000)]
@@ -385,6 +603,24 @@ def main() -> None:
                     {"graph": graph_name, "block": block_name, "value": float(value)}
                     for value in sample
                 )
+
+                if block_name in {"x", "pf_1", "pb_1", f"pf_{args.max_order}", f"pb_{args.max_order}"}:
+                    node_matrix = node_feature_matrix(block_value, args.stats_window_samples)
+                    color_values = (adj > 0).sum(axis=1).astype(float)
+                    for method in args.embedding_methods:
+                        embedding = compute_embedding(node_matrix, method)
+                        for node_idx in range(embedding.shape[0]):
+                            embedding_rows.append(
+                                {
+                                    "graph": graph_name,
+                                    "block": block_name,
+                                    "method": method,
+                                    "node_index": node_idx,
+                                    "dim1": float(embedding[node_idx, 0]),
+                                    "dim2": float(embedding[node_idx, 1]),
+                                    "color_value": float(color_values[node_idx]),
+                                }
+                            )
 
             train_feat = combine_feature_blocks(train_blocks, feature_mode, args.max_order)
             val_feat = combine_feature_blocks(val_blocks, feature_mode, args.max_order)
@@ -433,15 +669,29 @@ def main() -> None:
     feature_stats_df = pd.DataFrame(feature_stats_rows)
     probe_df = pd.DataFrame(probe_rows)
     plot_df = pd.DataFrame(plot_rows)
+    embedding_df = pd.DataFrame(embedding_rows)
 
     feature_stats_df.to_csv(output_dir / "feature_block_stats.csv", index=False)
     probe_df.to_csv(output_dir / "linear_probe_results.csv", index=False)
     plot_df.to_csv(output_dir / "feature_distribution_sample.csv", index=False)
+    if not embedding_df.empty:
+        embedding_df.to_csv(output_dir / "node_embeddings.csv", index=False)
 
     if not plot_df.empty:
         feature_distribution_plot(plot_df, output_dir / "feature_distribution_boxplot.png")
     if not feature_stats_df.empty:
         smoothness_plot(feature_stats_df, output_dir / "feature_neighbor_gap.png")
+        metric_bar_plot(feature_stats_df, "var_ratio", "Node-Variance Retention after Propagation", output_dir / "feature_var_ratio.png")
+        metric_bar_plot(feature_stats_df, "effective_rank", "Effective Rank after Propagation", output_dir / "feature_effective_rank.png")
+        metric_bar_plot(feature_stats_df, "dirichlet_energy", "Directed Dirichlet Energy after Propagation", output_dir / "feature_dirichlet_energy.png")
+        metric_bar_plot(feature_stats_df, "mad_gap", "MADGap after Propagation", output_dir / "feature_mad_gap.png")
+    if not embedding_df.empty:
+        for method in embedding_df["method"].unique():
+            node_embedding_plot(
+                embedding_df[embedding_df["method"] == method].copy(),
+                method,
+                output_dir / f"node_embedding_{method}.png",
+            )
 
     summary = {
         "dataset": "SD",
@@ -460,6 +710,11 @@ def main() -> None:
             "feature_distribution_csv": str(output_dir / "feature_distribution_sample.csv"),
             "feature_distribution_png": str(output_dir / "feature_distribution_boxplot.png"),
             "neighbor_gap_png": str(output_dir / "feature_neighbor_gap.png"),
+            "var_ratio_png": str(output_dir / "feature_var_ratio.png"),
+            "effective_rank_png": str(output_dir / "feature_effective_rank.png"),
+            "dirichlet_energy_png": str(output_dir / "feature_dirichlet_energy.png"),
+            "mad_gap_png": str(output_dir / "feature_mad_gap.png"),
+            "embedding_csv": str(output_dir / "node_embeddings.csv"),
         },
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
