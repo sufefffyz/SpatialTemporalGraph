@@ -1,14 +1,16 @@
-# PropMLP Results on Old SD
+# PropMLP: distthre vs physical_dir on Old SD
 
-This note summarizes the PropMLP experiments found under:
+This README compares `distthre` and `physical_dir` under matched PropMLP settings. Each row fixes the same feature mode, propagation order `K`, and self-loop setting, then compares the two graph choices directly.
+
+Results were collected from server-side `test_metrics.json` files under:
 
 ```text
 BasicTS/checkpoints/PropMLP/
 ```
 
-The results were collected from each run's `test_metrics.json` on the server on 2026-05-05.
+Collected on: `2026-05-05`
 
-## Setup
+## Experimental Setup
 
 - Dataset: `SD`
 - Input length: `12`
@@ -18,124 +20,137 @@ The results were collected from each run's `test_metrics.json` on the server on 
 - Hidden dimension: `128`
 - Dropout: `0.1`
 - Seed: `42`
-- Metrics below are `overall` test metrics unless otherwise noted.
-- `x_only` ignores graph propagation and is graph-agnostic.
-- `pfpb` uses only propagated forward/backward graph features.
-- `x_pfpb` concatenates the original signal with propagated forward/backward graph features.
+- Primary comparison metric: overall test `MAE`
 
-## Main Takeaways
+Feature modes:
 
-1. Best overall run:
+```text
+x_only  : raw node history only; graph-agnostic baseline
+pfpb    : propagated forward/backward graph features only
+x_pfpb  : raw node history + propagated forward/backward graph features
+```
 
-   ```text
-   distthre + x_pfpb + K=4 + no self-loop
-   MAE=37.3438, RMSE=60.3250, MAPE=0.2680, WAPE=0.2410
-   ```
+Delta convention:
 
-2. Adding graph-propagated features to the original signal is clearly useful. The `x_only` baseline has `MAE=42.2939`, while the best `x_pfpb` runs are around `37.34-37.59`.
+```text
+Delta MAE = physical_dir MAE - distthre MAE
+Delta > 0 means distthre is better.
+Delta < 0 means physical_dir is better.
+```
 
-3. Pure propagated features (`pfpb`) are much weaker than `x_pfpb`, but self-loops help them a lot. For example, `physical_dir + pfpb + K=5` improves from `MAE=68.9791` without self-loop to `MAE=43.7565` with self-loop.
+## Summary
 
-4. `distthre` is currently stronger than `physical_dir` for the final predictive model when using `x_pfpb`. The best `physical_dir + x_pfpb` result is `MAE=38.8375`, while the best `distthre + x_pfpb` result is `MAE=37.3438`.
+The strongest PropMLP result is:
 
-5. For `x_pfpb`, larger propagation order helps up to around `K=4/K=5`; the gain is much larger from `K=1` to `K=4` than from `K=4` to `K=5`.
+```text
+distthre + x_pfpb + K=4 + no self-loop
+MAE=37.3438, RMSE=60.3250, MAPE=0.2680, WAPE=0.2410
+```
 
-## Best Runs
+Graph comparison takeaways:
 
-| Rank | Graph | Mode | K | Self-loop | MAE | RMSE | MAPE | WAPE |
-|---:|---|---|---:|---|---:|---:|---:|---:|
-| 1 | distthre | x_pfpb | 4 | no | 37.3438 | 60.3250 | 0.2680 | 0.2410 |
-| 2 | distthre | x_pfpb | 5 | no | 37.3500 | 59.8173 | 0.2735 | 0.2479 |
-| 3 | distthre | x_pfpb | 4 | yes | 37.4299 | 60.5163 | 0.2653 | 0.2417 |
-| 4 | distthre | x_pfpb | 5 | yes | 37.5911 | 60.2105 | 0.2762 | 0.2476 |
-| 5 | distthre | x_pfpb | 3 | yes | 37.7298 | 60.1568 | 0.2905 | 0.2608 |
-| 6 | distthre | x_pfpb | 2 | no | 37.9624 | 60.0858 | 0.2972 | 0.2670 |
-| 7 | distthre | x_pfpb | 2 | yes | 38.0447 | 60.3398 | 0.2948 | 0.2638 |
-| 8 | distthre | x_pfpb | 3 | no | 38.1105 | 60.5381 | 0.2973 | 0.2696 |
-| 9 | distthre | x_pfpb | 1 | no | 38.6227 | 61.4954 | 0.2903 | 0.2568 |
-| 10 | distthre | x_pfpb | 1 | yes | 38.6803 | 61.6319 | 0.2887 | 0.2552 |
-| 11 | physical_dir | x_pfpb | 5 | no | 38.8375 | 62.2023 | 0.3028 | 0.2684 |
-| 12 | physical_dir | x_pfpb | 4 | no | 39.2206 | 62.9108 | 0.3030 | 0.2703 |
-| 13 | physical_dir | x_pfpb | 4 | yes | 39.4446 | 63.3291 | 0.3085 | 0.2712 |
-| 14 | physical_dir | x_pfpb | 5 | yes | 39.5011 | 63.5520 | 0.3163 | 0.2784 |
-| 15 | physical_dir | x_pfpb | 3 | no | 39.7135 | 63.5103 | 0.2979 | 0.2613 |
+- For `x_pfpb`, `distthre` beats `physical_dir` in all 10 matched settings.
+- For `x_pfpb`, the average MAE advantage of `distthre` over `physical_dir` is `2.1746`.
+- For `pfpb`, `distthre` beats `physical_dir` in 8 of 10 matched settings.
+- The only `pfpb` settings where `physical_dir` wins are self-loop `K=1` and self-loop `K=2`.
+- Pure `pfpb` is much more sensitive to self-loops than `x_pfpb`.
 
-## Baseline
+The graph-agnostic baseline is:
 
-| Graph | Mode | K | Self-loop | MAE | RMSE | MAPE | WAPE | H3 MAE | H6 MAE | H12 MAE |
-|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
-| distthre | x_only | 1 | no | 42.2939 | 67.3608 | 0.3370 | 0.2888 | 25.1931 | 40.4161 | 67.8622 |
+| Mode | MAE | RMSE | MAPE | WAPE | H3 MAE | H6 MAE | H12 MAE |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| x_only | 42.2939 | 67.3608 | 0.3370 | 0.2888 | 25.1931 | 40.4161 | 67.8622 |
 
-## `x_pfpb` Results
+## Matched Comparison: `x_pfpb`
 
-| Graph | K | Self-loop | MAE | RMSE | MAPE | WAPE | H3 MAE | H6 MAE | H12 MAE |
-|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
-| distthre | 1 | no | 38.6227 | 61.4954 | 0.2903 | 0.2568 | 23.7549 | 36.9897 | 60.9931 |
-| distthre | 2 | no | 37.9624 | 60.0858 | 0.2972 | 0.2670 | 23.4177 | 36.3644 | 59.8561 |
-| distthre | 3 | no | 38.1105 | 60.5381 | 0.2973 | 0.2696 | 23.4682 | 36.5015 | 60.1756 |
-| distthre | 4 | no | 37.3438 | 60.3250 | 0.2680 | 0.2410 | 23.2668 | 35.8993 | 58.3463 |
-| distthre | 5 | no | 37.3500 | 59.8173 | 0.2735 | 0.2479 | 23.3139 | 35.8550 | 58.1750 |
-| distthre | 1 | yes | 38.6803 | 61.6319 | 0.2887 | 0.2552 | 23.8073 | 37.0510 | 61.0746 |
-| distthre | 2 | yes | 38.0447 | 60.3398 | 0.2948 | 0.2638 | 23.5086 | 36.4770 | 59.9345 |
-| distthre | 3 | yes | 37.7298 | 60.1568 | 0.2905 | 0.2608 | 23.3733 | 36.1258 | 59.2574 |
-| distthre | 4 | yes | 37.4299 | 60.5163 | 0.2653 | 0.2417 | 23.2386 | 35.9422 | 58.6803 |
-| distthre | 5 | yes | 37.5911 | 60.2105 | 0.2762 | 0.2476 | 24.0620 | 35.9910 | 58.4525 |
-| physical_dir | 1 | no | 41.1449 | 65.7564 | 0.3083 | 0.2665 | 24.7804 | 39.4205 | 65.6680 |
-| physical_dir | 2 | no | 40.6024 | 64.8826 | 0.3336 | 0.2910 | 24.4649 | 38.7840 | 64.8759 |
-| physical_dir | 3 | no | 39.7135 | 63.5103 | 0.2979 | 0.2613 | 24.3024 | 38.1665 | 62.7502 |
-| physical_dir | 4 | no | 39.2206 | 62.9108 | 0.3030 | 0.2703 | 23.9992 | 37.6059 | 61.9480 |
-| physical_dir | 5 | no | 38.8375 | 62.2023 | 0.3028 | 0.2684 | 23.9490 | 37.2077 | 61.2858 |
-| physical_dir | 1 | yes | 40.9458 | 65.2088 | 0.3036 | 0.2642 | 24.6805 | 39.1872 | 65.2091 |
-| physical_dir | 2 | yes | 40.9517 | 65.5965 | 0.3466 | 0.3044 | 24.6223 | 39.3014 | 65.1504 |
-| physical_dir | 3 | yes | 40.2490 | 63.6084 | 0.3381 | 0.2916 | 24.9172 | 38.5263 | 63.2248 |
-| physical_dir | 4 | yes | 39.4446 | 63.3291 | 0.3085 | 0.2712 | 24.0294 | 37.8037 | 62.4672 |
-| physical_dir | 5 | yes | 39.5011 | 63.5520 | 0.3163 | 0.2784 | 24.1177 | 37.8530 | 62.5057 |
+`x_pfpb` keeps the original node signal and appends graph-propagated features. This is the most important setting for forecasting performance.
 
-## `pfpb` Results
+| K | Self-loop | dist MAE | phys MAE | Delta MAE | Winner | dist RMSE | phys RMSE | dist WAPE | phys WAPE |
+|---:|---|---:|---:|---:|---|---:|---:|---:|---:|
+| 1 | no | 38.6227 | 41.1449 | +2.5223 | distthre | 61.4954 | 65.7564 | 0.2568 | 0.2665 |
+| 2 | no | 37.9624 | 40.6024 | +2.6401 | distthre | 60.0858 | 64.8826 | 0.2670 | 0.2910 |
+| 3 | no | 38.1105 | 39.7135 | +1.6030 | distthre | 60.5381 | 63.5103 | 0.2696 | 0.2613 |
+| 4 | no | 37.3438 | 39.2206 | +1.8768 | distthre | 60.3250 | 62.9108 | 0.2410 | 0.2703 |
+| 5 | no | 37.3500 | 38.8375 | +1.4875 | distthre | 59.8173 | 62.2023 | 0.2479 | 0.2684 |
+| 1 | yes | 38.6803 | 40.9458 | +2.2655 | distthre | 61.6319 | 65.2088 | 0.2552 | 0.2642 |
+| 2 | yes | 38.0447 | 40.9517 | +2.9070 | distthre | 60.3398 | 65.5965 | 0.2638 | 0.3044 |
+| 3 | yes | 37.7298 | 40.2490 | +2.5191 | distthre | 60.1568 | 63.6084 | 0.2608 | 0.2916 |
+| 4 | yes | 37.4299 | 39.4446 | +2.0147 | distthre | 60.5163 | 63.3291 | 0.2417 | 0.2712 |
+| 5 | yes | 37.5911 | 39.5011 | +1.9100 | distthre | 60.2105 | 63.5520 | 0.2476 | 0.2784 |
 
-| Graph | K | Self-loop | MAE | RMSE | MAPE | WAPE | H3 MAE | H6 MAE | H12 MAE |
-|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
-| distthre | 1 | no | 60.9045 | 88.4952 | 0.5013 | 0.4487 | 52.6366 | 58.8818 | 74.7609 |
-| distthre | 2 | no | 54.2800 | 80.5682 | 0.4117 | 0.3716 | 44.7984 | 52.3633 | 69.4263 |
-| distthre | 3 | no | 52.0029 | 77.9005 | 0.3986 | 0.3572 | 41.9941 | 50.1705 | 67.8759 |
-| distthre | 4 | no | 50.1667 | 75.0435 | 0.4064 | 0.3601 | 40.1914 | 48.3489 | 65.8536 |
-| distthre | 5 | no | 49.7227 | 74.9285 | 0.3696 | 0.3326 | 39.7225 | 47.9496 | 65.4804 |
-| distthre | 1 | yes | 56.7366 | 83.0622 | 0.4601 | 0.4107 | 47.3361 | 54.6122 | 72.1742 |
-| distthre | 2 | yes | 47.3278 | 71.5075 | 0.3472 | 0.3133 | 35.9734 | 45.4749 | 64.9766 |
-| distthre | 3 | yes | 43.8513 | 67.5539 | 0.3261 | 0.2907 | 31.4241 | 42.0742 | 62.8665 |
-| distthre | 4 | yes | 42.1105 | 65.4429 | 0.3086 | 0.2801 | 29.5375 | 40.4362 | 61.2628 |
-| distthre | 5 | yes | 41.8674 | 64.9560 | 0.3085 | 0.2807 | 29.4513 | 40.1719 | 60.7212 |
-| physical_dir | 1 | no | 74.2041 | 109.7298 | 0.8317 | 0.6996 | 65.7420 | 72.4305 | 87.8815 |
-| physical_dir | 2 | no | 72.6776 | 108.0681 | 0.8029 | 0.6800 | 64.3179 | 70.9321 | 86.1270 |
-| physical_dir | 3 | no | 71.3580 | 106.9928 | 0.7440 | 0.6342 | 63.2645 | 69.6155 | 84.5340 |
-| physical_dir | 4 | no | 70.5459 | 105.8347 | 0.7600 | 0.6503 | 62.4084 | 68.8460 | 83.5978 |
-| physical_dir | 5 | no | 68.9791 | 103.7053 | 0.7448 | 0.6359 | 61.0809 | 67.2758 | 81.8751 |
-| physical_dir | 1 | yes | 49.6716 | 74.7557 | 0.4037 | 0.3525 | 36.1454 | 47.5771 | 70.4967 |
-| physical_dir | 2 | yes | 46.2360 | 69.9992 | 0.3591 | 0.3160 | 32.6392 | 44.2874 | 67.0635 |
-| physical_dir | 3 | yes | 44.9880 | 68.8964 | 0.3330 | 0.2948 | 31.2973 | 43.0470 | 65.9230 |
-| physical_dir | 4 | yes | 44.0888 | 67.2346 | 0.3474 | 0.3084 | 30.5646 | 42.1594 | 64.7907 |
-| physical_dir | 5 | yes | 43.7565 | 66.7479 | 0.3319 | 0.2953 | 30.2912 | 41.9322 | 64.1641 |
+`x_pfpb` verdict:
 
-## Interpretation
+```text
+distthre wins: 10 / 10
+physical_dir wins: 0 / 10
+mean Delta MAE: +2.1746
+best distthre: K=4, no self-loop, MAE=37.3438
+best physical_dir: K=5, no self-loop, MAE=38.8375
+```
 
-### Why `x_pfpb` wins
+Interpretation:
 
-`pfpb` alone forces the model to predict only from propagated signals. That can remove or dilute node-local information. `x_pfpb` keeps the raw node history and adds graph-propagated context, so it can use propagation when useful without losing the original temporal signal.
+`physical_dir` improves as `K` increases, but it never catches `distthre` in matched `x_pfpb` settings. The raw node history already carries strong local information; in this model, `distthre` provides more useful additional propagated context.
 
-### Self-loop effect
+## Matched Comparison: `pfpb`
 
-Self-loop has opposite effects depending on whether the original signal is included:
+`pfpb` removes the raw node history and gives the MLP only propagated graph features. This setting tests whether graph propagation alone preserves enough predictive information.
 
-- For `pfpb`, self-loop is very helpful because it injects each node's own signal into the propagated feature blocks.
-- For `x_pfpb`, self-loop is usually neutral or slightly worse because the original `x` is already present. Adding self-loop to propagated blocks can make the propagated features more redundant with `x`.
+| K | Self-loop | dist MAE | phys MAE | Delta MAE | Winner | dist RMSE | phys RMSE | dist WAPE | phys WAPE |
+|---:|---|---:|---:|---:|---|---:|---:|---:|---:|
+| 1 | no | 60.9045 | 74.2041 | +13.2996 | distthre | 88.4952 | 109.7298 | 0.4487 | 0.6996 |
+| 2 | no | 54.2800 | 72.6776 | +18.3976 | distthre | 80.5682 | 108.0681 | 0.3716 | 0.6800 |
+| 3 | no | 52.0029 | 71.3580 | +19.3551 | distthre | 77.9005 | 106.9928 | 0.3572 | 0.6342 |
+| 4 | no | 50.1667 | 70.5459 | +20.3791 | distthre | 75.0435 | 105.8347 | 0.3601 | 0.6503 |
+| 5 | no | 49.7227 | 68.9791 | +19.2564 | distthre | 74.9285 | 103.7053 | 0.3326 | 0.6359 |
+| 1 | yes | 56.7366 | 49.6716 | -7.0651 | physical_dir | 83.0622 | 74.7557 | 0.4107 | 0.3525 |
+| 2 | yes | 47.3278 | 46.2360 | -1.0918 | physical_dir | 71.5075 | 69.9992 | 0.3133 | 0.3160 |
+| 3 | yes | 43.8513 | 44.9880 | +1.1367 | distthre | 67.5539 | 68.8964 | 0.2907 | 0.2948 |
+| 4 | yes | 42.1105 | 44.0888 | +1.9782 | distthre | 65.4429 | 67.2346 | 0.2801 | 0.3084 |
+| 5 | yes | 41.8674 | 43.7565 | +1.8891 | distthre | 64.9560 | 66.7479 | 0.2807 | 0.2953 |
 
-### Graph choice
+`pfpb` verdict:
 
-The `physical_dir` graph can look stronger in propagation diagnostics such as MADGap, but in this trained PropMLP setting the best predictive results still come from `distthre + x_pfpb`. This suggests that stronger graph-separation diagnostics do not automatically translate to better forecasting features.
+```text
+distthre wins: 8 / 10
+physical_dir wins: 2 / 10
+mean Delta MAE: +8.7535
+best distthre: K=5, self-loop, MAE=41.8674
+best physical_dir: K=5, self-loop, MAE=43.7565
+```
+
+Interpretation:
+
+Without self-loops, `physical_dir + pfpb` is very weak because pure propagation loses too much node-local information. Adding self-loops fixes much of that by letting each node retain its own signal in the propagated blocks. Even then, `distthre` becomes better again from `K=3` onward.
+
+## Best Matched Settings by Feature Mode
+
+| Feature mode | Best distthre setting | Best dist MAE | Best physical_dir setting | Best phys MAE | Better graph |
+|---|---|---:|---|---:|---|
+| x_pfpb | K=4, no self-loop | 37.3438 | K=5, no self-loop | 38.8375 | distthre |
+| pfpb | K=5, self-loop | 41.8674 | K=5, self-loop | 43.7565 | distthre |
+
+## Relation to Propagation Diagnostics
+
+The graph diagnostics can favor `physical_dir` in some cases, especially MADGap under no-self-loop propagation. That does not directly imply better forecasting in PropMLP.
+
+The predictive comparison here says:
+
+```text
+For final forecasting with PropMLP, distthre is consistently stronger under matched settings.
+```
+
+One likely reason is that `physical_dir` creates a more selective propagation structure, but the trained MLP benefits more from the dense distance-threshold neighborhood when the raw signal is included.
 
 ## Reproduction
 
-All runs use `BasicTS/baselines/PropMLP/SD.py` and are controlled by environment variables:
+All runs use:
+
+```text
+BasicTS/baselines/PropMLP/SD.py
+```
+
+Example:
 
 ```bash
 cd /home/yuzhang_fei/code/SpatialTemporalGraph/BasicTS
@@ -149,7 +164,7 @@ PROP_ADD_SELF_LOOP=0 \
   --gpus 0
 ```
 
-Useful variables:
+Useful environment variables:
 
 ```text
 PROP_GRAPH_VARIANT: distthre | physical_dir
@@ -158,9 +173,8 @@ PROP_MAX_ORDER:     integer K
 PROP_ADD_SELF_LOOP: 0 | 1
 ```
 
-Evaluation metrics are stored in:
+Metrics are stored in:
 
 ```text
 BasicTS/checkpoints/PropMLP/<experiment>/<run_id>/test_metrics.json
 ```
-
