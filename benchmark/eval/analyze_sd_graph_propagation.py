@@ -367,15 +367,20 @@ def block_statistics(
     stats_window_samples: int,
     max_mad_pairs: int,
     rng: np.random.Generator,
-) -> dict[str, float | str]:
-    values = block.reshape(-1)
-    node_matrix = node_feature_matrix(block, stats_window_samples)
-    base_matrix = node_feature_matrix(base_block, stats_window_samples)
-    var_ratio = variance_across_nodes(block) / max(variance_across_nodes(base_block), 1e-12)
+) -> dict[str, float | str | int]:
+    diagnostic_windows = min(block.shape[0], max(1, stats_window_samples))
+    stats_block = block[:diagnostic_windows]
+    stats_base_block = base_block[:diagnostic_windows]
+    stats_paired_block = paired_block[:diagnostic_windows] if paired_block is not None else None
+
+    values = stats_block.reshape(-1)
+    node_matrix = node_feature_matrix(stats_block, diagnostic_windows)
+    base_matrix = node_feature_matrix(stats_base_block, diagnostic_windows)
+    var_ratio = variance_across_nodes(stats_block) / max(variance_across_nodes(stats_base_block), 1e-12)
     edge_mad, non_edge_mad, madgap = mad_gap(node_matrix, adj, max_mad_pairs, rng)
     directional_gap = float("nan")
-    if paired_block is not None:
-        paired_matrix = node_feature_matrix(paired_block, stats_window_samples)
+    if stats_paired_block is not None:
+        paired_matrix = node_feature_matrix(stats_paired_block, diagnostic_windows)
         directional_gap = float(
             np.linalg.norm(node_matrix - paired_matrix) / max(np.linalg.norm(base_matrix), 1e-12)
         )
@@ -383,16 +388,17 @@ def block_statistics(
     return {
         "graph": graph_name,
         "block": block_name,
+        "diagnostic_windows": int(diagnostic_windows),
         "mean": float(values.mean()),
         "std": float(values.std()),
         "p50": float(np.quantile(values, 0.5)),
         "p90": float(np.quantile(values, 0.9)),
         "p99": float(np.quantile(values, 0.99)),
-        "mean_neighbor_gap": mean_neighbor_gap(block, adj),
-        "var_nodes": variance_across_nodes(block),
+        "mean_neighbor_gap": mean_neighbor_gap(stats_block, adj),
+        "var_nodes": variance_across_nodes(stats_block),
         "var_ratio": float(var_ratio),
         "effective_rank": effective_rank(node_matrix),
-        "dirichlet_energy": directed_dirichlet_energy(block, adj),
+        "dirichlet_energy": directed_dirichlet_energy(stats_block, adj),
         "mad_edge": edge_mad,
         "mad_non_edge": non_edge_mad,
         "mad_gap": madgap,
