@@ -7,10 +7,9 @@ The script reads BasicTS-style datasets:
     datasets/<DATASET>/data.dat
     datasets/<DATASET>/desc.json
 
-It writes a self-contained HTML file with a canvas heatmap, time slider, and
-playback controls. Unlike the map animation, this script does not load map
-tiles or external JavaScript, so it is useful for high-contrast spatial
-distribution inspection.
+It writes an HTML file with a canvas heatmap, OSM-compatible basemap tiles,
+time slider, and playback controls. It does not load external JavaScript, and
+the basemap can be disabled with --tile-url "" for a pure planar view.
 """
 
 from __future__ import annotations
@@ -81,6 +80,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--value-precision", type=int, default=2, help="Value decimals stored in HTML.")
     parser.add_argument("--play-interval-ms", type=int, default=140, help="Playback interval.")
     parser.add_argument("--hide-points", action="store_true", help="Hide sensor point overlay.")
+    parser.add_argument(
+        "--tile-url",
+        default="https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        help="OSM-compatible tile URL template. Use an empty string to disable the basemap.",
+    )
+    parser.add_argument("--tile-zoom", type=int, default=11, help="Basemap tile zoom level.")
+    parser.add_argument("--basemap-opacity", type=float, default=0.82, help="OSM basemap opacity.")
+    parser.add_argument("--basemap-dim", type=float, default=0.20, help="Dark overlay over basemap for heat contrast.")
     return parser.parse_args()
 
 
@@ -451,6 +458,7 @@ def render_html(
     summary_json = html_escape_json(summary)
     title = f"{summary['dataset']} planar heatmap"
     show_points = "false" if args.hide_points else "true"
+    tile_url = args.tile_url or ""
 
     page = f"""<!doctype html>
 <html lang="en">
@@ -482,7 +490,7 @@ def render_html(
     height: min(100vh, {int(args.canvas_height)}px);
     max-width: 100vw;
     max-height: 100vh;
-    border: 1px solid rgba(148, 163, 184, 0.28);
+    border: 1px solid rgba(15, 23, 42, 0.32);
     border-radius: 12px;
     box-shadow: 0 18px 55px rgba(0, 0, 0, 0.45);
   }}
@@ -579,7 +587,7 @@ def render_html(
     <div class="legend-bar"></div>
     <div class="legend-labels">
       <span>{summary['contrast_low']:.2f}</span>
-      <span>clipped flow</span>
+      <span>OSM + clipped flow</span>
       <span>{summary['contrast_high']:.2f}</span>
     </div>
   </div>
@@ -599,9 +607,14 @@ def render_html(
     const pointRadius = {float(args.point_radius):.6f};
     const gamma = {float(args.gamma):.6f};
     const showPoints = {show_points};
+    const tileUrlTemplate = {json.dumps(tile_url)};
+    const tileZoom = {int(args.tile_zoom)};
+    const basemapOpacity = {float(args.basemap_opacity):.6f};
+    const basemapDim = {float(args.basemap_dim):.6f};
     const low = summary.contrast_low;
     const high = summary.contrast_high;
     const playIntervalMs = {int(args.play_interval_ms)};
+    const tileCache = new Map();
     let currentStep = 0;
     let timer = null;
 
@@ -645,7 +658,118 @@ def render_html(
       return Math.pow(Math.max(0, Math.min(1, raw)), gamma);
     }}
 
+    function clampLat(lat) {{
+      return Math.max(-85.05112878, Math.min(85.05112878, lat));
+    }}
+
+    function mercatorNorm(lat, lon) {{
+      const clampedLat = clampLat(lat);
+      const sinLat = Math.sin((clampedLat * Math.PI) / 180);
+      const x = (lon + 180) / 360;
+      const y = 0.5 - Math.log((1 + sinLat) / (1 - sinLat)) / (4 * Math.PI);
+      return [x, y];
+    }}
+
+    function mercatorBounds() {{
+      const nw = mercatorNorm(summary.max_lat, summary.min_lon);
+      const se = mercatorNorm(summary.min_lat, summary.max_lon);
+      return {{
+        minX: Math.min(nw[0], se[0]),
+        maxX: Math.max(nw[0], se[0]),
+        minY: Math.min(nw[1], se[1]),
+        maxY: Math.max(nw[1], se[1])
+      }};
+    }}
+
+    function projectNorm(normX, normY, width, height) {{
+      const pad = Math.max(44, Math.min(width, height) * 0.065);
+      const bounds = mercatorBounds();
+      const xRange = Math.max(1e-12, bounds.maxX - bounds.minX);
+      const yRange = Math.max(1e-12, bounds.maxY - bounds.minY);
+      const x = pad + ((normX - bounds.minX) / xRange) * Math.max(1, width - 2 * pad);
+      const y = pad + ((normY - bounds.minY) / yRange) * Math.max(1, height - 2 * pad);
+      return [x, y];
+    }}
+
+    function projectGeo(lat, lon, width, height) {{
+      const p = mercatorNorm(lat, lon);
+      return projectNorm(p[0], p[1], width, height);
+    }}
+
+    function tileUrl(x, y, z) {{
+      const subdomains = ["a", "b", "c", "d"];
+      const s = subdomains[Math.abs(x + y) % subdomains.length];
+      return tileUrlTemplate
+        .replaceAll("{{z}}", String(z))
+        .replaceAll("{{x}}", String(x))
+        .replaceAll("{{y}}", String(y))
+        .replaceAll("{{s}}", s);
+    }}
+
+    function getTileImage(url) {{
+      if (tileCache.has(url)) {{
+        return tileCache.get(url);
+      }}
+      const image = new Image();
+      image.referrerPolicy = "no-referrer";
+      image.onload = function() {{
+        drawFrame(currentStep);
+      }};
+      image.src = url;
+      tileCache.set(url, image);
+      return image;
+    }}
+
+    function drawBasemap(width, height) {{
+      if (!tileUrlTemplate) {{
+        return false;
+      }}
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(1, basemapOpacity));
+      ctx.fillStyle = "#dbeafe";
+      ctx.fillRect(0, 0, width, height);
+      const z = Math.max(0, Math.min(20, Number(tileZoom) || 11));
+      const n = Math.pow(2, z);
+      const bounds = mercatorBounds();
+      const xStart = Math.floor(bounds.minX * n) - 1;
+      const xEnd = Math.floor(bounds.maxX * n) + 1;
+      const yStart = Math.floor(bounds.minY * n) - 1;
+      const yEnd = Math.floor(bounds.maxY * n) + 1;
+      for (let x = xStart; x <= xEnd; x += 1) {{
+        for (let y = yStart; y <= yEnd; y += 1) {{
+          if (y < 0 || y >= n) {{
+            continue;
+          }}
+          const wrappedX = ((x % n) + n) % n;
+          const p0 = projectNorm(x / n, y / n, width, height);
+          const p1 = projectNorm((x + 1) / n, (y + 1) / n, width, height);
+          const url = tileUrl(wrappedX, y, z);
+          const image = getTileImage(url);
+          const dx = Math.min(p0[0], p1[0]);
+          const dy = Math.min(p0[1], p1[1]);
+          const dw = Math.abs(p1[0] - p0[0]) + 1;
+          const dh = Math.abs(p1[1] - p0[1]) + 1;
+          if (image.complete && image.naturalWidth > 0) {{
+            ctx.drawImage(image, dx, dy, dw, dh);
+          }} else {{
+            ctx.fillStyle = "#cbd5e1";
+            ctx.fillRect(dx, dy, dw, dh);
+          }}
+        }}
+      }}
+      ctx.restore();
+      ctx.fillStyle = `rgba(2, 6, 23, ${{Math.max(0, Math.min(0.85, basemapDim))}})`;
+      ctx.fillRect(0, 0, width, height);
+      return true;
+    }}
+
     function drawBackground(width, height) {{
+      const hasBasemap = drawBasemap(width, height);
+      if (hasBasemap) {{
+        ctx.strokeStyle = "rgba(15, 23, 42, 0.16)";
+        ctx.lineWidth = 1;
+        return;
+      }}
       const gradient = ctx.createLinearGradient(0, 0, width, height);
       gradient.addColorStop(0, "#020617");
       gradient.addColorStop(0.55, "#0f172a");
@@ -669,10 +793,7 @@ def render_html(
     }}
 
     function sensorXY(sensor, width, height) {{
-      const pad = Math.max(44, Math.min(width, height) * 0.065);
-      const x = pad + sensor.x * Math.max(1, width - 2 * pad);
-      const y = pad + sensor.y * Math.max(1, height - 2 * pad);
-      return [x, y];
+      return projectGeo(sensor.lat, sensor.lon, width, height);
     }}
 
     function drawFrame(step) {{
@@ -836,6 +957,14 @@ def main() -> None:
         "contrast_high": float(high),
         "gamma": float(args.gamma),
         "heat_radius": float(args.heat_radius),
+        "tile_url": args.tile_url,
+        "tile_zoom": int(args.tile_zoom),
+        "basemap_opacity": float(args.basemap_opacity),
+        "basemap_dim": float(args.basemap_dim),
+        "min_lat": float(meta_df[lat_column].min()),
+        "max_lat": float(meta_df[lat_column].max()),
+        "min_lon": float(meta_df[lon_column].min()),
+        "max_lon": float(meta_df[lon_column].max()),
         "output_html": str(output_html),
         "id_column": id_column,
         "lat_column": lat_column,
