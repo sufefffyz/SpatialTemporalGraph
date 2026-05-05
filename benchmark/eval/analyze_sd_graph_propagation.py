@@ -517,6 +517,7 @@ def main() -> None:
     probe_rows = []
     embedding_rows = []
     rng = np.random.default_rng(42)
+    diagnostic_graphs_done: set[str] = set()
 
     # X-only baseline once
     x_only_train_feat = np.expand_dims(train_x, axis=-1)
@@ -576,51 +577,53 @@ def main() -> None:
             val_blocks = build_feature_blocks(val_x, supports[graph_name], args.max_order)
             test_blocks = build_feature_blocks(test_x, supports[graph_name], args.max_order)
 
-            for block_name, block_value in train_blocks.items():
-                paired_block = None
-                if block_name.startswith("pf_"):
-                    paired_block = train_blocks.get(block_name.replace("pf_", "pb_"))
-                elif block_name.startswith("pb_"):
-                    paired_block = train_blocks.get(block_name.replace("pb_", "pf_"))
+            if graph_name not in diagnostic_graphs_done:
+                diagnostic_graphs_done.add(graph_name)
+                for block_name, block_value in train_blocks.items():
+                    paired_block = None
+                    if block_name.startswith("pf_"):
+                        paired_block = train_blocks.get(block_name.replace("pf_", "pb_"))
+                    elif block_name.startswith("pb_"):
+                        paired_block = train_blocks.get(block_name.replace("pb_", "pf_"))
 
-                feature_stats_rows.append(
-                    block_statistics(
-                        block_value,
-                        adj,
-                        graph_name,
-                        block_name,
-                        base_block=train_blocks["x"],
-                        paired_block=paired_block,
-                        stats_window_samples=args.stats_window_samples,
-                        max_mad_pairs=args.mad_pairs,
-                        rng=rng,
+                    feature_stats_rows.append(
+                        block_statistics(
+                            block_value,
+                            adj,
+                            graph_name,
+                            block_name,
+                            base_block=train_blocks["x"],
+                            paired_block=paired_block,
+                            stats_window_samples=args.stats_window_samples,
+                            max_mad_pairs=args.mad_pairs,
+                            rng=rng,
+                        )
                     )
-                )
-                sample = block_value.reshape(-1)
-                if sample.size > 50000:
-                    sample = sample[:: max(1, sample.size // 50000)]
-                plot_rows.extend(
-                    {"graph": graph_name, "block": block_name, "value": float(value)}
-                    for value in sample
-                )
+                    sample = block_value.reshape(-1)
+                    if sample.size > 50000:
+                        sample = sample[:: max(1, sample.size // 50000)]
+                    plot_rows.extend(
+                        {"graph": graph_name, "block": block_name, "value": float(value)}
+                        for value in sample
+                    )
 
-                if block_name in {"x", "pf_1", "pb_1", f"pf_{args.max_order}", f"pb_{args.max_order}"}:
-                    node_matrix = node_feature_matrix(block_value, args.stats_window_samples)
-                    color_values = (adj > 0).sum(axis=1).astype(float)
-                    for method in args.embedding_methods:
-                        embedding = compute_embedding(node_matrix, method)
-                        for node_idx in range(embedding.shape[0]):
-                            embedding_rows.append(
-                                {
-                                    "graph": graph_name,
-                                    "block": block_name,
-                                    "method": method,
-                                    "node_index": node_idx,
-                                    "dim1": float(embedding[node_idx, 0]),
-                                    "dim2": float(embedding[node_idx, 1]),
-                                    "color_value": float(color_values[node_idx]),
-                                }
-                            )
+                    if block_name in {"x", "pf_1", "pb_1", f"pf_{args.max_order}", f"pb_{args.max_order}"}:
+                        node_matrix = node_feature_matrix(block_value, args.stats_window_samples)
+                        color_values = (adj > 0).sum(axis=1).astype(float)
+                        for method in args.embedding_methods:
+                            embedding = compute_embedding(node_matrix, method)
+                            for node_idx in range(embedding.shape[0]):
+                                embedding_rows.append(
+                                    {
+                                        "graph": graph_name,
+                                        "block": block_name,
+                                        "method": method,
+                                        "node_index": node_idx,
+                                        "dim1": float(embedding[node_idx, 0]),
+                                        "dim2": float(embedding[node_idx, 1]),
+                                        "color_value": float(color_values[node_idx]),
+                                    }
+                                )
 
             train_feat = combine_feature_blocks(train_blocks, feature_mode, args.max_order)
             val_feat = combine_feature_blocks(val_blocks, feature_mode, args.max_order)
