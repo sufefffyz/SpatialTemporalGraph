@@ -440,7 +440,7 @@ def node_embedding_plot(
     output_path: Path,
 ) -> None:
     blocks = list(dict.fromkeys(embedding_df["block"].tolist()))
-    fig, axes = plt.subplots(len(blocks), 2, figsize=(12, 4 * len(blocks)))
+    fig, axes = plt.subplots(len(blocks), 2, figsize=(14, 4 * len(blocks)), constrained_layout=True)
     if len(blocks) == 1:
         axes = np.asarray([axes])
     for row_idx, block in enumerate(blocks):
@@ -461,8 +461,8 @@ def node_embedding_plot(
             ax.set_title(f"{method.upper()} | {graph_name} | {block}")
             ax.set_xlabel("dim1")
             ax.set_ylabel("dim2")
-        fig.colorbar(sc, ax=axes[row_idx, :], fraction=0.02, pad=0.02)
-    plt.tight_layout()
+            cbar = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label("out-degree")
     plt.savefig(output_path, dpi=200, bbox_inches="tight")
     plt.close()
 
