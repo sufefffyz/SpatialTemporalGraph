@@ -210,6 +210,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not automatically fit the map to rendered sensors.",
     )
+    parser.add_argument(
+        "--renderer",
+        choices=["auto", "leaflet", "offline"],
+        default="auto",
+        help=(
+            "Rendering backend. 'auto' uses Folium/Leaflet when available; "
+            "'offline' writes a self-contained SVG map with no external resources."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1023,6 +1032,267 @@ def render_standalone_leaflet_map(
     output_html.write_text(page, encoding="utf-8")
 
 
+def render_offline_svg_map(
+    sensors: list[dict[str, Any]],
+    time_labels: list[str],
+    meta_df: pd.DataFrame,
+    lat_column: str,
+    lon_column: str,
+    args: argparse.Namespace,
+    output_html: Path,
+    summary: dict[str, Any],
+) -> None:
+    min_lat = float(meta_df[lat_column].min())
+    min_lon = float(meta_df[lon_column].min())
+    max_lat = float(meta_df[lat_column].max())
+    max_lon = float(meta_df[lon_column].max())
+    map_id = "traffic-map"
+    title = f"{summary['dataset']} traffic flow"
+    sensor_json = html_escape_json(sensors)
+    labels_json = html_escape_json(time_labels)
+    summary_json = html_escape_json(summary)
+    bar_width = float(args.bar_width)
+    max_height = float(args.max_bar_height)
+
+    page = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{html.escape(title)}</title>
+  {build_css(args.max_bar_height, args.bar_width)}
+  <style>
+  html, body {{
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: #e5edf4;
+  }}
+  #offline-map {{
+    display: block;
+    height: 100vh;
+    width: 100vw;
+    background:
+      linear-gradient(180deg, rgba(255,255,255,0.78), rgba(226,232,240,0.72)),
+      radial-gradient(circle at 20% 25%, rgba(45, 212, 191, 0.18), transparent 32%),
+      #dbeafe;
+  }}
+  .offline-frame {{
+    fill: rgba(255, 255, 255, 0.44);
+    stroke: rgba(51, 65, 85, 0.2);
+    stroke-width: 1;
+  }}
+  .offline-grid-line {{
+    stroke: rgba(51, 65, 85, 0.16);
+    stroke-width: 1;
+  }}
+  .offline-label {{
+    fill: #475569;
+    font-family: "Avenir Next", "Gill Sans", sans-serif;
+    font-size: 11px;
+  }}
+  .offline-sensor-dot {{
+    fill: #0f172a;
+    opacity: 0.8;
+    stroke: white;
+    stroke-width: 1.2;
+  }}
+  .offline-sensor-bar {{
+    filter: drop-shadow(0 2px 3px rgba(15, 23, 42, 0.35));
+    stroke: rgba(15, 23, 42, 0.35);
+    stroke-width: 0.7;
+  }}
+  </style>
+</head>
+<body>
+  <svg id="offline-map" aria-label="{html.escape(title)}">
+    <g id="offline-grid"></g>
+    <g id="offline-sensor-layer"></g>
+  </svg>
+  {build_control_html(map_id, title, len(time_labels))}
+  <script>
+  (function() {{
+    const sensors = {sensor_json};
+    const timeLabels = {labels_json};
+    const summary = {summary_json};
+    const minLat = {min_lat:.9f};
+    const maxLat = {max_lat:.9f};
+    const minLon = {min_lon:.9f};
+    const maxLon = {max_lon:.9f};
+    const barWidth = {bar_width:.6f};
+    const maxHeight = {max_height:.6f};
+    const svg = document.getElementById("offline-map");
+    const gridLayer = document.getElementById("offline-grid");
+    const sensorLayer = document.getElementById("offline-sensor-layer");
+    const slider = document.getElementById("{map_id}-slider");
+    const playButton = document.getElementById("{map_id}-play");
+    const timeLabel = document.getElementById("{map_id}-time-label");
+    const stepLabel = document.getElementById("{map_id}-step-label");
+    const summaryLabel = document.getElementById("{map_id}-summary");
+    const svgNS = "http://www.w3.org/2000/svg";
+    const nodes = [];
+    let currentStep = 0;
+    let timer = null;
+
+    function colorForHeight(height) {{
+      const ratio = Math.max(0, Math.min(1, height / Math.max(maxHeight, 1)));
+      if (ratio < 0.5) {{
+        return mixColor([34, 197, 94], [245, 158, 11], ratio / 0.5);
+      }}
+      return mixColor([245, 158, 11], [239, 68, 68], (ratio - 0.5) / 0.5);
+    }}
+
+    function mixColor(a, b, t) {{
+      const r = Math.round(a[0] + (b[0] - a[0]) * t);
+      const g = Math.round(a[1] + (b[1] - a[1]) * t);
+      const bl = Math.round(a[2] + (b[2] - a[2]) * t);
+      return `rgb(${{r}}, ${{g}}, ${{bl}})`;
+    }}
+
+    function project(lat, lon) {{
+      const rect = svg.getBoundingClientRect();
+      const width = Math.max(320, rect.width);
+      const height = Math.max(240, rect.height);
+      const pad = Math.max(58, Math.min(width, height) * 0.07);
+      const lonRange = Math.max(1e-9, maxLon - minLon);
+      const latRange = Math.max(1e-9, maxLat - minLat);
+      const x = pad + ((lon - minLon) / lonRange) * Math.max(1, width - 2 * pad);
+      const y = pad + ((maxLat - lat) / latRange) * Math.max(1, height - 2 * pad);
+      return [x, y, width, height, pad];
+    }}
+
+    function drawGrid() {{
+      while (gridLayer.firstChild) {{
+        gridLayer.removeChild(gridLayer.firstChild);
+      }}
+      const topLeft = project(maxLat, minLon);
+      const bottomRight = project(minLat, maxLon);
+      const x0 = topLeft[0];
+      const y0 = topLeft[1];
+      const x1 = bottomRight[0];
+      const y1 = bottomRight[1];
+      const frame = document.createElementNS(svgNS, "rect");
+      frame.setAttribute("class", "offline-frame");
+      frame.setAttribute("x", x0);
+      frame.setAttribute("y", y0);
+      frame.setAttribute("width", Math.max(1, x1 - x0));
+      frame.setAttribute("height", Math.max(1, y1 - y0));
+      frame.setAttribute("rx", "10");
+      gridLayer.appendChild(frame);
+
+      for (let i = 1; i < 5; i += 1) {{
+        const tx = x0 + ((x1 - x0) * i) / 5;
+        const ty = y0 + ((y1 - y0) * i) / 5;
+        const v = document.createElementNS(svgNS, "line");
+        v.setAttribute("class", "offline-grid-line");
+        v.setAttribute("x1", tx);
+        v.setAttribute("x2", tx);
+        v.setAttribute("y1", y0);
+        v.setAttribute("y2", y1);
+        gridLayer.appendChild(v);
+        const h = document.createElementNS(svgNS, "line");
+        h.setAttribute("class", "offline-grid-line");
+        h.setAttribute("x1", x0);
+        h.setAttribute("x2", x1);
+        h.setAttribute("y1", ty);
+        h.setAttribute("y2", ty);
+        gridLayer.appendChild(h);
+      }}
+    }}
+
+    function valueText(sensor, step) {{
+      const value = sensor.v[step];
+      if (value === null || value === undefined || Number.isNaN(Number(value))) {{
+        return "value: n/a";
+      }}
+      return `value: ${{value}}`;
+    }}
+
+    function updatePositions() {{
+      drawGrid();
+      for (const item of nodes) {{
+        const p = project(item.sensor.lat, item.sensor.lon);
+        item.group.setAttribute("transform", `translate(${{p[0]}},${{p[1]}})`);
+      }}
+    }}
+
+    function setStep(step) {{
+      currentStep = Math.max(0, Math.min(timeLabels.length - 1, Number(step)));
+      slider.value = currentStep;
+      timeLabel.textContent = timeLabels[currentStep];
+      stepLabel.textContent = `${{currentStep + 1}} / ${{timeLabels.length}}`;
+      for (const item of nodes) {{
+        const height = item.sensor.h[currentStep] || 0;
+        item.rect.setAttribute("height", height);
+        item.rect.setAttribute("y", -height - 3);
+        item.rect.setAttribute("fill", colorForHeight(height));
+        item.title.textContent = `${{item.sensor.id}} | ${{timeLabels[currentStep]}} | ${{valueText(item.sensor, currentStep)}}`;
+      }}
+    }}
+
+    function stopPlayback() {{
+      if (timer !== null) {{
+        clearInterval(timer);
+        timer = null;
+      }}
+      playButton.textContent = "Play";
+    }}
+
+    function startPlayback() {{
+      stopPlayback();
+      timer = setInterval(function() {{
+        const nextStep = currentStep + 1 >= timeLabels.length ? 0 : currentStep + 1;
+        setStep(nextStep);
+      }}, {int(args.play_interval_ms)});
+      playButton.textContent = "Pause";
+    }}
+
+    for (const sensor of sensors) {{
+      const group = document.createElementNS(svgNS, "g");
+      group.setAttribute("class", "offline-sensor");
+      const rect = document.createElementNS(svgNS, "rect");
+      rect.setAttribute("class", "offline-sensor-bar");
+      rect.setAttribute("x", -barWidth / 2);
+      rect.setAttribute("width", barWidth);
+      rect.setAttribute("rx", Math.min(4, barWidth / 2));
+      const dot = document.createElementNS(svgNS, "circle");
+      dot.setAttribute("class", "offline-sensor-dot");
+      dot.setAttribute("r", 3.2);
+      const title = document.createElementNS(svgNS, "title");
+      group.appendChild(title);
+      group.appendChild(rect);
+      group.appendChild(dot);
+      sensorLayer.appendChild(group);
+      nodes.push({{ sensor, group, rect, title }});
+    }}
+
+    slider.addEventListener("input", function(event) {{
+      stopPlayback();
+      setStep(event.target.value);
+    }});
+    playButton.addEventListener("click", function() {{
+      if (timer === null) {{
+        startPlayback();
+      }} else {{
+        stopPlayback();
+      }}
+    }});
+    window.addEventListener("resize", function() {{
+      updatePositions();
+      setStep(currentStep);
+    }});
+    summaryLabel.textContent = `renderer=offline-svg, nodes=${{summary.rendered_nodes}}, steps=${{summary.num_steps}}, stride=${{summary.time_stride || 1}}`;
+    updatePositions();
+    setStep(0);
+  }})();
+  </script>
+</body>
+</html>
+"""
+    output_html.parent.mkdir(parents=True, exist_ok=True)
+    output_html.write_text(page, encoding="utf-8")
+
+
 def render_folium_map(
     sensors: list[dict[str, Any]],
     time_labels: list[str],
@@ -1079,7 +1349,14 @@ def render_map(
     output_html: Path,
     summary: dict[str, Any],
 ) -> None:
-    if folium is None:
+    if args.renderer == "offline":
+        summary["renderer"] = "offline-svg"
+        render_offline_svg_map(
+            sensors, time_labels, meta_df, lat_column, lon_column, args, output_html, summary
+        )
+        return
+
+    if args.renderer == "leaflet" or folium is None:
         summary["renderer"] = "standalone-leaflet"
         render_standalone_leaflet_map(
             sensors, time_labels, meta_df, lat_column, lon_column, args, output_html, summary
