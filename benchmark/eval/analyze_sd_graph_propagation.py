@@ -248,9 +248,9 @@ def compute_metrics(pred: np.ndarray, target: np.ndarray, null_val: float) -> di
         mask = ~np.isclose(target, null_val, atol=5e-5, rtol=0.0)
     mape_mask = mask & ~np.isclose(target, 0.0, atol=5e-5, rtol=0.0)
 
-    mae = np.abs(pred - target)[mask]
-    rmse = ((pred - target) ** 2)[mask]
-    mape = np.abs((pred - target) / target)[mape_mask]
+    mae = np.abs(pred[mask] - target[mask])
+    rmse = (pred[mask] - target[mask]) ** 2
+    mape = np.abs((pred[mape_mask] - target[mape_mask]) / target[mape_mask])
     return {
         "MAE": float(np.mean(mae)) if mae.size else float("nan"),
         "RMSE": float(np.sqrt(np.mean(rmse))) if rmse.size else float("nan"),

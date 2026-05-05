@@ -203,9 +203,9 @@ def compute_metrics_numpy(pred: np.ndarray, tgt: np.ndarray, null_val: float) ->
     mae_mask = valid_mask(tgt, null_val, for_mape=False)
     mape_mask = valid_mask(tgt, null_val, for_mape=True)
 
-    mae = np.abs(pred - tgt)[mae_mask]
-    rmse = ((pred - tgt) ** 2)[mae_mask]
-    mape = np.abs((pred - tgt) / tgt)[mape_mask]
+    mae = np.abs(pred[mae_mask] - tgt[mae_mask])
+    rmse = (pred[mae_mask] - tgt[mae_mask]) ** 2
+    mape = np.abs((pred[mape_mask] - tgt[mape_mask]) / tgt[mape_mask])
 
     return {
         "MAE": float(np.mean(mae)) if mae.size else float("nan"),
