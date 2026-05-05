@@ -1085,6 +1085,7 @@ def render_offline_svg_map(
   }}
   #offline-map {{
     display: block;
+    cursor: grab;
     height: 100vh;
     width: 100vw;
     background:
@@ -1120,15 +1121,56 @@ def render_offline_svg_map(
   .offline-tile {{
     opacity: 0.86;
   }}
+  .offline-map-controls {{
+    position: fixed;
+    right: 16px;
+    top: 16px;
+    z-index: 9999;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+    width: 184px;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(23, 37, 84, 0.16);
+    border-radius: 14px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+    padding: 10px;
+  }}
+  .offline-map-control-button {{
+    background: #ffffff;
+    border: 1px solid rgba(15, 23, 42, 0.16);
+    border-radius: 8px;
+    color: #172554;
+    cursor: pointer;
+    font-family: "Avenir Next", "Gill Sans", sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 7px 8px;
+  }}
+  .offline-map-control-button:hover {{
+    background: #e0f2fe;
+  }}
+  .offline-map-control-button-wide {{
+    grid-column: span 2;
+  }}
   </style>
 </head>
 <body>
   <svg id="offline-map" width="100%" height="100%" preserveAspectRatio="none" aria-label="{html.escape(title)}">
-    <g id="offline-tile-layer"></g>
-    <g id="offline-grid"></g>
-    <g id="offline-sensor-layer"></g>
+    <g id="offline-viewport">
+      <g id="offline-tile-layer"></g>
+      <g id="offline-grid"></g>
+      <g id="offline-sensor-layer"></g>
+    </g>
   </svg>
   {build_control_html(map_id, title, len(time_labels))}
+  <div class="offline-map-controls" id="{map_id}-offline-controls">
+    <button class="offline-map-control-button" id="{map_id}-zoom-in" type="button">Zoom +</button>
+    <button class="offline-map-control-button" id="{map_id}-zoom-out" type="button">Zoom -</button>
+    <button class="offline-map-control-button" id="{map_id}-rotate-left" type="button">Rotate L</button>
+    <button class="offline-map-control-button" id="{map_id}-rotate-right" type="button">Rotate R</button>
+    <button class="offline-map-control-button offline-map-control-button-wide" id="{map_id}-reset-view" type="button">Reset view</button>
+  </div>
   <script>
   (function() {{
     const sensors = {sensor_json};
@@ -1143,6 +1185,7 @@ def render_offline_svg_map(
     const tileUrlTemplate = {json.dumps(args.offline_tile_url)};
     const tileZoom = {int(args.offline_tile_zoom)};
     const svg = document.getElementById("offline-map");
+    const viewport = document.getElementById("offline-viewport");
     const tileLayer = document.getElementById("offline-tile-layer");
     const gridLayer = document.getElementById("offline-grid");
     const sensorLayer = document.getElementById("offline-sensor-layer");
@@ -1151,10 +1194,22 @@ def render_offline_svg_map(
     const timeLabel = document.getElementById("{map_id}-time-label");
     const stepLabel = document.getElementById("{map_id}-step-label");
     const summaryLabel = document.getElementById("{map_id}-summary");
+    const zoomInButton = document.getElementById("{map_id}-zoom-in");
+    const zoomOutButton = document.getElementById("{map_id}-zoom-out");
+    const rotateLeftButton = document.getElementById("{map_id}-rotate-left");
+    const rotateRightButton = document.getElementById("{map_id}-rotate-right");
+    const resetViewButton = document.getElementById("{map_id}-reset-view");
     const svgNS = "http://www.w3.org/2000/svg";
     const nodes = [];
+    const viewState = {{
+      scale: 1,
+      panX: 0,
+      panY: 0,
+      rotation: 0
+    }};
     let currentStep = 0;
     let timer = null;
+    let dragState = null;
 
     function syncSvgViewport() {{
       const rect = svg.getBoundingClientRect();
@@ -1164,6 +1219,41 @@ def render_offline_svg_map(
       svg.setAttribute("height", height);
       svg.setAttribute("viewBox", `0 0 ${{width}} ${{height}}`);
       return [width, height];
+    }}
+
+    function clamp(value, minValue, maxValue) {{
+      return Math.max(minValue, Math.min(maxValue, value));
+    }}
+
+    function applyViewTransform() {{
+      const size = syncSvgViewport();
+      const cx = size[0] / 2;
+      const cy = size[1] / 2;
+      viewport.setAttribute(
+        "transform",
+        `translate(${{viewState.panX}} ${{viewState.panY}}) translate(${{cx}} ${{cy}}) rotate(${{viewState.rotation}}) scale(${{viewState.scale}}) translate(${{-cx}} ${{-cy}})`
+      );
+      summaryLabel.textContent =
+        `renderer=offline-svg, nodes=${{summary.rendered_nodes}}, steps=${{summary.num_steps}}, ` +
+        `stride=${{summary.time_stride || 1}}, zoom=${{viewState.scale.toFixed(2)}}, rot=${{Math.round(viewState.rotation)}}`;
+    }}
+
+    function zoomBy(factor) {{
+      viewState.scale = clamp(viewState.scale * factor, 0.35, 12);
+      applyViewTransform();
+    }}
+
+    function rotateBy(degrees) {{
+      viewState.rotation = (viewState.rotation + degrees) % 360;
+      applyViewTransform();
+    }}
+
+    function resetView() {{
+      viewState.scale = 1;
+      viewState.panX = 0;
+      viewState.panY = 0;
+      viewState.rotation = 0;
+      applyViewTransform();
     }}
 
     function colorForHeight(height) {{
@@ -1322,6 +1412,7 @@ def render_offline_svg_map(
         const p = project(item.sensor.lat, item.sensor.lon);
         item.group.setAttribute("transform", `translate(${{p[0]}},${{p[1]}})`);
       }}
+      applyViewTransform();
     }}
 
     function setStep(step) {{
@@ -1385,11 +1476,61 @@ def render_offline_svg_map(
         stopPlayback();
       }}
     }});
+    zoomInButton.addEventListener("click", function() {{
+      zoomBy(1.25);
+    }});
+    zoomOutButton.addEventListener("click", function() {{
+      zoomBy(0.8);
+    }});
+    rotateLeftButton.addEventListener("click", function() {{
+      rotateBy(-15);
+    }});
+    rotateRightButton.addEventListener("click", function() {{
+      rotateBy(15);
+    }});
+    resetViewButton.addEventListener("click", function() {{
+      resetView();
+    }});
+    svg.addEventListener("wheel", function(event) {{
+      event.preventDefault();
+      zoomBy(event.deltaY < 0 ? 1.12 : 1 / 1.12);
+    }}, {{ passive: false }});
+    svg.addEventListener("pointerdown", function(event) {{
+      if (event.button !== 0) {{
+        return;
+      }}
+      dragState = {{
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        panX: viewState.panX,
+        panY: viewState.panY
+      }};
+      svg.style.cursor = "grabbing";
+      if (svg.setPointerCapture) {{
+        svg.setPointerCapture(event.pointerId);
+      }}
+    }});
+    svg.addEventListener("pointermove", function(event) {{
+      if (dragState === null || dragState.pointerId !== event.pointerId) {{
+        return;
+      }}
+      viewState.panX = dragState.panX + event.clientX - dragState.x;
+      viewState.panY = dragState.panY + event.clientY - dragState.y;
+      applyViewTransform();
+    }});
+    function endDrag(event) {{
+      if (dragState !== null && event.pointerId === dragState.pointerId) {{
+        dragState = null;
+        svg.style.cursor = "grab";
+      }}
+    }}
+    svg.addEventListener("pointerup", endDrag);
+    svg.addEventListener("pointercancel", endDrag);
     window.addEventListener("resize", function() {{
       updatePositions();
       setStep(currentStep);
     }});
-    summaryLabel.textContent = `renderer=offline-svg, nodes=${{summary.rendered_nodes}}, steps=${{summary.num_steps}}, stride=${{summary.time_stride || 1}}`;
     updatePositions();
     setStep(0);
   }})();
