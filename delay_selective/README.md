@@ -10,6 +10,12 @@ The dataset paper is summarized in:
 delay_selective/city_traffic_dataset_notes.md
 ```
 
+Grouping options and the Zotero-backed literature synthesis are summarized in:
+
+```text
+delay_selective/grouping_methods_plan.md
+```
+
 The important caution is that the current local files:
 
 ```text
@@ -57,6 +63,23 @@ dataset_comparison.csv
 ```
 
 The profiler records paper-count checks and warnings whenever a file looks like a road-type subgraph, so later delay experiments do not accidentally claim full road-network evidence from a derived subset.
+
+To generate cleaner figures from these profiling outputs:
+
+```bash
+bash delay_selective/plot_city_traffic_profile_figures.sh
+```
+
+Default figure outputs:
+
+```text
+delay_selective/figures/dataset_profile/city_traffic_target_distributions.pdf
+delay_selective/figures/dataset_profile/city_traffic_target_distributions.png
+delay_selective/figures/dataset_profile/city_traffic_degree_distributions.pdf
+delay_selective/figures/dataset_profile/city_traffic_degree_distributions.png
+delay_selective/figures/dataset_profile/city_traffic_target_distribution_summary.csv
+delay_selective/figures/dataset_profile/city_traffic_degree_summary.csv
+```
 
 ## Quick Delay Audit
 
