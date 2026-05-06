@@ -51,6 +51,8 @@ add_target_spec() {
 for root in "${DATA_ROOTS[@]}"; do
   add_spec "city_traffic_m_speed_full" "${root}/city_traffic_m_speed.npz"
   add_spec "city_traffic_m_volume_full" "${root}/city_traffic_m_volume.npz"
+  add_spec "city_traffic_l_speed_full" "${root}/city_traffic_l_speed.npz"
+  add_spec "city_traffic_l_volume_full" "${root}/city_traffic_l_volume.npz"
 done
 
 for root in "${DATA_ROOTS[@]}"; do
@@ -68,7 +70,7 @@ add_target_spec \
   "product/traffic_city_traffic_m_volume__category__1_0/targets.npy"
 
 if [[ "${#SPECS[@]}" -eq 0 ]]; then
-  echo "No city-traffic-M speed/volume NPZ files found."
+  echo "No city-traffic-M/L speed/volume NPZ files found."
   echo "Set CITY_TRAFFIC_DATA_DIR=/path/to/Urban_Traffic_Benchmark and rerun."
   exit 1
 fi

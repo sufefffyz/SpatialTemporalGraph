@@ -13,19 +13,22 @@ Zotero item: TA6WEB6U
 
 The paper introduces metropolis-scale road-segment traffic forecasting datasets. A node is an individual road segment, and a directed edge connects two road segments when they are incident and the movement is permitted by traffic rules. This matters for the delay-selective route because the graph is closer to a road-link graph than PeMS-style detector graphs.
 
-For `city-traffic-M`, the paper reports:
+For the two full datasets, the paper reports:
 
 | Field | Value |
 | --- | ---: |
-| Nodes | 53,530 |
-| Edges | 121,236 |
+| `city-traffic-M` nodes | 53,530 |
+| `city-traffic-M` edges | 121,236 |
+| `city-traffic-L` nodes | 94,009 |
+| `city-traffic-L` edges | 164,424 |
 | Timestamps | 35,449 |
 | Train timestamps | 26,208 |
 | Validation timestamps | 4,032 |
 | Test timestamps | 5,209 |
 | Granularity | 5 minutes |
 | Period | July 1, 2024 to November 1, 2024 |
-| Time zone | UTC+5 |
+| `city-traffic-M` time zone | UTC+5 |
+| `city-traffic-L` time zone | UTC+3 |
 
 The target variables are speed and volume estimated from GPS traces. Speed can be missing when no GPS vehicle passes a segment in a 5-minute period; volume is zero rather than missing in such windows.
 
@@ -51,11 +54,13 @@ data/city_traffic_m_volume__category__1_0.npz
 
 are category-specific subgraphs that were previously cut by road type. They should not be treated as the official full `city-traffic-M` graph. The profiler therefore checks observed node/edge counts against the paper's full-graph counts and writes warnings when `subgraph_*` metadata or `__category__` filenames are detected.
 
-For the first server sweep, prefer the full files if they exist:
+For the first server sweep, prefer the full files under the server data root:
 
 ```text
 /data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_m_speed.npz
 /data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_m_volume.npz
+/data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_l_speed.npz
+/data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_l_volume.npz
 ```
 
 Then compare them against the `category=1.0` subgraphs to decide whether that cut is meaningful for the delay-validation route.

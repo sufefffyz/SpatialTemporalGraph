@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Profile city-traffic-M speed/volume datasets for delay-selective validation.
+"""Profile city-traffic speed/volume datasets for delay-selective validation.
 
 The profiler scans target value distributions, missingness, temporal coverage,
 graph degree distributions, edge distance distributions, and available road
 metadata. It also flags when a file is a road-type subgraph rather than the
-canonical city-traffic-M dataset described in the paper.
+canonical city-traffic-M/L datasets described in the paper.
 """
 
 from __future__ import annotations
@@ -38,6 +38,28 @@ PAPER_CITY_TRAFFIC_M = {
     "static_road_attributes": 26,
 }
 
+PAPER_CITY_TRAFFIC_L = {
+    "paper": "Fine-Grained Urban Traffic Forecasting on Metropolis-Scale Road Networks",
+    "dataset": "city-traffic-L",
+    "nodes": 94009,
+    "edges": 164424,
+    "timestamps": 35449,
+    "train_timestamps": 26208,
+    "val_timestamps": 4032,
+    "test_timestamps": 5209,
+    "frequency_seconds": 300,
+    "timezone": "UTC+3",
+    "target_variables": ["speed", "volume"],
+    "node_definition": "road segment",
+    "edge_definition": "directed road adjacency when movement is permitted by traffic rules",
+    "static_road_attributes": 26,
+}
+
+PAPER_DATASETS = {
+    "city_traffic_m": PAPER_CITY_TRAFFIC_M,
+    "city_traffic_l": PAPER_CITY_TRAFFIC_L,
+}
+
 DEFAULT_DATASETS = [
     ("speed_category_1_0", "data/city_traffic_m_speed__category__1_0.npz"),
     ("volume_category_1_0", "data/city_traffic_m_volume__category__1_0.npz"),
@@ -45,7 +67,7 @@ DEFAULT_DATASETS = [
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Profile city-traffic-M speed/volume datasets.")
+    parser = argparse.ArgumentParser(description="Profile city-traffic speed/volume datasets.")
     parser.add_argument("--output-dir", default="delay_selective/outputs/dataset_profile")
     parser.add_argument(
         "--dataset",
@@ -353,6 +375,18 @@ def metadata_summary(dataset: Any, headers: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def infer_paper_dataset_key(dataset_name: str, path: str, num_nodes: int, num_edges: int) -> str | None:
+    lowered = f"{dataset_name} {path}".lower()
+    if "city_traffic_m" in lowered or "city-traffic-m" in lowered:
+        return "city_traffic_m"
+    if "city_traffic_l" in lowered or "city-traffic-l" in lowered:
+        return "city_traffic_l"
+    for key, expected in PAPER_DATASETS.items():
+        if num_nodes == expected["nodes"] and num_edges == expected["edges"]:
+            return key
+    return None
+
+
 def canonical_fit_summary(
     dataset_name: str,
     path: str,
@@ -364,7 +398,18 @@ def canonical_fit_summary(
 ) -> dict[str, Any]:
     subgraph_keys = [key for key in dataset.files if key.startswith("subgraph_")]
     is_category_subset = "__category__" in Path(path).name or "__category__" in dataset_name
-    expected = PAPER_CITY_TRAFFIC_M
+    paper_dataset_key = infer_paper_dataset_key(dataset_name, path, num_nodes, num_edges)
+    expected = PAPER_DATASETS.get(paper_dataset_key or "")
+    if expected is None:
+        return {
+            "paper_dataset_key": None,
+            "paper_expected_dataset": None,
+            "is_likely_category_subgraph": bool(is_category_subset or subgraph_keys),
+            "subgraph_metadata_keys": subgraph_keys,
+            "canonical_count_checks": {},
+            "warnings": ["could not infer whether this file is city-traffic-M or city-traffic-L"],
+        }
+
     mismatches = {
         "nodes": {"observed": num_nodes, "expected": expected["nodes"], "matches": num_nodes == expected["nodes"]},
         "edges": {"observed": num_edges, "expected": expected["edges"], "matches": num_edges == expected["edges"]},
@@ -395,9 +440,10 @@ def canonical_fit_summary(
     if is_category_subset:
         warnings.append("filename/name indicates a category-specific road-type subgraph")
     if num_nodes != expected["nodes"] or num_edges != expected["edges"]:
-        warnings.append("observed node/edge counts differ from paper city-traffic-M full graph")
+        warnings.append(f"observed node/edge counts differ from paper {expected['dataset']} full graph")
     return {
-        "paper_expected_city_traffic_m": expected,
+        "paper_dataset_key": paper_dataset_key,
+        "paper_expected_dataset": expected,
         "is_likely_category_subgraph": bool(is_category_subset or subgraph_keys),
         "subgraph_metadata_keys": subgraph_keys,
         "canonical_count_checks": mismatches,
@@ -654,6 +700,7 @@ def comparison_rows(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "dataset": s["dataset"],
                 "path": s["path"],
+                "paper_dataset_key": paper_context.get("paper_dataset_key"),
                 "num_timestamps": s["targets_shape"][0],
                 "num_nodes": s["targets_shape"][1],
                 "num_edges": degree["num_edges"],

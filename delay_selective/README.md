@@ -17,7 +17,7 @@ data/city_traffic_m_speed__category__1_0.npz
 data/city_traffic_m_volume__category__1_0.npz
 ```
 
-are category-specific subgraphs, not the canonical full `city-traffic-M` graph from the paper. The paper reports the full `city-traffic-M` graph as 53,530 road-segment nodes, 121,236 directed road-adjacency edges, 35,449 timestamps, and 5-minute granularity.
+are category-specific subgraphs, not the canonical full `city-traffic-M` graph from the paper. The paper reports the full `city-traffic-M` graph as 53,530 road-segment nodes and 121,236 directed road-adjacency edges, and `city-traffic-L` as 94,009 nodes and 164,424 edges. Both use 35,449 timestamps at 5-minute granularity.
 
 On the server, run:
 
@@ -32,6 +32,8 @@ data/city_traffic_m_speed.npz
 data/city_traffic_m_volume.npz
 /data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_m_speed.npz
 /data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_m_volume.npz
+/data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_l_speed.npz
+/data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_l_volume.npz
 ```
 
 and also profiles the `category=1.0` subgraphs when present. Outputs are written to:
