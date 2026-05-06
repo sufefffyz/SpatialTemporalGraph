@@ -84,6 +84,18 @@ def parse_args() -> argparse.Namespace:
         help="Feature channel to visualize. Default: 0 (traffic flow).",
     )
     parser.add_argument(
+        "--value-mode",
+        choices=["raw", "delta"],
+        default="raw",
+        help="Render raw x_t values or signed temporal deltas x_t - x_{t-delta_lag}. Default: raw.",
+    )
+    parser.add_argument(
+        "--delta-lag",
+        type=int,
+        default=1,
+        help="Source-data lag used by --value-mode delta. Default: 1, i.e. x_t - x_{t-1}.",
+    )
+    parser.add_argument(
         "--start-index",
         type=int,
         default=None,
@@ -123,7 +135,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-html",
         default=None,
-        help="Output HTML path. Defaults to <dataset-dir>/traffic_map_bar_animation.html.",
+        help=(
+            "Output HTML path. Defaults to <dataset-dir>/traffic_map_bar_animation.html "
+            "or traffic_map_bar_delta_animation.html for --value-mode delta."
+        ),
     )
     parser.add_argument(
         "--value-scale",
@@ -511,6 +526,16 @@ def validate_window(start_index: int, num_steps: int, time_stride: int, total_st
         )
 
 
+def validate_value_mode(args: argparse.Namespace, start_index: int) -> None:
+    if args.delta_lag <= 0:
+        raise ValueError(f"--delta-lag must be positive, got {args.delta_lag}.")
+    if args.value_mode == "delta" and start_index - args.delta_lag < 0:
+        raise ValueError(
+            f"--value-mode delta needs start_index >= --delta-lag. "
+            f"Got start_index={start_index}, delta_lag={args.delta_lag}."
+        )
+
+
 def load_data_memmap(data_path: Path, shape: tuple[int, ...]) -> np.memmap:
     try:
         return np.memmap(data_path, dtype=np.float32, mode="r", shape=shape)
@@ -540,9 +565,33 @@ def extract_window(
     return values
 
 
+def extract_value_window(
+    data: np.memmap,
+    start_index: int,
+    num_steps: int,
+    time_stride: int,
+    node_indices: np.ndarray,
+    channel: int,
+    args: argparse.Namespace,
+) -> np.ndarray:
+    current = extract_window(data, start_index, num_steps, time_stride, node_indices, channel)
+    if args.value_mode == "raw":
+        return current
+    previous = extract_window(
+        data,
+        start_index - args.delta_lag,
+        num_steps,
+        time_stride,
+        node_indices,
+        channel,
+    )
+    return current - previous
+
+
 def compute_scale(values: np.ndarray, args: argparse.Namespace) -> tuple[float, float]:
     finite = values[np.isfinite(values)]
-    positive = finite[finite > 0]
+    scale_values = np.abs(finite) if args.value_mode == "delta" else finite
+    positive = scale_values[scale_values > 0]
     if positive.size == 0:
         reference = 1.0
     else:
@@ -561,9 +610,10 @@ def prepare_bar_arrays(
     min_bar_height: float,
     max_bar_height: float,
     value_precision: int,
+    signed_values: bool = False,
 ) -> tuple[list[list[float]], list[list[int]]]:
     safe_values = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
-    positive_values = np.clip(safe_values, 0.0, None)
+    positive_values = np.abs(safe_values) if signed_values else np.clip(safe_values, 0.0, None)
     heights = positive_values * value_scale
     heights = np.where(positive_values > 0, np.maximum(heights, min_bar_height), 0.0)
     heights = np.clip(heights, 0.0, max_bar_height)
@@ -655,8 +705,22 @@ def html_escape_json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
 
 
-def build_control_html(map_id: str, title: str, num_steps: int) -> str:
+def map_title(summary: dict[str, Any]) -> str:
+    if summary.get("value_mode") == "delta":
+        return f"{summary['dataset']} traffic delta x_t - x_{{t-1}}"
+    return f"{summary['dataset']} traffic flow"
+
+
+def build_control_html(map_id: str, title: str, num_steps: int, value_mode: str = "raw") -> str:
     safe_title = html.escape(title)
+    if value_mode == "delta":
+        legend_left = "decrease"
+        legend_right = "increase"
+        gradient_class = "traffic-gradient traffic-gradient-delta"
+    else:
+        legend_left = "low"
+        legend_right = "high"
+        gradient_class = "traffic-gradient"
     return f"""
 <div id="{map_id}-traffic-panel" class="traffic-panel">
   <div class="traffic-panel-title">{safe_title}</div>
@@ -668,13 +732,16 @@ def build_control_html(map_id: str, title: str, num_steps: int) -> str:
   </div>
   <div id="{map_id}-summary" class="traffic-panel-summary"></div>
   <div class="traffic-legend">
-    <span>low</span><span class="traffic-gradient"></span><span>high</span>
+    <span>{legend_left}</span><span class="{gradient_class}"></span><span>{legend_right}</span>
   </div>
 </div>
 """
 
 
-def build_css(max_bar_height: float, bar_width: float) -> str:
+def build_css(max_bar_height: float, bar_width: float, signed_bars: bool = False) -> str:
+    shell_height = max_bar_height * 2 + 12 if signed_bars else max_bar_height + 10
+    baseline = max_bar_height + 6 if signed_bars else 5
+    dot_bottom = baseline - 3
     return f"""
 <style>
 .traffic-panel {{
@@ -746,12 +813,15 @@ def build_css(max_bar_height: float, bar_width: float) -> str:
   border-radius: 999px;
   height: 8px;
 }}
+.traffic-gradient-delta {{
+  background: linear-gradient(90deg, #2563eb, #94a3b8, #dc2626);
+}}
 .traffic-bar-icon {{
   background: transparent;
   border: 0;
 }}
 .traffic-bar-shell {{
-  height: {max_bar_height + 10:.0f}px;
+  height: {shell_height:.0f}px;
   pointer-events: auto;
   position: relative;
   width: {bar_width + 10:.0f}px;
@@ -759,20 +829,20 @@ def build_css(max_bar_height: float, bar_width: float) -> str:
 .traffic-bar-fill {{
   border: 1px solid rgba(15, 23, 42, 0.32);
   border-radius: 999px 999px 3px 3px;
-  bottom: 5px;
+  bottom: {baseline:.0f}px;
   box-shadow: 0 2px 7px rgba(15, 23, 42, 0.3);
   left: 50%;
   min-height: 0;
   position: absolute;
   transform: translateX(-50%);
-  transition: height 120ms linear, background-color 120ms linear;
+  transition: height 120ms linear, bottom 120ms linear, background-color 120ms linear;
   width: {bar_width:.0f}px;
 }}
 .traffic-bar-dot {{
   background: #0f172a;
   border: 1px solid white;
   border-radius: 999px;
-  bottom: 1px;
+  bottom: {dot_bottom:.0f}px;
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.35);
   height: 6px;
   left: 50%;
@@ -813,10 +883,11 @@ def build_animation_js(
     sensor_json = html_escape_json(sensors)
     labels_json = html_escape_json(time_labels)
     summary_json = html_escape_json(summary)
+    signed_bars = args.value_mode == "delta"
     icon_width = int(round(args.bar_width + 10))
-    icon_height = int(round(args.max_bar_height + 10))
+    icon_height = int(round(args.max_bar_height * 2 + 12 if signed_bars else args.max_bar_height + 10))
     icon_anchor_x = int(round(icon_width / 2))
-    icon_anchor_y = int(round(args.max_bar_height + 7))
+    icon_anchor_y = int(round(args.max_bar_height + 6 if signed_bars else args.max_bar_height + 7))
     initial_html = build_icon_html(0, "#22c55e").replace("`", "\\`")
 
     script = f"""
@@ -826,6 +897,9 @@ def build_animation_js(
   const timeLabels = {labels_json};
   const summary = {summary_json};
   const maxHeight = {float(args.max_bar_height):.6f};
+  const valueMode = summary.value_mode || "raw";
+  const signedBars = valueMode === "delta";
+  const baseline = signedBars ? maxHeight + 6 : 5;
   const iconSize = [{icon_width}, {icon_height}];
   const iconAnchor = [{icon_anchor_x}, {icon_anchor_y}];
   const playIntervalMs = {int(args.play_interval_ms)};
@@ -850,6 +924,21 @@ def build_animation_js(
     return mixColor([245, 158, 11], [239, 68, 68], (ratio - 0.5) / 0.5);
   }}
 
+  function colorForValue(value, height) {{
+    if (!signedBars) {{
+      return colorForHeight(height);
+    }}
+    const ratio = Math.max(0, Math.min(1, height / Math.max(maxHeight, 1)));
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue) || Math.abs(numericValue) < 1e-9) {{
+      return "#94a3b8";
+    }}
+    if (numericValue < 0) {{
+      return mixColor([147, 197, 253], [37, 99, 235], ratio);
+    }}
+    return mixColor([251, 146, 60], [220, 38, 38], ratio);
+  }}
+
   function mixColor(a, b, t) {{
     const r = Math.round(a[0] + (b[0] - a[0]) * t);
     const g = Math.round(a[1] + (b[1] - a[1]) * t);
@@ -868,10 +957,11 @@ def build_animation_js(
 
   function valueText(sensor, step) {{
     const value = sensor.v[step];
+    const label = signedBars ? "delta" : "value";
     if (value === null || value === undefined || Number.isNaN(Number(value))) {{
-      return "value: n/a";
+      return `${{label}}: n/a`;
     }}
-    return `value: ${{value}}`;
+    return `${{label}}: ${{value}}`;
   }}
 
   function popupHtml(sensor, step) {{
@@ -881,6 +971,8 @@ def build_animation_js(
 
   function updateMarker(marker, sensor, step) {{
     const height = sensor.h[step] || 0;
+    const value = Number(sensor.v[step]);
+    const numericValue = Number.isFinite(value) ? value : 0;
     const element = marker.getElement();
     if (!element) {{
       return;
@@ -888,7 +980,19 @@ def build_animation_js(
     const fill = element.querySelector(".traffic-bar-fill");
     if (fill) {{
       fill.style.height = `${{height}}px`;
-      fill.style.background = colorForHeight(height);
+      fill.style.background = colorForValue(numericValue, height);
+      if (signedBars) {{
+        if (numericValue < 0) {{
+          fill.style.bottom = `${{baseline - height}}px`;
+          fill.style.borderRadius = "3px 3px 999px 999px";
+        }} else {{
+          fill.style.bottom = `${{baseline}}px`;
+          fill.style.borderRadius = "999px 999px 3px 3px";
+        }}
+      }} else {{
+        fill.style.bottom = "5px";
+        fill.style.borderRadius = "999px 999px 3px 3px";
+      }}
       fill.title = `${{sensor.id}} | ${{timeLabels[step]}} | ${{valueText(sensor, step)}}`;
     }}
     if (marker.isPopupOpen()) {{
@@ -948,7 +1052,10 @@ def build_animation_js(
       stopPlayback();
     }}
   }});
-  summaryLabel.textContent = `nodes=${{summary.rendered_nodes}}, steps=${{summary.num_steps}}, start=${{summary.start_index}}, scale=${{summary.value_scale.toFixed(4)}} px/unit`;
+  const modeText = signedBars ? `mode=delta, lag=${{summary.delta_lag || 1}}` : "mode=raw";
+  summaryLabel.textContent =
+    `nodes=${{summary.rendered_nodes}}, steps=${{summary.num_steps}}, start=${{summary.start_index}}, ` +
+    `${{modeText}}, scale=${{summary.value_scale.toFixed(4)}} px/unit`;
   setStep(0);
 }})();
 """
@@ -973,8 +1080,8 @@ def tile_layer_config(tiles: str) -> tuple[str, str]:
     )
 
 
-def build_standalone_page_css(max_bar_height: float, bar_width: float) -> str:
-    base_css = build_css(max_bar_height, bar_width).replace("</style>", "")
+def build_standalone_page_css(max_bar_height: float, bar_width: float, signed_bars: bool = False) -> str:
+    base_css = build_css(max_bar_height, bar_width, signed_bars).replace("</style>", "")
     return (
         base_css
         + """
@@ -1009,7 +1116,7 @@ def render_standalone_leaflet_map(
     max_lon = float(meta_df[lon_column].max())
     tile_url, attribution = tile_layer_config(args.tiles)
     map_id = "traffic-map"
-    title = f"{summary['dataset']} traffic flow"
+    title = map_title(summary)
     fit_bounds_js = ""
     if not args.no_fit_bounds:
         fit_bounds_js = (
@@ -1025,11 +1132,11 @@ def render_standalone_leaflet_map(
   <title>{html.escape(title)}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
-  {build_standalone_page_css(args.max_bar_height, args.bar_width)}
+  {build_standalone_page_css(args.max_bar_height, args.bar_width, args.value_mode == "delta")}
 </head>
 <body>
   <div id="traffic-map-canvas"></div>
-  {build_control_html(map_id, title, len(time_labels))}
+  {build_control_html(map_id, title, len(time_labels), args.value_mode)}
   <script>
   const trafficMap = L.map("traffic-map-canvas").setView([{center_lat:.7f}, {center_lon:.7f}], {int(args.zoom_start)});
   L.tileLayer({json.dumps(tile_url)}, {{
@@ -1062,7 +1169,7 @@ def render_offline_svg_map(
     max_lat = float(meta_df[lat_column].max())
     max_lon = float(meta_df[lon_column].max())
     map_id = "traffic-map"
-    title = f"{summary['dataset']} traffic flow"
+    title = map_title(summary)
     sensor_json = html_escape_json(sensors)
     labels_json = html_escape_json(time_labels)
     summary_json = html_escape_json(summary)
@@ -1075,7 +1182,7 @@ def render_offline_svg_map(
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{html.escape(title)}</title>
-  {build_css(args.max_bar_height, args.bar_width)}
+  {build_css(args.max_bar_height, args.bar_width, args.value_mode == "delta")}
   <style>
   html, body {{
     height: 100%;
@@ -1163,7 +1270,7 @@ def render_offline_svg_map(
       <g id="offline-sensor-layer"></g>
     </g>
   </svg>
-  {build_control_html(map_id, title, len(time_labels))}
+  {build_control_html(map_id, title, len(time_labels), args.value_mode)}
   <div class="offline-map-controls" id="{map_id}-offline-controls">
     <button class="offline-map-control-button" id="{map_id}-zoom-in" type="button">Zoom +</button>
     <button class="offline-map-control-button" id="{map_id}-zoom-out" type="button">Zoom -</button>
@@ -1182,6 +1289,8 @@ def render_offline_svg_map(
     const maxLon = {max_lon:.9f};
     const barWidth = {bar_width:.6f};
     const maxHeight = {max_height:.6f};
+    const valueMode = summary.value_mode || "raw";
+    const signedBars = valueMode === "delta";
     const tileUrlTemplate = {json.dumps(args.offline_tile_url)};
     const tileZoom = {int(args.offline_tile_zoom)};
     const svg = document.getElementById("offline-map");
@@ -1233,9 +1342,11 @@ def render_offline_svg_map(
         "transform",
         `translate(${{viewState.panX}} ${{viewState.panY}}) translate(${{cx}} ${{cy}}) rotate(${{viewState.rotation}}) scale(${{viewState.scale}}) translate(${{-cx}} ${{-cy}})`
       );
+      const modeText = signedBars ? `mode=delta lag=${{summary.delta_lag || 1}}` : "mode=raw";
       summaryLabel.textContent =
         `renderer=offline-svg, nodes=${{summary.rendered_nodes}}, steps=${{summary.num_steps}}, ` +
-        `stride=${{summary.time_stride || 1}}, zoom=${{viewState.scale.toFixed(2)}}, rot=${{Math.round(viewState.rotation)}}`;
+        `stride=${{summary.time_stride || 1}}, ${{modeText}}, zoom=${{viewState.scale.toFixed(2)}}, ` +
+        `rot=${{Math.round(viewState.rotation)}}`;
     }}
 
     function zoomBy(factor) {{
@@ -1262,6 +1373,21 @@ def render_offline_svg_map(
         return mixColor([34, 197, 94], [245, 158, 11], ratio / 0.5);
       }}
       return mixColor([245, 158, 11], [239, 68, 68], (ratio - 0.5) / 0.5);
+    }}
+
+    function colorForValue(value, height) {{
+      if (!signedBars) {{
+        return colorForHeight(height);
+      }}
+      const ratio = Math.max(0, Math.min(1, height / Math.max(maxHeight, 1)));
+      const numericValue = Number(value);
+      if (!Number.isFinite(numericValue) || Math.abs(numericValue) < 1e-9) {{
+        return "#94a3b8";
+      }}
+      if (numericValue < 0) {{
+        return mixColor([147, 197, 253], [37, 99, 235], ratio);
+      }}
+      return mixColor([251, 146, 60], [220, 38, 38], ratio);
     }}
 
     function mixColor(a, b, t) {{
@@ -1398,10 +1524,11 @@ def render_offline_svg_map(
 
     function valueText(sensor, step) {{
       const value = sensor.v[step];
+      const label = signedBars ? "delta" : "value";
       if (value === null || value === undefined || Number.isNaN(Number(value))) {{
-        return "value: n/a";
+        return `${{label}}: n/a`;
       }}
-      return `value: ${{value}}`;
+      return `${{label}}: ${{value}}`;
     }}
 
     function updatePositions() {{
@@ -1422,9 +1549,15 @@ def render_offline_svg_map(
       stepLabel.textContent = `${{currentStep + 1}} / ${{timeLabels.length}}`;
       for (const item of nodes) {{
         const height = item.sensor.h[currentStep] || 0;
+        const value = Number(item.sensor.v[currentStep]);
+        const numericValue = Number.isFinite(value) ? value : 0;
         item.rect.setAttribute("height", height);
-        item.rect.setAttribute("y", -height - 3);
-        item.rect.setAttribute("fill", colorForHeight(height));
+        if (signedBars && numericValue < 0) {{
+          item.rect.setAttribute("y", 3);
+        }} else {{
+          item.rect.setAttribute("y", -height - 3);
+        }}
+        item.rect.setAttribute("fill", colorForValue(numericValue, height));
         item.title.textContent = `${{item.sensor.id}} | ${{timeLabels[currentStep]}} | ${{valueText(item.sensor, currentStep)}}`;
       }}
     }}
@@ -1573,9 +1706,13 @@ def render_folium_map(
         ]
         traffic_map.fit_bounds(bounds, padding=(18, 18))
 
-    title = f"{summary['dataset']} traffic flow"
-    traffic_map.get_root().header.add_child(folium.Element(build_css(args.max_bar_height, args.bar_width)))
-    traffic_map.get_root().html.add_child(folium.Element(build_control_html(map_id, title, len(time_labels))))
+    title = map_title(summary)
+    traffic_map.get_root().header.add_child(
+        folium.Element(build_css(args.max_bar_height, args.bar_width, args.value_mode == "delta"))
+    )
+    traffic_map.get_root().html.add_child(
+        folium.Element(build_control_html(map_id, title, len(time_labels), args.value_mode))
+    )
     traffic_map.get_root().script.add_child(
         folium.Element(
             build_animation_js(
@@ -1636,6 +1773,8 @@ def build_summary(
         "data_path": str(data_path),
         "data_shape": list(shape),
         "channel": int(args.channel),
+        "value_mode": args.value_mode,
+        "delta_lag": int(args.delta_lag),
         "start_index": int(start_index),
         "start_mode": start_mode,
         "num_steps": int(args.num_steps),
@@ -1669,6 +1808,7 @@ def main() -> None:
     step_minutes = resolve_step_minutes(desc, args.step_minutes)
     start_index, start_mode = resolve_start_index(args, data, desc, step_minutes)
     validate_window(start_index, args.num_steps, args.time_stride, total_steps)
+    validate_value_mode(args, start_index)
 
     meta_df, id_column, lat_column, lon_column, valid_node_count = build_meta_frame(
         meta_path,
@@ -1680,7 +1820,9 @@ def main() -> None:
         args.max_nodes,
     )
     node_indices = meta_df["node_index"].to_numpy(dtype=int)
-    values = extract_window(data, start_index, args.num_steps, args.time_stride, node_indices, args.channel)
+    values = extract_value_window(
+        data, start_index, args.num_steps, args.time_stride, node_indices, args.channel, args
+    )
     value_scale, reference_value = compute_scale(values, args)
     values_by_node, heights_by_node = prepare_bar_arrays(
         values,
@@ -1688,6 +1830,7 @@ def main() -> None:
         args.min_bar_height,
         args.max_bar_height,
         args.value_precision,
+        signed_values=args.value_mode == "delta",
     )
     sensors = build_sensor_payload(
         meta_df,
@@ -1707,10 +1850,15 @@ def main() -> None:
         args.dataset_start_datetime,
     )
 
+    default_output_name = (
+        "traffic_map_bar_delta_animation.html"
+        if args.value_mode == "delta"
+        else "traffic_map_bar_animation.html"
+    )
     output_html = (
         Path(args.output_html).expanduser().resolve()
         if args.output_html is not None
-        else dataset_dir / "traffic_map_bar_animation.html"
+        else dataset_dir / default_output_name
     )
     summary = build_summary(
         args,
