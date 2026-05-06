@@ -193,6 +193,15 @@ PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
 python delay_selective/run_largest_5min_delay_audit.py
 ```
 
+By default this audits only the LargeST built-in graph edges:
+
+```text
+distthre = adj_mx_largeST_original.pkl / adj_mx.pkl
+```
+
+Do not mix in `physical_dir` unless explicitly needed for a separate SD-only
+comparison.
+
 Default outputs:
 
 ```text

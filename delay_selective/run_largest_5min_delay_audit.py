@@ -46,6 +46,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-time-steps", type=int, default=20160, help="0 means use the whole selected split.")
     parser.add_argument("--max-edges", type=int, default=20000, help="0 means score all eligible graph edges.")
     parser.add_argument("--max-lag", type=int, default=12, help="Maximum lag in 5-minute steps.")
+    parser.add_argument(
+        "--graph-variants",
+        nargs="+",
+        default=["distthre"],
+        choices=["distthre", "physical_dir", "physical_bidir"],
+        help=(
+            "Graph variants to audit. Default is distthre, the LargeST built-in "
+            "road-network distance graph."
+        ),
+    )
     parser.add_argument("--residualize", default="time_of_day", choices=["none", "mean", "time_of_day"])
     parser.add_argument("--min-corr", type=float, default=0.20)
     parser.add_argument("--min-improvement", type=float, default=0.03)
@@ -144,7 +154,7 @@ def unwrap_adj(payload: Any) -> np.ndarray:
     return adj
 
 
-def load_graph_variants(dataset_dir: Path) -> dict[str, np.ndarray]:
+def load_graph_variants(dataset_dir: Path, requested_variants: list[str]) -> dict[str, np.ndarray]:
     candidates = {
         "distthre": [
             dataset_dir / "adj_mx_largeST_original.pkl",
@@ -156,15 +166,27 @@ def load_graph_variants(dataset_dir: Path) -> dict[str, np.ndarray]:
         ],
     }
     graphs: dict[str, np.ndarray] = {}
+    requested = set(requested_variants)
     for name, paths in candidates.items():
+        if name not in requested:
+            continue
         for path in paths:
             if path.exists():
                 graphs[name] = unwrap_adj(read_pickle(path))
                 break
-    if "physical_dir" in graphs:
+    if "physical_bidir" in requested and "physical_dir" not in graphs:
+        for path in candidates["physical_dir"]:
+            if path.exists():
+                graphs["physical_dir"] = unwrap_adj(read_pickle(path))
+                break
+    if "physical_bidir" in requested and "physical_dir" in graphs:
         graphs["physical_bidir"] = np.maximum(graphs["physical_dir"], graphs["physical_dir"].T)
+    if "physical_dir" not in requested:
+        graphs.pop("physical_dir", None)
     if not graphs:
-        raise FileNotFoundError(f"No adjacency pkl found in {dataset_dir}")
+        raise FileNotFoundError(
+            f"No requested adjacency variants {requested_variants} found in {dataset_dir}"
+        )
     return graphs
 
 
@@ -441,7 +463,7 @@ def audit_one_dataset(
     time_indices = select_time_indices(desc, dataset_dir, args.split_file, args.split)
     flow = load_flow_matrix(dataset_dir, desc, time_indices, args.max_time_steps)
     flow = residualize_matrix(flow, args.residualize, steps_per_day)
-    graphs = load_graph_variants(dataset_dir)
+    graphs = load_graph_variants(dataset_dir, args.graph_variants)
     lat_lng = load_lat_lng(dataset_dir, int(desc["num_nodes"]))
 
     dataset_out = output_root / name
