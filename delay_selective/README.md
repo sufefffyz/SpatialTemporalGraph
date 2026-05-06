@@ -1,0 +1,71 @@
+# Delay-Selective Quick Validation
+
+This folder is the workspace for delay-selective traffic forecasting validation.
+
+The first server-side sanity experiment is a lightweight **delay observability audit** on the existing road-segment speed dataset:
+
+```text
+data/city_traffic_m_speed__category__1_0.npz
+product/traffic_city_traffic_m_speed__category__1_0/targets.npy
+```
+
+The goal is not to train a model yet. The goal is to quickly test the core claim:
+
+```text
+Many near-neighbor road-segment edges have zero or unstable delay,
+while a smaller subset of longer-range or inter-segment relations shows identifiable non-zero lag.
+```
+
+## Server Command
+
+From the repository root:
+
+```bash
+bash delay_selective/run_quick_delay_audit.sh
+```
+
+Outputs are written to:
+
+```text
+delay_selective/outputs/quick_delay_audit/
+```
+
+## What The Script Computes
+
+- lagged correlation for directed graph edges
+- best lag per edge, in 5-minute steps by default
+- improvement over zero-lag correlation
+- near-zero-delay ratio
+- non-zero high-confidence delay ratio
+- distance-bin summaries using road-segment centroid distance
+- optional plots if `matplotlib` is installed
+
+## Main Outputs
+
+```text
+edge_delay_scores.csv
+distance_bin_summary.csv
+summary.json
+best_lag_hist.png              optional
+best_lag_vs_distance.png       optional
+mean_corr_by_lag.png           optional
+```
+
+## Interpretation
+
+Evidence supporting the research direction:
+
+```text
+1. A large fraction of short-distance edges select lag 0.
+2. Non-zero lag edges have clear correlation improvement over lag 0.
+3. Non-zero lag ratio increases with edge distance or in selected regimes.
+4. All-edge delay would be noisy because many edges do not have stable non-zero delay.
+```
+
+This validates the premise for a later model:
+
+```text
+intra-group synchronous aggregation
+inter-group delay-selective asynchronous propagation
+```
+
