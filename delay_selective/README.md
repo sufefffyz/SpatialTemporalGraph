@@ -167,3 +167,40 @@ delay_selective/outputs/full_delay_audit/city_traffic_m_speed_full_train/
 ```
 
 The script samples up to 6,000 eligible directed edges per graph after a coverage filter, uses the first 10,000 train timestamps, and computes lagged correlations for 0 to 12 five-minute lags. City-L uses `min_pair_coverage=0.80`; city-M uses `0.50` because the speed target has much heavier missingness.
+
+## LargeST 5-Minute Delay Audit
+
+For SD/GLA/GBA 5-minute delay-effect validation, first build the GLA/GBA BasicTS
+bundles from the official LargeST CA raw files:
+
+```bash
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
+bash delay_selective/build_largest_5min_basicts.sh --datasets GBA GLA --overwrite
+```
+
+The builder follows the LargeST notebooks:
+
+```text
+GBA = CA District 4
+GLA = CA Districts 7, 8, and 12
+SD  = CA District 11
+```
+
+Then run the 5-minute delay audit:
+
+```bash
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
+python delay_selective/run_largest_5min_delay_audit.py
+```
+
+Default outputs:
+
+```text
+delay_selective/outputs/largest_5min_delay_audit/all_summary.csv
+delay_selective/outputs/largest_5min_delay_audit/all_distance_bin_summary.csv
+delay_selective/outputs/largest_5min_delay_audit/<DATASET>/edge_delay_scores.csv
+delay_selective/outputs/largest_5min_delay_audit/<DATASET>/summary.csv
+delay_selective/outputs/largest_5min_delay_audit/<DATASET>/distance_bin_summary.csv
+delay_selective/outputs/largest_5min_delay_audit/<DATASET>/best_lag_hist.png
+delay_selective/outputs/largest_5min_delay_audit/<DATASET>/delay_effect_ratios.png
+```
