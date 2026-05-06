@@ -2,6 +2,62 @@
 
 This folder is the workspace for delay-selective traffic forecasting validation.
 
+## City-Traffic Dataset Profiling
+
+The dataset paper is summarized in:
+
+```text
+delay_selective/city_traffic_dataset_notes.md
+```
+
+The important caution is that the current local files:
+
+```text
+data/city_traffic_m_speed__category__1_0.npz
+data/city_traffic_m_volume__category__1_0.npz
+```
+
+are category-specific subgraphs, not the canonical full `city-traffic-M` graph from the paper. The paper reports the full `city-traffic-M` graph as 53,530 road-segment nodes, 121,236 directed road-adjacency edges, 35,449 timestamps, and 5-minute granularity.
+
+On the server, run:
+
+```bash
+bash delay_selective/run_city_traffic_profile.sh
+```
+
+The script automatically looks for full files first:
+
+```text
+data/city_traffic_m_speed.npz
+data/city_traffic_m_volume.npz
+/data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_m_speed.npz
+/data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_m_volume.npz
+```
+
+and also profiles the `category=1.0` subgraphs when present. Outputs are written to:
+
+```text
+delay_selective/outputs/dataset_profile/
+```
+
+Main outputs:
+
+```text
+all_dataset_profile_summary.json
+dataset_comparison.csv
+<dataset>/summary.json
+<dataset>/target_histogram.csv
+<dataset>/degree_distribution.csv
+<dataset>/edge_distance_distribution.csv
+<dataset>/missingness_summary.csv
+<dataset>/numeric_spatial_feature_summary.csv
+<dataset>/low_cardinality_spatial_feature_counts.csv
+```
+
+The profiler records paper-count checks and warnings whenever a file looks like a road-type subgraph, so later delay experiments do not accidentally claim full road-network evidence from a derived subset.
+
+## Quick Delay Audit
+
 The first server-side sanity experiment is a lightweight **delay observability audit** on the existing road-segment speed dataset:
 
 ```text
@@ -68,4 +124,3 @@ This validates the premise for a later model:
 intra-group synchronous aggregation
 inter-group delay-selective asynchronous propagation
 ```
-
