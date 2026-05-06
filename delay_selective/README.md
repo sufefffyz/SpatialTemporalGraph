@@ -126,3 +126,21 @@ This validates the premise for a later model:
 intra-group synchronous aggregation
 inter-group delay-selective asynchronous propagation
 ```
+
+## Full Speed Delay Audit
+
+For the first full-road-network audit, run the speed targets on the canonical city-L and city-M graphs:
+
+```bash
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/graph_ml/bin/python \
+bash delay_selective/run_full_delay_audit.sh
+```
+
+Default outputs:
+
+```text
+delay_selective/outputs/full_delay_audit/city_traffic_l_speed_full_train/
+delay_selective/outputs/full_delay_audit/city_traffic_m_speed_full_train/
+```
+
+The script samples up to 6,000 eligible directed edges per graph after a coverage filter, uses the first 10,000 train timestamps, and computes lagged correlations for 0 to 12 five-minute lags. City-L uses `min_pair_coverage=0.80`; city-M uses `0.50` because the speed target has much heavier missingness.

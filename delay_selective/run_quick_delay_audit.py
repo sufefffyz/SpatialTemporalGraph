@@ -31,6 +31,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-edges", type=int, default=1500)
     parser.add_argument("--max-lag", type=int, default=12, help="Maximum positive lag in timesteps.")
     parser.add_argument("--min-pair-coverage", type=float, default=0.80)
+    parser.add_argument(
+        "--coverage-chunk-size",
+        type=int,
+        default=2048,
+        help="Number of graph edges to check per chunk when computing pair coverage.",
+    )
+    parser.add_argument(
+        "--score-chunk-size",
+        type=int,
+        default=512,
+        help="Number of sampled edges to score per lag-correlation chunk.",
+    )
     parser.add_argument("--residualize", default="time_of_day", choices=["none", "mean", "time_of_day"])
     parser.add_argument("--min-corr", type=float, default=0.20)
     parser.add_argument("--min-improvement", type=float, default=0.03)
@@ -161,12 +173,17 @@ def sample_edges(
     max_edges: int,
     min_pair_coverage: float,
     seed: int,
-) -> tuple[np.ndarray, np.ndarray]:
+    coverage_chunk_size: int,
+) -> tuple[np.ndarray, np.ndarray, int]:
     src = edges[:, 0].astype(np.int64)
     dst = edges[:, 1].astype(np.int64)
-    src_cov = np.isfinite(x[:, src]).mean(axis=0)
-    dst_cov = np.isfinite(x[:, dst]).mean(axis=0)
-    pair_cov = np.minimum(src_cov, dst_cov)
+    chunk_size = max(1, coverage_chunk_size)
+    pair_cov = np.empty(edges.shape[0], dtype=np.float32)
+    for start in range(0, edges.shape[0], chunk_size):
+        end = min(edges.shape[0], start + chunk_size)
+        src_cov = np.isfinite(x[:, src[start:end]]).mean(axis=0)
+        dst_cov = np.isfinite(x[:, dst[start:end]]).mean(axis=0)
+        pair_cov[start:end] = np.minimum(src_cov, dst_cov)
     eligible = np.flatnonzero(pair_cov >= min_pair_coverage)
     if eligible.shape[0] == 0:
         raise ValueError("No edges satisfy the minimum pair coverage threshold.")
@@ -176,7 +193,7 @@ def sample_edges(
         chosen = np.sort(rng.choice(eligible, size=max_edges, replace=False))
     else:
         chosen = eligible
-    return chosen, pair_cov[chosen]
+    return chosen, pair_cov[chosen], int(eligible.shape[0])
 
 
 def compute_lag_scores(
@@ -184,26 +201,51 @@ def compute_lag_scores(
     edges: np.ndarray,
     edge_indices: np.ndarray,
     max_lag: int,
+    score_chunk_size: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    src = edges[edge_indices, 0].astype(np.int64)
-    dst = edges[edge_indices, 1].astype(np.int64)
-    source = x[:, src]
-    target = x[:, dst]
-
     corr_by_lag = np.full((max_lag + 1, edge_indices.shape[0]), np.nan, dtype=np.float64)
     count_by_lag = np.zeros((max_lag + 1, edge_indices.shape[0]), dtype=np.float64)
 
-    for lag in range(max_lag + 1):
-        if lag == 0:
-            a = source
-            b = target
-        else:
-            a = source[:-lag]
-            b = target[lag:]
-        corr, count = corr_columns(a, b)
-        corr_by_lag[lag] = corr
-        count_by_lag[lag] = count
+    chunk_size = max(1, score_chunk_size)
+    for start in range(0, edge_indices.shape[0], chunk_size):
+        end = min(edge_indices.shape[0], start + chunk_size)
+        chunk_edges = edge_indices[start:end]
+        src = edges[chunk_edges, 0].astype(np.int64)
+        dst = edges[chunk_edges, 1].astype(np.int64)
+        source = x[:, src]
+        target = x[:, dst]
+
+        for lag in range(max_lag + 1):
+            if lag == 0:
+                a = source
+                b = target
+            else:
+                a = source[:-lag]
+                b = target[lag:]
+            corr, count = corr_columns(a, b)
+            corr_by_lag[lag, start:end] = corr
+            count_by_lag[lag, start:end] = count
     return corr_by_lag, count_by_lag
+
+
+def centroid_distances_m(cx: np.ndarray, cy: np.ndarray, src: np.ndarray, dst: np.ndarray) -> tuple[np.ndarray, str]:
+    x1 = cx[src].astype(np.float64)
+    y1 = cy[src].astype(np.float64)
+    x2 = cx[dst].astype(np.float64)
+    y2 = cy[dst].astype(np.float64)
+
+    if (
+        np.nanmax(np.abs(cx)) <= 180.0
+        and np.nanmax(np.abs(cy)) <= 90.0
+        and np.nanmedian(np.abs(cx[src] - cx[dst])) < 1.0
+        and np.nanmedian(np.abs(cy[src] - cy[dst])) < 1.0
+    ):
+        mean_lat = np.deg2rad((y1 + y2) / 2.0)
+        dx = (x2 - x1) * 111_320.0 * np.cos(mean_lat)
+        dy = (y2 - y1) * 110_540.0
+        return np.sqrt(dx * dx + dy * dy), "lonlat_equirectangular_m"
+
+    return np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2), "native_euclidean"
 
 
 def summarize_bins(
@@ -317,18 +359,20 @@ def main() -> None:
     x = np.asarray(targets[timestamp_idx, :], dtype=np.float32)
     x = residualize_matrix(x, unix_timestamps, args.residualize)
 
-    edge_indices, pair_coverage = sample_edges(
+    edge_indices, pair_coverage, num_edges_eligible = sample_edges(
         edges=edges,
         x=x,
         max_edges=args.max_edges,
         min_pair_coverage=args.min_pair_coverage,
         seed=args.seed,
+        coverage_chunk_size=args.coverage_chunk_size,
     )
     corr_by_lag, count_by_lag = compute_lag_scores(
         x=x,
         edges=edges,
         edge_indices=edge_indices,
         max_lag=args.max_lag,
+        score_chunk_size=args.score_chunk_size,
     )
 
     has_any_corr = np.isfinite(corr_by_lag).any(axis=0)
@@ -343,7 +387,7 @@ def main() -> None:
     sampled_edges = edges[edge_indices]
     src = sampled_edges[:, 0]
     dst = sampled_edges[:, 1]
-    centroid_distances = np.sqrt((cx[src] - cx[dst]) ** 2 + (cy[src] - cy[dst]) ** 2)
+    centroid_distances, coordinate_distance_mode = centroid_distances_m(cx, cy, src, dst)
 
     timestep_seconds = int(np.median(np.diff(np.asarray(dataset["unix_timestamps"]))))
     high_conf_nonzero = (
@@ -395,14 +439,18 @@ def main() -> None:
         "split": args.split,
         "num_timestamps_used": int(timestamp_idx.shape[0]),
         "num_edges_total": int(edges.shape[0]),
+        "num_edges_eligible_by_coverage": int(num_edges_eligible),
         "num_edges_sampled": int(edge_indices.shape[0]),
         "timestep_seconds": int(timestep_seconds),
         "max_lag_steps": int(args.max_lag),
         "max_lag_minutes": float(args.max_lag * timestep_seconds / 60.0),
         "residualize": args.residualize,
         "min_pair_coverage": float(args.min_pair_coverage),
+        "coverage_chunk_size": int(args.coverage_chunk_size),
+        "score_chunk_size": int(args.score_chunk_size),
         "min_corr": float(args.min_corr),
         "min_improvement": float(args.min_improvement),
+        "coordinate_distance_mode": coordinate_distance_mode,
         "near_zero_ratio": float(np.mean(best_lags == 0)),
         "nonzero_ratio": float(np.mean(best_lags > 0)),
         "high_conf_nonzero_ratio": float(np.mean(high_conf_nonzero)),
