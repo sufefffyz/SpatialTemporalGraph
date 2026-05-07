@@ -32,7 +32,13 @@ def rows_from_naive(path: Path) -> list[dict]:
     data = json.loads(path.read_text(encoding="utf-8"))
     rows = []
     for system, metrics in data.get("baselines", {}).items():
-        row = {"source": "naive", "dataset_name": data.get("dataset_name"), "system": system}
+        row = {
+            "source": "naive",
+            "dataset_name": data.get("dataset_name"),
+            "node_filter": data.get("node_filter", "all"),
+            "selected_nodes": data.get("node_filter_stats", {}).get("selected_nodes"),
+            "system": system,
+        }
         row.update({k: metrics.get(k) for k in KEY_METRICS})
         rows.append(row)
     return rows
@@ -41,7 +47,13 @@ def rows_from_naive(path: Path) -> list[dict]:
 def row_from_posthoc(path: Path) -> dict:
     data = json.loads(path.read_text(encoding="utf-8"))
     metrics = data.get("metrics", {})
-    row = {"source": "basicts", "dataset_name": data.get("dataset_name"), "system": data.get("system")}
+    row = {
+        "source": "basicts",
+        "dataset_name": data.get("dataset_name"),
+        "node_filter": data.get("node_filter", "all"),
+        "selected_nodes": data.get("node_filter_stats", {}).get("selected_nodes"),
+        "system": data.get("system"),
+    }
     row.update({k: metrics.get(k) for k in KEY_METRICS})
     return row
 
@@ -56,7 +68,10 @@ def main() -> None:
 
     args.output_csv.parent.mkdir(parents=True, exist_ok=True)
     with args.output_csv.open("w", newline="", encoding="utf-8") as fp:
-        writer = csv.DictWriter(fp, fieldnames=["source", "dataset_name", "system", *KEY_METRICS])
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=["source", "dataset_name", "node_filter", "selected_nodes", "system", *KEY_METRICS],
+        )
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
@@ -65,4 +80,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
