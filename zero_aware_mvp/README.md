@@ -61,6 +61,17 @@ INPUT_NPZ=/absolute/path/to/city_traffic_m_volume.npz \
 bash zero_aware_mvp/scripts/prepare_mvp_datasets.sh
 ```
 
+For the full city-M graph, keep the default `ADJ_MODE=none`. A dense adjacency
+matrix for 53k nodes is too large for the low-cost MVP and is not needed by the
+diagnostics or naive baselines. If disk under the repo is tight on the server,
+write datasets under `/data` and point the evaluators there:
+
+```bash
+OUTPUT_ROOT=/data/yuzhang_fei/zero_aware_mvp_datasets \
+BASICTS_DATASETS_ROOT=/data/yuzhang_fei/zero_aware_mvp_datasets \
+bash zero_aware_mvp/scripts/prepare_mvp_datasets.sh
+```
+
 Run the cheapest must-pass checks:
 
 ```bash

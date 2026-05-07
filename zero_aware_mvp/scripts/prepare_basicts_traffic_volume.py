@@ -29,6 +29,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-len", type=int, default=12)
     parser.add_argument("--resolution", default="5min")
     parser.add_argument("--chunk-size", type=int, default=512)
+    parser.add_argument(
+        "--adj-mode",
+        choices=["none", "dense"],
+        default="none",
+        help="Use 'dense' only for small smoke subgraphs. Full city-M dense adjacency is very large.",
+    )
     return parser.parse_args()
 
 
@@ -210,8 +216,12 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     save_data_dat(output_dir / "data.dat", targets, final_timestamps, args.chunk_size)
-    adjacency = build_adjacency(num_nodes, edges)
-    save_adj(output_dir / "adj_mx.pkl", adjacency, node_ids)
+    np.save(output_dir / "edges.npy", edges.astype(np.int64))
+    adjacency_edges = int(len(edges))
+    if args.adj_mode == "dense":
+        adjacency = build_adjacency(num_nodes, edges)
+        save_adj(output_dir / "adj_mx.pkl", adjacency, node_ids)
+        adjacency_edges = int(np.count_nonzero(adjacency))
     np.save(output_dir / "node_ids.npy", node_ids)
     np.save(output_dir / "unix_timestamps.npy", final_timestamps)
     np.savez_compressed(
@@ -231,6 +241,11 @@ def main() -> None:
         "num_features": 3,
         "feature_description": ["traffic volume", "time of day", "day of week"],
         "has_graph": True,
+        "graph_storage": {
+            "edges_npy": "edges.npy",
+            "adj_mx_pkl": "adj_mx.pkl" if args.adj_mode == "dense" else None,
+            "adj_mode": args.adj_mode,
+        },
         "frequency (minutes)": target_minutes,
         "source_frequency (minutes)": native_minutes,
         "aggregation": aggregation_info,
@@ -258,7 +273,7 @@ def main() -> None:
                 "train": int(len(final_splits["train"])),
                 "val": int(len(final_splits["val"])),
                 "test": int(len(final_splits["test"])),
-                "edges": int(np.count_nonzero(adjacency)),
+                "edges": adjacency_edges,
                 "aggregation": aggregation_info,
             },
             indent=2,

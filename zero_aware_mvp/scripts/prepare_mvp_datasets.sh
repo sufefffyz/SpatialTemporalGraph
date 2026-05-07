@@ -6,6 +6,8 @@ PYTHON_BIN="${PYTHON_BIN:-$REPO_ROOT/.conda/causalrivers-macos/bin/python}"
 RESOLUTIONS="${RESOLUTIONS:-5min 15min 30min 60min}"
 INPUT_NPZ="${INPUT_NPZ:-/data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_m_volume.npz}"
 DATASET_BASE_NAME="${DATASET_BASE_NAME:-TRAFFIC_VOLUME_FULL_5MIN}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-$REPO_ROOT/BasicTS/datasets}"
+ADJ_MODE="${ADJ_MODE:-none}"
 
 cd "$REPO_ROOT/BasicTS"
 
@@ -14,7 +16,8 @@ for resolution in $RESOLUTIONS; do
   cd "$REPO_ROOT"
   "$PYTHON_BIN" zero_aware_mvp/scripts/prepare_basicts_traffic_volume.py \
     --input-npz "$INPUT_NPZ" \
-    --output-root "$REPO_ROOT/BasicTS/datasets" \
+    --output-root "$OUTPUT_ROOT" \
     --base-name "$DATASET_BASE_NAME" \
+    --adj-mode "$ADJ_MODE" \
     --resolution "$resolution"
 done

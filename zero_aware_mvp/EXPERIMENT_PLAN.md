@@ -13,6 +13,10 @@ All paper-facing MVP runs should use the full Urban Traffic Benchmark volume
 NPZ at `/data/yuzhang_fei/Urban_Traffic_Benchmark/city_traffic_m_volume.npz`.
 Category-filtered local NPZ files are smoke-only.
 
+For full city-M, the low-cost MVP intentionally saves edge lists instead of
+dense adjacency matrices. Dense 53k-node graph baselines should be treated as a
+separate scalability problem, not part of the first diagnostics/naive pass.
+
 ## Claim Map
 
 | Claim | Why It Matters | Minimum Convincing Evidence | Linked Runs |

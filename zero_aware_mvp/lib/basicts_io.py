@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,9 @@ BASICTS_ROOT = REPO_ROOT / "BasicTS"
 
 
 def dataset_dir(dataset_name: str) -> Path:
+    override_root = os.environ.get("BASICTS_DATASETS_ROOT")
+    if override_root:
+        return Path(override_root).expanduser() / dataset_name
     return BASICTS_ROOT / "datasets" / dataset_name
 
 
