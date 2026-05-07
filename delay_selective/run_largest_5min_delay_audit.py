@@ -57,7 +57,16 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--residualize", default="time_of_day", choices=["none", "mean", "time_of_day"])
-    parser.add_argument("--min-corr", type=float, default=0.20)
+    parser.add_argument(
+        "--min-corr",
+        type=float,
+        default=0.80,
+        help=(
+            "Minimum correlation confidence for accepting a non-zero delay. "
+            "The earlier exploratory default was 0.20; delay-selective runs "
+            "use a stricter 0.80 threshold."
+        ),
+    )
     parser.add_argument("--min-improvement", type=float, default=0.03)
     parser.add_argument("--min-edge-std", type=float, default=1e-6)
     parser.add_argument("--score-chunk-size", type=int, default=512)

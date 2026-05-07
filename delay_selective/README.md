@@ -213,3 +213,27 @@ delay_selective/outputs/largest_5min_delay_audit/<DATASET>/distance_bin_summary.
 delay_selective/outputs/largest_5min_delay_audit/<DATASET>/best_lag_hist.png
 delay_selective/outputs/largest_5min_delay_audit/<DATASET>/delay_effect_ratios.png
 ```
+
+For the stricter delay-selective audit, use the multi-method script:
+
+```bash
+bash delay_selective/run_largest_5min_delay_multimethod_audit.sh
+```
+
+This uses `corr >= 0.8` by default and compares:
+
+```text
+mcc_5min_resid          current 5-minute lagged Pearson MCC after residualization
+stdde_spline_fft_mcc    STDDE-style smoothed MCC: natural cubic spline to 1 minute, then FFT cross-correlation
+lift_fft_abs            LIFT-style normalized-window FFT cross-correlation using absolute lead-lag score
+```
+
+It audits the first month and a one-week daily breakdown by default. Outputs:
+
+```text
+delay_selective/outputs/largest_5min_delay_multimethod_audit/all_summary.csv
+delay_selective/outputs/largest_5min_delay_multimethod_audit/all_distance_bin_summary.csv
+delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/edge_delay_scores.csv
+delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/summary.csv
+delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/distance_bin_summary.csv
+```
