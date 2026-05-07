@@ -281,6 +281,7 @@ Defaults are intentionally conservative:
 grouping = topology_bfs
 target_group_size = 32
 pooling = median
+group_signal_mode = pooled
 graph = distthre
 windows = month + week_daily
 methods = mcc_5min_resid + stdde_spline_fft_mcc + lift_fft_abs
@@ -316,3 +317,62 @@ If the group-level ratio and weekly stability increase, the data supports
 `local synchronous aggregation + sparse regional delayed propagation`. If it
 does not increase, the current graph and 5-minute signals probably do not expose
 the cross-region delay effect clearly enough.
+
+Additional grouping baselines:
+
+```bash
+# PatchSTG-style KDTree spatial patches.
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
+bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+  --grouping patchstg_kdtree \
+  --target-group-size 32 \
+  --output-dir delay_selective/outputs/largest_5min_group_delay_patchstg_kdtree
+
+# Coordinate k-means spatial clusters.
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
+bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+  --grouping coordinate_kmeans \
+  --target-group-size 32 \
+  --output-dir delay_selective/outputs/largest_5min_group_delay_coordinate_kmeans
+
+# Size-matched random negative control.
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
+bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+  --grouping random_size_matched \
+  --target-group-size 32 \
+  --output-dir delay_selective/outputs/largest_5min_group_delay_random
+```
+
+Additional group signal modes:
+
+```bash
+# Preserve the top-k principal component time series inside each group.
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
+bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+  --grouping patchstg_kdtree \
+  --group-signal-mode pca \
+  --group-components 3 \
+  --output-dir delay_selective/outputs/largest_5min_group_delay_patchstg_pca
+
+# Brute-force sampled node-node delay across connected groups.
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
+bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+  --grouping patchstg_kdtree \
+  --group-signal-mode node_pair \
+  --max-node-pairs-per-group-edge 256 \
+  --output-dir delay_selective/outputs/largest_5min_group_delay_patchstg_node_pair
+```
+
+`patchstg_kdtree` follows PatchSTG's spatial data-management idea: recursively
+split irregularly distributed sensors by alternating longitude/latitude axes to
+produce balanced, non-overlapping spatial patches. This is a geometry-balanced
+baseline, not a road-propagation claim by itself.
+
+`pca` and `node_pair` are intended to test whether median/mean pooling destroys
+the delayed signal:
+
+```text
+pooled      one aggregate time series per group
+pca         top-k component time series per group
+node_pair   sampled original node-node pairs across connected groups
+```
