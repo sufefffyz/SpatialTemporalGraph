@@ -285,6 +285,7 @@ def plot_month_ratio_bars(
     metrics = [
         ("corr_filtered_ratio", "corr < 0.8"),
         ("high_conf_nonzero_ratio", "accepted nonzero"),
+        ("low_improvement_nonzero_ratio", "nonzero, weak gain"),
         ("effective_zero_ratio", "effective zero"),
     ]
     fig, axes = plt.subplots(
@@ -295,8 +296,8 @@ def plot_month_ratio_bars(
         sharey=True,
     )
     x = list(range(len(methods)))
-    width = 0.24
-    offsets = [-width, 0.0, width]
+    width = 0.19
+    offsets = [-1.5 * width, -0.5 * width, 0.5 * width, 1.5 * width]
     for ax, dataset in zip(axes[0], datasets):
         dataset_rows = {
             r.get("method", ""): r

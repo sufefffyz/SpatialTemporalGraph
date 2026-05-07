@@ -790,7 +790,11 @@ def score_graph_window_method(
         & (best_scores >= args.min_corr)
         & (improvements >= args.min_improvement)
     )
-    effective_lags = np.where(high_conf_nonzero, best_lags, 0).astype(np.float64)
+    # Effective lag semantics:
+    # - corr-filtered estimates are not valid delays and stay NaN.
+    # - when corr passes, keep the argmax/best-score lag even if the
+    #   improvement over zero lag is below the strict high-confidence cutoff.
+    effective_lags = best_lags.astype(np.float64)
     effective_lags[corr_filtered] = np.nan
     distances_km = edge_distances_km(lat_lng, edges)
 

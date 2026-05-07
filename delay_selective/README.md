@@ -256,4 +256,4 @@ delay_selective/figures/largest_5min_delay_multimethod_audit/month_raw_best_dela
 delay_selective/figures/largest_5min_delay_multimethod_audit/month_effective_delay_by_distance_bin_log_count.pdf
 ```
 
-The delay histogram y-axis is log-count by default so the large zero-lag bar does not hide the non-zero delay tail. Edges whose best lag confidence is filtered by `corr < 0.8` are written as `NaN` in `effective_lag_*` and plotted as a separate `Filtered` bar instead of being merged into lag 0. The distance-bin heatmaps use log-count colors for the same reason.
+The delay histogram y-axis is log-count by default so the large zero-lag bar does not hide the non-zero delay tail. Edges whose best lag confidence is filtered by `corr < 0.8` are written as `NaN` in `effective_lag_*` and plotted as a separate `Filtered` bar instead of being merged into lag 0. If `corr >= 0.8`, the effective lag keeps the best-score lag even when the improvement over zero lag is below the strict high-confidence cutoff; those edges are separately marked by `low_improvement_nonzero_delay`. The distance-bin heatmaps use log-count colors for the same reason.
