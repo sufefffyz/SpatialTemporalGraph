@@ -7,3 +7,5 @@ python delay_selective/run_largest_5min_delay_multimethod_audit.py \
   --methods mcc_5min_resid stdde_spline_fft_mcc lift_fft_abs \
   --windows month week_daily \
   "$@"
+
+python delay_selective/plot_largest_5min_delay_multimethod_audit.py

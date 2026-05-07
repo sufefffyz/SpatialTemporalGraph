@@ -237,3 +237,23 @@ delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/edge_dela
 delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/summary.csv
 delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/distance_bin_summary.csv
 ```
+
+The shell wrapper also generates visual diagnostics:
+
+```bash
+python delay_selective/plot_largest_5min_delay_multimethod_audit.py
+```
+
+Default figures:
+
+```text
+delay_selective/figures/largest_5min_delay_multimethod_audit/month_raw_best_delay_hist_log_count.pdf
+delay_selective/figures/largest_5min_delay_multimethod_audit/month_effective_delay_hist_log_count.pdf
+delay_selective/figures/largest_5min_delay_multimethod_audit/month_delay_acceptance_ratios.pdf
+delay_selective/figures/largest_5min_delay_multimethod_audit/week_daily_high_conf_nonzero_ratio.pdf
+delay_selective/figures/largest_5min_delay_multimethod_audit/month_distance_bin_high_conf_heatmap_mcc.pdf
+delay_selective/figures/largest_5min_delay_multimethod_audit/month_raw_best_delay_by_distance_bin_log_count.pdf
+delay_selective/figures/largest_5min_delay_multimethod_audit/month_effective_delay_by_distance_bin_log_count.pdf
+```
+
+The delay histogram y-axis is log-count by default so the large zero-lag bar does not hide the non-zero delay tail. The distance-bin heatmaps use log-count colors for the same reason.
