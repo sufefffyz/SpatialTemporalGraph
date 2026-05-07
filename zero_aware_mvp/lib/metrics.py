@@ -96,6 +96,16 @@ class ZeroAwareMetricAccumulator:
         )
         self.reset()
 
+    def clone_empty(self) -> "ZeroAwareMetricAccumulator":
+        clone = object.__new__(ZeroAwareMetricAccumulator)
+        clone.config = self.config
+        clone.occurrence_edges = self.occurrence_edges
+        clone.high_edges = self.high_edges
+        clone.high_thresholds = self.high_thresholds
+        clone.high_support = self.high_support
+        clone.reset()
+        return clone
+
     def reset(self) -> None:
         self.n = 0.0
         self.abs_sum = 0.0

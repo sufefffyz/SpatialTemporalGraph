@@ -172,9 +172,10 @@ def main() -> None:
     baseline_names = ["all_zero", "previous_step", "node_mean", "node_median", "slot_median", "seasonal_day_ago"]
     results = {}
     horizon_offsets = np.arange(output_len, dtype=np.int64)
+    metric_template = ZeroAwareMetricAccumulator(train_flow, config=metric_config)
 
     for baseline in baseline_names:
-        acc = ZeroAwareMetricAccumulator(train_flow, config=metric_config)
+        acc = metric_template.clone_empty()
         for start in range(0, len(starts), args.batch_size):
             batch_starts = starts[start : start + args.batch_size]
             target_times = batch_starts[:, None] + horizon_offsets[None, :]
