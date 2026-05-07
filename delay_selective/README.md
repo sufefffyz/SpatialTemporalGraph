@@ -257,3 +257,62 @@ delay_selective/figures/largest_5min_delay_multimethod_audit/month_effective_del
 ```
 
 The delay histogram y-axis is log-count by default so the large zero-lag bar does not hide the non-zero delay tail. Edges whose best lag confidence is filtered by `corr < 0.8` are written as `NaN` in `effective_lag_*` and plotted as a separate `Filtered` bar instead of being merged into lag 0. If `corr >= 0.8`, the effective lag keeps the best-score lag even when the improvement over zero lag is below the strict high-confidence cutoff; those edges are separately marked by `low_improvement_nonzero_delay`. The distance-bin heatmaps use log-count colors for the same reason.
+
+## Interpretable Group-Level Delay Audit
+
+The first interpretable regional-delay pipeline is:
+
+```text
+1. Partition the local LargeST graph into topology-contiguous groups.
+2. Aggregate node signals into group-level time series.
+3. Audit only directed inter-group edges for delayed propagation.
+```
+
+Run it on the server with:
+
+```bash
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
+bash delay_selective/run_largest_5min_interpretable_group_delay.sh
+```
+
+Defaults are intentionally conservative:
+
+```text
+grouping = topology_bfs
+target_group_size = 32
+pooling = median
+graph = distthre
+windows = month + week_daily
+methods = mcc_5min_resid + stdde_spline_fft_mcc + lift_fft_abs
+```
+
+This keeps the original graph as a local synchronous graph, then tests whether
+coarser directed group-to-group edges contain more observable non-zero delay.
+
+Main outputs:
+
+```text
+delay_selective/outputs/largest_5min_interpretable_group_delay/all_group_delay_summary.csv
+delay_selective/outputs/largest_5min_interpretable_group_delay/all_group_delay_distance_bin_summary.csv
+delay_selective/outputs/largest_5min_interpretable_group_delay/all_group_delay_weekly_stability.csv
+delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_assignments.csv
+delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_summary.csv
+delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/inter_group_edges.csv
+delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_delay_edges.csv
+delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_delay_summary.csv
+delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_delay_weekly_stability.csv
+delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_signal_<WINDOW>_<LABEL>.npy
+```
+
+The key comparison against the raw edge audit is:
+
+```text
+inter-group high_conf_nonzero_ratio
+vs.
+original graph high_conf_nonzero_ratio
+```
+
+If the group-level ratio and weekly stability increase, the data supports
+`local synchronous aggregation + sparse regional delayed propagation`. If it
+does not increase, the current graph and 5-minute signals probably do not expose
+the cross-region delay effect clearly enough.
