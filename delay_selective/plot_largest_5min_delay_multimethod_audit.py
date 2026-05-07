@@ -28,6 +28,8 @@ METHOD_COLORS = {
     "stdde_spline_fft_mcc": "#F28E2B",
     "lift_fft_abs": "#59A14F",
 }
+FILTERED_LAG_SENTINEL = -5
+FILTERED_LAG_LABEL = "Filtered"
 
 
 def parse_args() -> argparse.Namespace:
@@ -188,9 +190,11 @@ def aggregate_edge_histograms(
                 totals[total_key] += 1
                 for field in ["best_lag_minutes", "effective_lag_minutes"]:
                     lag = safe_int(row.get(field))
+                    if lag is None and field == "effective_lag_minutes":
+                        lag = FILTERED_LAG_SENTINEL
                     if lag is None:
                         continue
-                    if lag < 0 or lag > max_lag_minutes:
+                    if lag != FILTERED_LAG_SENTINEL and (lag < 0 or lag > max_lag_minutes):
                         continue
                     hist[(dataset, window, window_label, method, field, lag)] += 1
                     if dist_label is not None:
@@ -244,7 +248,12 @@ def plot_month_delay_histograms(
             if count_y_scale == "log":
                 ax.set_yscale("log")
                 ax.set_ylim(bottom=0.8)
-            ax.set_xlim(-1, 61)
+            if lag_field == "effective_lag_minutes":
+                ax.set_xlim(FILTERED_LAG_SENTINEL - 3, 61)
+                ax.set_xticks([FILTERED_LAG_SENTINEL, 0, 15, 30, 45, 60])
+                ax.set_xticklabels([FILTERED_LAG_LABEL, "0", "15", "30", "45", "60"])
+            else:
+                ax.set_xlim(-1, 61)
             if r == 0:
                 ax.set_title(METHOD_LABELS.get(method, method))
             if c == 0:
@@ -274,9 +283,9 @@ def plot_month_ratio_bars(
         return []
 
     metrics = [
-        ("invalid_corr_ratio", "corr < 0.8"),
+        ("corr_filtered_ratio", "corr < 0.8"),
         ("high_conf_nonzero_ratio", "accepted nonzero"),
-        ("effective_zero_or_invalid_ratio", "effective zero/invalid"),
+        ("effective_zero_ratio", "effective zero"),
     ]
     fig, axes = plt.subplots(
         1,
@@ -494,6 +503,10 @@ def plot_month_delay_by_distance_heatmaps(
             if r == len(datasets) - 1:
                 ax.set_xlabel("Delay lag (minutes)")
             ax.set_xlim(min(lag_values) - 2.5, max(lag_values) + 2.5)
+            if lag_field == "effective_lag_minutes" and FILTERED_LAG_SENTINEL in lag_values:
+                ticks = [FILTERED_LAG_SENTINEL, 0, 15, 30, 45, 60]
+                ax.set_xticks(ticks)
+                ax.set_xticklabels([FILTERED_LAG_LABEL, "0", "15", "30", "45", "60"])
     if last_im is not None:
         cbar = fig.colorbar(last_im, ax=axes.ravel().tolist(), fraction=0.025, pad=0.015)
         cbar.set_label("Edge count")

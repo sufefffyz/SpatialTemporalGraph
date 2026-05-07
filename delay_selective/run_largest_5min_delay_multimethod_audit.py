@@ -514,12 +514,20 @@ def summarize_distance_bins(
     best_scores: np.ndarray,
     bins: np.ndarray,
     min_corr: float,
+    min_improvement: float,
     high_conf_nonzero: np.ndarray,
 ) -> list[dict[str, Any]]:
     if distances_km is None:
         return []
     rows: list[dict[str, Any]] = []
-    invalid = best_scores < min_corr
+    corr_filtered = best_scores < min_corr
+    effective_nan = ~np.isfinite(effective_lags)
+    effective_zero = np.isfinite(effective_lags) & (effective_lags == 0)
+    low_improvement_nonzero = (
+        (best_lags > 0)
+        & (best_scores >= min_corr)
+        & (improvements < min_improvement)
+    )
     for lo, hi in zip(bins[:-1], bins[1:]):
         if math.isinf(hi):
             mask = distances_km >= lo
@@ -533,8 +541,16 @@ def summarize_distance_bins(
                 "distance_bin_km": label,
                 "num_edges": n,
                 "raw_best_zero_ratio": float(np.mean(best_lags[mask] == 0)) if n else None,
-                "invalid_corr_ratio": float(np.mean(invalid[mask])) if n else None,
-                "effective_zero_or_invalid_ratio": float(np.mean(effective_lags[mask] == 0)) if n else None,
+                "invalid_corr_ratio": float(np.mean(corr_filtered[mask])) if n else None,
+                "corr_filtered_ratio": float(np.mean(corr_filtered[mask])) if n else None,
+                "effective_nan_ratio": float(np.mean(effective_nan[mask])) if n else None,
+                "effective_zero_ratio": float(np.mean(effective_zero[mask])) if n else None,
+                "effective_zero_or_invalid_ratio": float(
+                    np.mean(effective_zero[mask] | effective_nan[mask])
+                ) if n else None,
+                "low_improvement_nonzero_ratio": float(
+                    np.mean(low_improvement_nonzero[mask])
+                ) if n else None,
                 "high_conf_nonzero_ratio": float(np.mean(high_conf_nonzero[mask])) if n else None,
                 "median_raw_best_lag_steps": nan_quantile(best_lags[mask], 0.5) if n else None,
                 "median_effective_lag_steps": nan_quantile(effective_lags[mask], 0.5) if n else None,
@@ -569,7 +585,14 @@ def summarize_scores(
     effective_lags: np.ndarray,
     args: argparse.Namespace,
 ) -> dict[str, Any]:
-    invalid = best_scores < args.min_corr
+    corr_filtered = best_scores < args.min_corr
+    effective_nan = ~np.isfinite(effective_lags)
+    effective_zero = np.isfinite(effective_lags) & (effective_lags == 0)
+    low_improvement_nonzero = (
+        (best_lags > 0)
+        & (best_scores >= args.min_corr)
+        & (improvements < args.min_improvement)
+    )
     return {
         "dataset": dataset,
         "dataset_dir": str(dataset_dir),
@@ -599,8 +622,16 @@ def summarize_scores(
         "interpolation_method": method_meta.get("interpolation_method"),
         "raw_best_zero_ratio": float(np.mean(best_lags == 0)) if edges.shape[0] else None,
         "raw_nonzero_ratio": float(np.mean(best_lags > 0)) if edges.shape[0] else None,
-        "invalid_corr_ratio": float(np.mean(invalid)) if edges.shape[0] else None,
-        "effective_zero_or_invalid_ratio": float(np.mean(effective_lags == 0)) if edges.shape[0] else None,
+        "invalid_corr_ratio": float(np.mean(corr_filtered)) if edges.shape[0] else None,
+        "corr_filtered_ratio": float(np.mean(corr_filtered)) if edges.shape[0] else None,
+        "effective_nan_ratio": float(np.mean(effective_nan)) if edges.shape[0] else None,
+        "effective_zero_ratio": float(np.mean(effective_zero)) if edges.shape[0] else None,
+        "effective_zero_or_invalid_ratio": float(
+            np.mean(effective_zero | effective_nan)
+        ) if edges.shape[0] else None,
+        "low_improvement_nonzero_ratio": float(
+            np.mean(low_improvement_nonzero)
+        ) if edges.shape[0] else None,
         "high_conf_nonzero_ratio": float(np.mean(high_conf_nonzero)) if edges.shape[0] else None,
         "median_raw_best_lag_steps": nan_quantile(best_lags, 0.5),
         "median_raw_best_lag_minutes": nan_quantile(best_lags * method_minutes, 0.5),
@@ -633,11 +664,18 @@ def make_edge_rows(
     improvements: np.ndarray,
     high_conf_nonzero: np.ndarray,
     effective_lags: np.ndarray,
+    corr_filtered: np.ndarray,
+    low_improvement_nonzero: np.ndarray,
     include_corr_columns: bool,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for i, (src, dst) in enumerate(edges):
         best_lag = int(best_lags[i])
+        effective_lag = float(effective_lags[i])
+        effective_lag_steps = effective_lag if np.isfinite(effective_lag) else float("nan")
+        effective_lag_minutes = (
+            effective_lag * method_minutes if np.isfinite(effective_lag) else float("nan")
+        )
         row = {
             "dataset": dataset,
             "graph": graph,
@@ -652,13 +690,15 @@ def make_edge_rows(
             "edge_distance_km": float(distances_km[i]) if distances_km is not None else None,
             "best_lag_steps": best_lag,
             "best_lag_minutes": int(best_lag * method_minutes),
-            "effective_lag_steps": int(effective_lags[i]),
-            "effective_lag_minutes": int(effective_lags[i] * method_minutes),
+            "effective_lag_steps": effective_lag_steps,
+            "effective_lag_minutes": effective_lag_minutes,
             "zero_lag_corr": float(zero_corrs[i]) if np.isfinite(zero_corrs[i]) else None,
             "zero_lag_score": float(zero_scores[i]) if np.isfinite(zero_scores[i]) else None,
             "best_lag_corr": float(best_corrs[i]) if np.isfinite(best_corrs[i]) else None,
             "best_lag_score": float(best_scores[i]) if np.isfinite(best_scores[i]) else None,
             "corr_improvement": float(improvements[i]) if np.isfinite(improvements[i]) else None,
+            "corr_filtered_delay": bool(corr_filtered[i]),
+            "low_improvement_nonzero_delay": bool(low_improvement_nonzero[i]),
             "high_conf_nonzero_delay": bool(high_conf_nonzero[i]),
             "valid_pairs_at_best_lag": int(count_by_lag[best_lag, i]),
         }
@@ -739,12 +779,19 @@ def score_graph_window_method(
     )
     zero_corrs = corr_by_lag[0]
     zero_scores = np.abs(zero_corrs) if score_mode == "absolute_corr" else zero_corrs
+    corr_filtered = best_scores < args.min_corr
+    low_improvement_nonzero = (
+        (best_lags > 0)
+        & (best_scores >= args.min_corr)
+        & (improvements < args.min_improvement)
+    )
     high_conf_nonzero = (
         (best_lags > 0)
         & (best_scores >= args.min_corr)
         & (improvements >= args.min_improvement)
     )
-    effective_lags = np.where(high_conf_nonzero, best_lags, 0)
+    effective_lags = np.where(high_conf_nonzero, best_lags, 0).astype(np.float64)
+    effective_lags[corr_filtered] = np.nan
     distances_km = edge_distances_km(lat_lng, edges)
 
     summary = summarize_scores(
@@ -779,6 +826,7 @@ def score_graph_window_method(
         best_scores=best_scores,
         bins=bins_km,
         min_corr=args.min_corr,
+        min_improvement=args.min_improvement,
         high_conf_nonzero=high_conf_nonzero,
     )
     for row in distance_rows:
@@ -813,6 +861,8 @@ def score_graph_window_method(
         improvements=improvements,
         high_conf_nonzero=high_conf_nonzero,
         effective_lags=effective_lags,
+        corr_filtered=corr_filtered,
+        low_improvement_nonzero=low_improvement_nonzero,
         include_corr_columns=args.include_corr_columns,
     )
     return edge_rows, summary, distance_rows
