@@ -62,13 +62,13 @@ def road_positive_quantile_thresholds(
 ) -> tuple[np.ndarray, np.ndarray]:
     train_targets = np.asarray(train_targets, dtype=np.float32)
     thresholds = np.full(train_targets.shape[1], np.nan, dtype=np.float32)
-    support = np.zeros(train_targets.shape[1], dtype=np.int64)
-    for node_idx in range(train_targets.shape[1]):
-        values = train_targets[:, node_idx]
-        values = values[np.isfinite(values) & (values > eps)]
-        support[node_idx] = len(values)
-        if len(values) >= min_positive_support:
-            thresholds[node_idx] = float(np.quantile(values, q))
+    positive = np.isfinite(train_targets) & (train_targets > eps)
+    support = np.sum(positive, axis=0).astype(np.int64)
+    valid_nodes = support >= min_positive_support
+    if np.any(valid_nodes):
+        work = np.array(train_targets[:, valid_nodes], dtype=np.float32, copy=True)
+        work[~(np.isfinite(work) & (work > eps))] = np.nan
+        thresholds[valid_nodes] = np.nanquantile(work, q, axis=0).astype(np.float32)
     return thresholds, support
 
 
