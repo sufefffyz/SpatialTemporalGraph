@@ -463,6 +463,7 @@ def plot_month_delay_by_distance_heatmaps(
         squeeze=False,
         sharex=True,
         sharey=True,
+        constrained_layout=True,
     )
     last_im = None
     norm = LogNorm(vmin=1, vmax=max_count)
@@ -496,7 +497,6 @@ def plot_month_delay_by_distance_heatmaps(
     if last_im is not None:
         cbar = fig.colorbar(last_im, ax=axes.ravel().tolist(), fraction=0.025, pad=0.015)
         cbar.set_label("Edge count")
-    fig.tight_layout()
     field_label = "effective" if lag_field == "effective_lag_minutes" else "raw_best"
     return save_figure(
         fig,
