@@ -47,7 +47,7 @@ class FlowNet(nn.Module):
             rate=config.rate,
         )
         self.node_embed = nn.Parameter(torch.randn(config.enc_in, config.d_model))
-        self.dist_mtx = dist_mtx
+        self.register_buffer("dist_mtx", dist_mtx.float())
         self.dist_est = nn.Linear(config.d_model * 2, 1)
         self.dist_threshold = []
         self.mask_record = []
