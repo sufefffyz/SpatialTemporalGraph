@@ -32,6 +32,8 @@ env/
 /BasicTS/logs/
 /BasicTS/checkpoints/
 /BasicTS/wandb/
+/BasicTS/PEMS/graph_construction/outputs
+/BasicTS/PEMS/output
 
 # Heavy experiment artifacts
 **/outputs/*
