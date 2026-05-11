@@ -221,7 +221,10 @@ def osrm_table_block(
     distances = payload.get("distances")
     if distances is None:
         raise RuntimeError("OSRM table response did not contain distances; check OSRM version/profile.")
-    return np.array([[np.inf if v is None else float(v) for v in row] for row in distances], dtype=np.float64)
+    block = np.array([[np.inf if v is None else float(v) for v in row] for row in distances], dtype=np.float64)
+    # OSRM can return tiny negative distances for nearly co-located snapped points.
+    block[np.isfinite(block) & (block < 0.0)] = 0.0
+    return block
 
 
 def probe_osrm(base_url: str, lats: np.ndarray, lons: np.ndarray, timeout: float, retries: int) -> None:
@@ -295,6 +298,7 @@ def summarize_matrix(path: Path, name: str, started: float) -> dict:
     diag = np.diag(arr)
     finite_values = arr[finite]
     positive = finite & (arr > 0)
+    negative = finite & (arr < 0)
     positive_values = arr[positive]
     summary = {
         "name": name,
@@ -303,6 +307,7 @@ def summarize_matrix(path: Path, name: str, started: float) -> dict:
         "dtype": str(arr.dtype),
         "finite_count": int(finite.sum()),
         "missing_or_inf_count": int(arr.size - finite.sum()),
+        "negative_count": int(negative.sum()),
         "positive_count": int(positive.sum()),
         "diag_min": float(np.nanmin(diag)),
         "diag_max": float(np.nanmax(diag)),
