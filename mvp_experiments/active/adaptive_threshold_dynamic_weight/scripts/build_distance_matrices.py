@@ -259,6 +259,8 @@ def build_osrm_matrix(
 ) -> dict:
     n = len(lats)
     out = open_or_create_osrm_matrix(out_path, (n, n), dtype, overwrite=overwrite, resume=resume)
+    if progress_path.exists() and overwrite and not resume:
+        progress_path.unlink()
     started = time.time()
     with progress_path.open("a") as progress:
         for i0 in range(0, n, block_size):
