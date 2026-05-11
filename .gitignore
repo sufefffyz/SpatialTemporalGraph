@@ -1,0 +1,58 @@
+# Local secrets / remote execution
+.remote-run.env
+*.env
+!*.example.env
+!**/*.example.env
+
+# macOS / editor noise
+.DS_Store
+.vscode/
+.idea/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage*
+.conda/
+.venv/
+.venv-*/
+venv/
+env/
+
+# Local data and generated products
+/data/
+/datasets/
+/product/
+/test-output/
+/BasicTS/datasets/
+/BasicTS/logs/
+/BasicTS/checkpoints/
+/BasicTS/wandb/
+
+# Heavy experiment artifacts
+**/outputs/*
+!**/outputs/.gitkeep
+**/checkpoints/
+**/wandb/
+**/logs/
+**/ckpt/
+**/tmp/
+**/cache/
+**/results/raw/
+
+# Large binary artifacts
+*.npy
+*.npz
+*.pkl
+*.pickle
+*.h5
+*.pt
+*.pth
+*.ckpt
+
+# Jupyter transient files
+.ipynb_checkpoints/

@@ -1,0 +1,18 @@
+# Bulky or generated experiment artifacts.
+outputs/*
+results/raw/*
+checkpoints/*
+logs/*
+wandb/*
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.npz
+*.pkl
+
+# Keep folder placeholders.
+!.gitkeep
+!outputs/.gitkeep
+!results/.gitkeep
+

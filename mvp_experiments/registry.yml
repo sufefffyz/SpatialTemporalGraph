@@ -1,0 +1,50 @@
+# Machine-readable registry for idea-specific MVP experiments.
+# Use aliases for old top-level paths that remain as compatibility symlinks.
+
+schema_version: 1
+updated: 2026-05-11
+
+experiments:
+  - slug: adaptive_threshold_dynamic_weight
+    title: Adaptive Threshold + Dynamic Edge Weight MVP
+    status: active
+    location: mvp_experiments/active/adaptive_threshold_dynamic_weight
+    datasets:
+      - LargeST-SD
+      - LargeST-GBA
+      - LargeST-GLA
+      - LargeST-CA
+      - PEMS-with-validated-coordinates
+    main_claim: Budgeted physical sparse STGNN support with dynamic sparse-edge message weights.
+    notes: Current active MVP for adaptive threshold graph construction.
+
+  - slug: delay_selective
+    title: Delay-Selective Propagation
+    status: active
+    location: mvp_experiments/active/delay_selective
+    aliases:
+      - delay_selective
+    datasets:
+      - LargeST
+      - city-traffic-M
+      - city-traffic-L
+    main_claim: Delay effects are selective and should be modeled only where observable.
+    notes: Migrated into mvp_experiments/active; old top-level path remains as a compatibility symlink.
+
+  - slug: zero_aware_mvp
+    title: Zero-Aware Traffic Forecasting
+    status: active
+    location: mvp_experiments/active/zero_aware_mvp
+    aliases:
+      - zero_aware_mvp
+    datasets:
+      - Urban Traffic Benchmark
+      - TRAFFIC_VOLUME_FULL
+    main_claim: Standard masked MAE hides structured zeros in fine-grained traffic forecasting.
+    notes: Migrated into mvp_experiments/active; old top-level path remains as a compatibility symlink.
+
+statuses:
+  active: Current MVP with planned runs.
+  paused: Idea is currently stopped but may resume.
+  archived: Idea is closed, failed, or superseded.
+  promoted: Reusable parts have moved into shared code; MVP remains as record.
