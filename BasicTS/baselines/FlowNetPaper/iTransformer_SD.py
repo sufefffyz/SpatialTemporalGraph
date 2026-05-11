@@ -3,9 +3,8 @@ import sys
 
 sys.path.append(os.path.abspath(__file__ + "/../../.."))
 
-from baselines.iTransformer.arch import iTransformer
-
 from .common import build_sd_cfg
+from .wrappers import ITransformer4D
 
 
 INPUT_LEN = 12
@@ -43,7 +42,7 @@ MODEL_PARAM = {
 }
 
 CFG = build_sd_cfg(
-    iTransformer,
+    ITransformer4D,
     MODEL_PARAM,
     tag="flownetpaper",
     forward_features=[0, 1, 2],

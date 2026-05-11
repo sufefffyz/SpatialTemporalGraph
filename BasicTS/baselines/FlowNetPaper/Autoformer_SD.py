@@ -24,7 +24,7 @@ MODEL_PARAM = {
     "d_model": 512,
     "embed": "timeF",
     "dropout": 0.05,
-    "factor": 6,
+    "factor": 1,
     "n_heads": 8,
     "d_ff": 2048,
     "activation": "gelu",
