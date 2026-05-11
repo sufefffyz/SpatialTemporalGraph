@@ -2,7 +2,7 @@
 
 | Run ID | Milestone | Purpose | System / Variant | Dataset | Metrics | Priority | Status | Notes |
 |---|---|---|---|---|---|---|---|---|
-| R001 | M0 | LargeST graph diagnostics | original / global threshold / top-k | SD/GBA/GLA/CA | coordinate coverage, degree, density, isolated rows, row sums, K-hop coverage | MUST | TODO | Use `meta.csv` Lat/Lng. |
+| R001 | M0 | LargeST graph diagnostics | original / global threshold / top-k | SD/GBA/GLA/CA | coordinate coverage, degree, density, isolated rows, row sums, K-hop coverage | MUST | IN_PROGRESS | Data availability check: `notes/data_availability_2026-05-11.md`; full diagnostics still pending. |
 | R002 | M0 | PEMS coordinate validation | PEMS-BAY and PEMS03/04/07/08 if mappable | PEMS | coordinate coverage, matched-node rate | MUST | TODO | Exclude unreliable mappings. |
 | R003 | M0 | One-batch smoke | GraphWaveNet original graph | LargeST-SD | forward/backward, finite loss | MUST | TODO | Baseline sanity. |
 | R004 | M1 | Fixed sparse Pareto | global threshold degree 2/4/8/12/24 | LargeST-SD | MAE/RMSE/MAPE/WAPE, time, memory | MUST | TODO | Single seed first. |
@@ -16,4 +16,3 @@
 | R012 | M5 | Stability | top 2 methods, 3 seeds | LargeST-SD + one larger LargeST subset | mean/std metrics | MUST | TODO | Paper-grade evidence. |
 | R013 | M5 | Qualitative diagnosis | learned degree/edge weights by region/time | LargeST-SD | degree distribution, peak/off-peak patterns | NICE | TODO | After positive quantitative signal. |
 | R014 | M5 | PEMS replication | best method | coordinate-validated PEMS | MAE/RMSE/MAPE/WAPE | MUST | TODO | Main-table replication only if coordinates validated. |
-
