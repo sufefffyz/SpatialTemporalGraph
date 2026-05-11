@@ -90,10 +90,14 @@ def build_sd_cfg(
 
     cfg.TRAIN = EasyDict()
     cfg.TRAIN.NUM_EPOCHS = int(os.environ.get("BASICTS_EPOCHS", str(num_epochs)))
+    run_tag = os.environ.get("BASICTS_RUN_TAG", "").strip()
+    ckpt_name_parts = [data_name, tag, str(cfg.TRAIN.NUM_EPOCHS), str(input_len), str(output_len)]
+    if run_tag:
+        ckpt_name_parts.append(run_tag)
     cfg.TRAIN.CKPT_SAVE_DIR = os.path.join(
         "checkpoints",
         model_arch.__name__,
-        "_".join([data_name, tag, str(cfg.TRAIN.NUM_EPOCHS), str(input_len), str(output_len)]),
+        "_".join(ckpt_name_parts),
     )
     cfg.TRAIN.LOSS = masked_mae
     cfg.TRAIN.OPTIM = EasyDict()

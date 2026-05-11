@@ -44,6 +44,7 @@ MODEL_PARAM = {
     "use_curriculum_learning": True,
 }
 NUM_EPOCHS = 100
+RUN_TAG = os.environ.get("BASICTS_RUN_TAG", "").strip()
 
 CFG = EasyDict()
 CFG.DESCRIPTION = "DCRNN on LargeST SD original graph"
@@ -103,10 +104,13 @@ CFG.METRICS.NULL_VAL = NULL_VAL
 
 CFG.TRAIN = EasyDict()
 CFG.TRAIN.NUM_EPOCHS = NUM_EPOCHS
+CKPT_NAME_PARTS = [DATA_NAME, "original", str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)]
+if RUN_TAG:
+    CKPT_NAME_PARTS.append(RUN_TAG)
 CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
     "checkpoints",
     MODEL_ARCH.__name__,
-    "_".join([DATA_NAME, "original", str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)]),
+    "_".join(CKPT_NAME_PARTS),
 )
 CFG.TRAIN.LOSS = masked_mae
 CFG.TRAIN.OPTIM = EasyDict()
