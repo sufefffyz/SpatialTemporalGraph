@@ -1,3 +1,4 @@
+import os
 from typing import Dict, Optional
 
 import wandb
@@ -32,12 +33,15 @@ class PemsWandBTimeSeriesForecastingRunner(SimpleTimeSeriesForecastingRunner):
         if self._wandb_initialized:
             return
 
-        project = self.wandb_cfg.get('PROJECT', 'SpatialTemporalModel')
-        entity = self.wandb_cfg.get('ENTITY', None) or None
-        mode = self.wandb_cfg.get('MODE', 'online')
-        run_name = self.wandb_cfg.get('RUN_NAME', f'{self.model_name}_{self.dataset_name}')
-        group = self.wandb_cfg.get('GROUP', None)
+        project = os.environ.get('WANDB_PROJECT') or self.wandb_cfg.get('PROJECT', 'SpatialTemporalModel')
+        entity = os.environ.get('WANDB_ENTITY') or self.wandb_cfg.get('ENTITY', None) or None
+        mode = os.environ.get('WANDB_MODE') or self.wandb_cfg.get('MODE', 'online')
+        run_name = os.environ.get('WANDB_NAME') or self.wandb_cfg.get('RUN_NAME', f'{self.model_name}_{self.dataset_name}')
+        group = os.environ.get('WANDB_RUN_GROUP') or self.wandb_cfg.get('GROUP', None)
         tags = self.wandb_cfg.get('TAGS', None)
+        env_tags = os.environ.get('WANDB_TAGS')
+        if env_tags:
+            tags = [tag.strip() for tag in env_tags.split(',') if tag.strip()]
 
         init_kwargs = {
             'project': project,

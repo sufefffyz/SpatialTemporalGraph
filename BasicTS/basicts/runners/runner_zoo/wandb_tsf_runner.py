@@ -1,10 +1,9 @@
+import os
 from typing import Dict, Optional
 
-import torch
 import wandb
 from .simple_tsf_runner import SimpleTimeSeriesForecastingRunner
-from easytorch.utils import (TimePredictor, get_local_rank, get_logger,
-                             is_master, master_only, set_env)
+from easytorch.utils import master_only
 
 class WandBTimeSeriesForecastingRunner(SimpleTimeSeriesForecastingRunner):
     """
@@ -21,6 +20,7 @@ class WandBTimeSeriesForecastingRunner(SimpleTimeSeriesForecastingRunner):
 
         self.model_name = cfg['MODEL']['NAME']
         self.dataset_name = cfg['DATASET']['NAME']
+        self.wandb_cfg = cfg.get('WANDB', {})
     
     def init_validation(self, cfg: Dict):
         super().init_validation(cfg)
@@ -29,9 +29,31 @@ class WandBTimeSeriesForecastingRunner(SimpleTimeSeriesForecastingRunner):
     
     @master_only
     def _wandb_init(self, cfg: Dict):
-        wandb.init(project="SpatialTemporalModel", 
-                   name=f'{self.model_name}_{self.dataset_name}',
-                   config=cfg)
+        project = os.environ.get("WANDB_PROJECT") or self.wandb_cfg.get("PROJECT", "SpatialTemporalModel")
+        entity = os.environ.get("WANDB_ENTITY") or self.wandb_cfg.get("ENTITY", None)
+        mode = os.environ.get("WANDB_MODE") or self.wandb_cfg.get("MODE", None)
+        run_name = os.environ.get("WANDB_NAME") or self.wandb_cfg.get("RUN_NAME", f"{self.model_name}_{self.dataset_name}")
+        group = os.environ.get("WANDB_RUN_GROUP") or self.wandb_cfg.get("GROUP", None)
+        tags = self.wandb_cfg.get("TAGS", None)
+        env_tags = os.environ.get("WANDB_TAGS")
+        if env_tags:
+            tags = [tag.strip() for tag in env_tags.split(",") if tag.strip()]
+
+        init_kwargs = {
+            "project": project,
+            "name": run_name,
+            "config": cfg,
+        }
+        if entity is not None:
+            init_kwargs["entity"] = entity
+        if mode is not None:
+            init_kwargs["mode"] = mode
+        if group is not None:
+            init_kwargs["group"] = group
+        if tags is not None:
+            init_kwargs["tags"] = tags
+
+        wandb.init(**init_kwargs)
         
         wandb.watch(self.model, log="all")
 
@@ -69,4 +91,3 @@ class WandBTimeSeriesForecastingRunner(SimpleTimeSeriesForecastingRunner):
     def _wandb_close(self):
         self.logger.info("Close the WandB run...")
         wandb.finish()
-
