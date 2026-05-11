@@ -6,7 +6,7 @@ sys.path.append(os.path.abspath(__file__ + '/../../..'))
 
 from basicts.metrics import masked_mae, masked_mape, masked_rmse
 from basicts.data import TimeSeriesForecastingDataset
-from basicts.runners import SimpleTimeSeriesForecastingRunner
+from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
 from basicts.utils import get_regular_settings, load_adj
 
@@ -48,7 +48,7 @@ CFG = EasyDict()
 CFG.DESCRIPTION = 'An Example Config'
 CFG.GPU_NUM = 1 # Number of GPUs to use (0 for CPU mode)
 # Runner
-CFG.RUNNER = SimpleTimeSeriesForecastingRunner
+CFG.RUNNER = WandBTimeSeriesForecastingRunner
 
 ############################## Environment Configuration ##############################
 CFG.ENV = EasyDict()
@@ -128,7 +128,7 @@ CFG.TRAIN.CLIP_GRAD_PARAM = {
 }
 # Train data loader settings
 CFG.TRAIN.DATA = EasyDict()
-CFG.TRAIN.DATA.BATCH_SIZE = 32
+CFG.TRAIN.DATA.BATCH_SIZE = 64
 CFG.TRAIN.DATA.SHUFFLE = True
 
 ############################## Validation Configuration ##############################

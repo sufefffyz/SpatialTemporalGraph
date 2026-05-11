@@ -39,7 +39,7 @@ def build_sd_cfg(
     cfg.RUNNER = WandBTimeSeriesForecastingRunner
 
     cfg.ENV = EasyDict()
-    cfg.ENV.SEED = int(os.environ.get("BASICTS_SEED", "42"))
+    cfg.ENV.SEED = int(os.environ.get("BASICTS_SEED", "2023"))
     cfg.ENV.DETERMINISTIC = True
     cfg.ENV.CUDNN = EasyDict()
     cfg.ENV.CUDNN.ENABLED = True
@@ -109,7 +109,7 @@ def build_sd_cfg(
         "gamma": gamma,
     }
     cfg.TRAIN.CLIP_GRAD_PARAM = {"max_norm": 5.0}
-    cfg.TRAIN.EARLY_STOPPING_PATIENCE = 20
+    cfg.TRAIN.EARLY_STOPPING_PATIENCE = 30
     cfg.TRAIN.DATA = EasyDict()
     cfg.TRAIN.DATA.BATCH_SIZE = batch_size
     cfg.TRAIN.DATA.SHUFFLE = True
@@ -120,7 +120,7 @@ def build_sd_cfg(
     cfg.VAL.DATA.BATCH_SIZE = val_batch_size
 
     cfg.TEST = EasyDict()
-    cfg.TEST.INTERVAL = 10
+    cfg.TEST.INTERVAL = cfg.TRAIN.NUM_EPOCHS
     cfg.TEST.DATA = EasyDict()
     cfg.TEST.DATA.BATCH_SIZE = val_batch_size
 

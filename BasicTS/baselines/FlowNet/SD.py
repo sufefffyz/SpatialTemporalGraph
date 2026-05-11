@@ -9,10 +9,10 @@ sys.path.append(os.path.abspath(__file__ + "/../../.."))
 
 from basicts.data import TimeSeriesForecastingDataset
 from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
-from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
 
 from .arch import BasicTSFlowNet
+from .runner import FlowNetOfficialWandBRunner
 
 
 DATA_NAME = "SD"
@@ -55,10 +55,10 @@ NUM_EPOCHS = 100
 CFG = EasyDict()
 CFG.DESCRIPTION = "FlowNet on LargeST SD with OSRM shortest-path distance"
 CFG.GPU_NUM = 1
-CFG.RUNNER = WandBTimeSeriesForecastingRunner
+CFG.RUNNER = FlowNetOfficialWandBRunner
 
 CFG.ENV = EasyDict()
-CFG.ENV.SEED = int(os.environ.get("BASICTS_SEED", "42"))
+CFG.ENV.SEED = int(os.environ.get("BASICTS_SEED", "2023"))
 CFG.ENV.DETERMINISTIC = True
 CFG.ENV.CUDNN = EasyDict()
 CFG.ENV.CUDNN.ENABLED = True
@@ -131,7 +131,8 @@ CFG.TRAIN.DATA = EasyDict()
 CFG.TRAIN.DATA.BATCH_SIZE = 8
 CFG.TRAIN.DATA.SHUFFLE = True
 CFG.TRAIN.CLIP_GRAD_PARAM = {"max_norm": 5.0}
-CFG.TRAIN.EARLY_STOPPING_PATIENCE = 20
+CFG.TRAIN.EARLY_STOPPING_WARMUP = 20
+CFG.TRAIN.EARLY_STOPPING_PATIENCE = 10
 
 CFG.VAL = EasyDict()
 CFG.VAL.INTERVAL = 1
@@ -139,7 +140,7 @@ CFG.VAL.DATA = EasyDict()
 CFG.VAL.DATA.BATCH_SIZE = 16
 
 CFG.TEST = EasyDict()
-CFG.TEST.INTERVAL = 10
+CFG.TEST.INTERVAL = NUM_EPOCHS
 CFG.TEST.DATA = EasyDict()
 CFG.TEST.DATA.BATCH_SIZE = 16
 

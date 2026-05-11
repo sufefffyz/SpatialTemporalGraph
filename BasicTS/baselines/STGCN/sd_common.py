@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath(__file__ + "/../../.."))
 
 from basicts.data import TimeSeriesForecastingDataset
 from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
-from basicts.runners import SimpleTimeSeriesForecastingRunner
+from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
 from basicts.utils.adjacent_matrix_norm import calculate_symmetric_normalized_laplacian
 from basicts.utils.serialization import load_adj, load_pkl
@@ -102,10 +102,10 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
     cfg = EasyDict()
     cfg.DESCRIPTION = description
     cfg.GPU_NUM = 1
-    cfg.RUNNER = SimpleTimeSeriesForecastingRunner
+    cfg.RUNNER = WandBTimeSeriesForecastingRunner
 
     cfg.ENV = EasyDict()
-    cfg.ENV.SEED = 42
+    cfg.ENV.SEED = int(os.environ.get("BASICTS_SEED", "2023"))
     cfg.ENV.DETERMINISTIC = True
     cfg.ENV.CUDNN = EasyDict()
     cfg.ENV.CUDNN.ENABLED = True
@@ -177,7 +177,7 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
     cfg.TRAIN.DATA = EasyDict()
     cfg.TRAIN.DATA.BATCH_SIZE = 64
     cfg.TRAIN.DATA.SHUFFLE = True
-    cfg.TRAIN.EARLY_STOPPING_PATIENCE = 50
+    cfg.TRAIN.EARLY_STOPPING_PATIENCE = 30
 
     cfg.VAL = EasyDict()
     cfg.VAL.INTERVAL = 1
@@ -185,7 +185,7 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
     cfg.VAL.DATA.BATCH_SIZE = 64
 
     cfg.TEST = EasyDict()
-    cfg.TEST.INTERVAL = 10
+    cfg.TEST.INTERVAL = num_epochs
     cfg.TEST.DATA = EasyDict()
     cfg.TEST.DATA.BATCH_SIZE = 64
 

@@ -43,7 +43,7 @@ MODEL_PARAM = {
     "adj_mx": [torch.tensor(i) for i in adj_mx],
     "use_curriculum_learning": True,
 }
-NUM_EPOCHS = 30
+NUM_EPOCHS = 100
 
 CFG = EasyDict()
 CFG.DESCRIPTION = "DCRNN on LargeST SD original graph"
@@ -52,7 +52,7 @@ CFG.RUNNER = WandBTimeSeriesForecastingRunner
 CFG._ = random.randint(-1000000, 1000000)
 
 CFG.ENV = EasyDict()
-CFG.ENV.SEED = 42
+CFG.ENV.SEED = int(os.environ.get("BASICTS_SEED", "2023"))
 CFG.ENV.DETERMINISTIC = True
 CFG.ENV.CUDNN = EasyDict()
 CFG.ENV.CUDNN.ENABLED = True
@@ -118,7 +118,7 @@ CFG.TRAIN.LR_SCHEDULER.PARAM = {"milestones": [80], "gamma": 0.3}
 CFG.TRAIN.DATA = EasyDict()
 CFG.TRAIN.DATA.BATCH_SIZE = 64
 CFG.TRAIN.DATA.SHUFFLE = True
-CFG.TRAIN.EARLY_STOPPING_PATIENCE = 15
+CFG.TRAIN.EARLY_STOPPING_PATIENCE = 30
 
 CFG.VAL = EasyDict()
 CFG.VAL.INTERVAL = 1
@@ -126,7 +126,7 @@ CFG.VAL.DATA = EasyDict()
 CFG.VAL.DATA.BATCH_SIZE = 64
 
 CFG.TEST = EasyDict()
-CFG.TEST.INTERVAL = 1
+CFG.TEST.INTERVAL = NUM_EPOCHS
 CFG.TEST.DATA = EasyDict()
 CFG.TEST.DATA.BATCH_SIZE = 64
 
