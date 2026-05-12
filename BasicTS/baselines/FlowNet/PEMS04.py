@@ -15,7 +15,7 @@ from .arch import BasicTSFlowNet
 from .runner import FlowNetOfficialWandBRunner
 
 
-DATA_NAME = "SD"
+DATA_NAME = "PEMS04"
 DESC_PATH = Path("datasets") / DATA_NAME / "desc.json"
 DESC = json.loads(DESC_PATH.read_text(encoding="utf-8"))
 REGULAR_SETTINGS = DESC["regular_settings"]
@@ -27,11 +27,7 @@ RESCALE = REGULAR_SETTINGS["RESCALE"]
 NULL_VAL = REGULAR_SETTINGS["NULL_VAL"]
 
 MODEL_ARCH = BasicTSFlowNet
-DIST_MTX_PATH = os.environ.get(
-    "FLOWNET_DIST_MTX",
-    "/home/yuzhang_fei/stg_artifacts_archive/adaptive_threshold_dynamic_weight/"
-    "distance_matrices/SD/SD_straight_distance_m.npy",
-)
+DIST_MTX_PATH = os.environ.get("FLOWNET_DIST_MTX", "datasets/raw_data/PEMS04/PEMS04.csv")
 MODEL_PARAM = {
     "num_nodes": int(DESC["num_nodes"]),
     "seq_len": INPUT_LEN,
@@ -54,7 +50,7 @@ NUM_EPOCHS = 100
 RUN_TAG = os.environ.get("BASICTS_RUN_TAG", "").strip()
 
 CFG = EasyDict()
-CFG.DESCRIPTION = "FlowNet on LargeST SD with geographic straight-line distance"
+CFG.DESCRIPTION = "FlowNet on PEMS04 with geographic edge-cost shortest-path distance"
 CFG.GPU_NUM = 1
 CFG.RUNNER = FlowNetOfficialWandBRunner
 
@@ -113,11 +109,7 @@ CFG.TRAIN.NUM_EPOCHS = NUM_EPOCHS
 CKPT_NAME_PARTS = [DATA_NAME, "geo", str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)]
 if RUN_TAG:
     CKPT_NAME_PARTS.append(RUN_TAG)
-CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
-    "checkpoints",
-    "FlowNet",
-    "_".join(CKPT_NAME_PARTS),
-)
+CFG.TRAIN.CKPT_SAVE_DIR = os.path.join("checkpoints", "FlowNet", "_".join(CKPT_NAME_PARTS))
 CFG.TRAIN.LOSS = masked_mae
 CFG.TRAIN.OPTIM = EasyDict()
 CFG.TRAIN.OPTIM.TYPE = "AdamW"

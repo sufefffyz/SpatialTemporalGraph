@@ -3,19 +3,19 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 from easydict import EasyDict
 
 sys.path.append(os.path.abspath(__file__ + "/../../.."))
 
-from basicts.data import TimeSeriesForecastingDataset
-from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
-from basicts.scaler import ZScoreScaler
-
 from .arch import BasicTSFlowNet
+from .dataset import FlowNetOfficialDataset
+from .metrics import plain_mae, plain_mse, plain_rmse
 from .runner import FlowNetOfficialWandBRunner
+from .scaler import FlowNetOfficialScaler
 
 
-DATA_NAME = "SD"
+DATA_NAME = "PEMS04F"
 DESC_PATH = Path("datasets") / DATA_NAME / "desc.json"
 DESC = json.loads(DESC_PATH.read_text(encoding="utf-8"))
 REGULAR_SETTINGS = DESC["regular_settings"]
@@ -24,14 +24,10 @@ OUTPUT_LEN = REGULAR_SETTINGS["OUTPUT_LEN"]
 TRAIN_VAL_TEST_RATIO = REGULAR_SETTINGS["TRAIN_VAL_TEST_RATIO"]
 NORM_EACH_CHANNEL = REGULAR_SETTINGS["NORM_EACH_CHANNEL"]
 RESCALE = REGULAR_SETTINGS["RESCALE"]
-NULL_VAL = REGULAR_SETTINGS["NULL_VAL"]
+NULL_VAL = np.nan
 
 MODEL_ARCH = BasicTSFlowNet
-DIST_MTX_PATH = os.environ.get(
-    "FLOWNET_DIST_MTX",
-    "/home/yuzhang_fei/stg_artifacts_archive/adaptive_threshold_dynamic_weight/"
-    "distance_matrices/SD/SD_straight_distance_m.npy",
-)
+DIST_MTX_PATH = os.environ.get("FLOWNET_DIST_MTX", str(Path("datasets") / DATA_NAME / "dist_mtx_norm.npy"))
 MODEL_PARAM = {
     "num_nodes": int(DESC["num_nodes"]),
     "seq_len": INPUT_LEN,
@@ -48,13 +44,13 @@ MODEL_PARAM = {
     "rate": 4,
     "freq": "5min",
     "dist_mtx_path": DIST_MTX_PATH,
-    "dist_norm": "max",
+    "dist_norm": "none",
 }
 NUM_EPOCHS = 100
 RUN_TAG = os.environ.get("BASICTS_RUN_TAG", "").strip()
 
 CFG = EasyDict()
-CFG.DESCRIPTION = "FlowNet on LargeST SD with geographic straight-line distance"
+CFG.DESCRIPTION = "FlowNet official PEMS04F reproduction in BasicTS"
 CFG.GPU_NUM = 1
 CFG.RUNNER = FlowNetOfficialWandBRunner
 
@@ -68,7 +64,7 @@ CFG.ENV.CUDNN.DETERMINISTIC = True
 
 CFG.DATASET = EasyDict()
 CFG.DATASET.NAME = DATA_NAME
-CFG.DATASET.TYPE = TimeSeriesForecastingDataset
+CFG.DATASET.TYPE = FlowNetOfficialDataset
 CFG.DATASET.PARAM = EasyDict(
     {
         "dataset_name": DATA_NAME,
@@ -79,7 +75,7 @@ CFG.DATASET.PARAM = EasyDict(
 )
 
 CFG.SCALER = EasyDict()
-CFG.SCALER.TYPE = ZScoreScaler
+CFG.SCALER.TYPE = FlowNetOfficialScaler
 CFG.SCALER.PARAM = EasyDict(
     {
         "dataset_name": DATA_NAME,
@@ -99,10 +95,9 @@ CFG.MODEL.TARGET_FEATURES = [0]
 CFG.METRICS = EasyDict()
 CFG.METRICS.FUNCS = EasyDict(
     {
-        "MAE": masked_mae,
-        "MAPE": masked_mape,
-        "RMSE": masked_rmse,
-        "WAPE": masked_wape,
+        "MAE": plain_mae,
+        "RMSE": plain_rmse,
+        "MSE": plain_mse,
     }
 )
 CFG.METRICS.TARGET = "MAE"
@@ -110,15 +105,11 @@ CFG.METRICS.NULL_VAL = NULL_VAL
 
 CFG.TRAIN = EasyDict()
 CFG.TRAIN.NUM_EPOCHS = NUM_EPOCHS
-CKPT_NAME_PARTS = [DATA_NAME, "geo", str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)]
+CKPT_NAME_PARTS = [DATA_NAME, "official", str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)]
 if RUN_TAG:
     CKPT_NAME_PARTS.append(RUN_TAG)
-CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
-    "checkpoints",
-    "FlowNet",
-    "_".join(CKPT_NAME_PARTS),
-)
-CFG.TRAIN.LOSS = masked_mae
+CFG.TRAIN.CKPT_SAVE_DIR = os.path.join("checkpoints", "FlowNet", "_".join(CKPT_NAME_PARTS))
+CFG.TRAIN.LOSS = plain_mae
 CFG.TRAIN.OPTIM = EasyDict()
 CFG.TRAIN.OPTIM.TYPE = "AdamW"
 CFG.TRAIN.OPTIM.PARAM = {
@@ -131,22 +122,24 @@ CFG.TRAIN.LR_SCHEDULER.PARAM = {
     "milestones": [10, 20, 30, 40],
     "gamma": 0.5,
 }
-CFG.TRAIN.DATA = EasyDict()
-CFG.TRAIN.DATA.BATCH_SIZE = 8
-CFG.TRAIN.DATA.SHUFFLE = True
 CFG.TRAIN.CLIP_GRAD_PARAM = {"max_norm": 5.0}
 CFG.TRAIN.EARLY_STOPPING_WARMUP = 20
 CFG.TRAIN.EARLY_STOPPING_PATIENCE = 10
+CFG.TRAIN.DATA = EasyDict()
+CFG.TRAIN.DATA.BATCH_SIZE = 8
+CFG.TRAIN.DATA.SHUFFLE = True
 
 CFG.VAL = EasyDict()
 CFG.VAL.INTERVAL = 1
 CFG.VAL.DATA = EasyDict()
-CFG.VAL.DATA.BATCH_SIZE = 16
+CFG.VAL.DATA.BATCH_SIZE = 8
+CFG.VAL.DATA.SHUFFLE = False
 
 CFG.TEST = EasyDict()
 CFG.TEST.INTERVAL = NUM_EPOCHS
 CFG.TEST.DATA = EasyDict()
-CFG.TEST.DATA.BATCH_SIZE = 16
+CFG.TEST.DATA.BATCH_SIZE = 8
+CFG.TEST.DATA.SHUFFLE = False
 
 CFG.EVAL = EasyDict()
 CFG.EVAL.HORIZONS = [3, 6, 12]
