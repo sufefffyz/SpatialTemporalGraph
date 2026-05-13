@@ -7,7 +7,7 @@
 | R003 | M0 | One-batch smoke | GraphWaveNet original graph | LargeST-SD | forward/backward, finite loss | MUST | TODO | Baseline sanity. |
 | R004 | M1 | Fixed sparse Pareto | OSRM Gaussian global threshold beta 0.25/0.5/1.0/1.5/2.0 of LargeST-SD original degree | LargeST-SD | MAE/RMSE/MAPE/WAPE, time, memory | MUST | IN_PROGRESS | Launched GWNet and DCRNN sweeps on 2026-05-13. Threshold is chosen by score quantile; beta 1.0 targets avg degree 24.1885. |
 | R005 | M1 | Fixed sparse Pareto | OSRM top-k at matched average degrees | LargeST-SD | MAE/RMSE/MAPE/WAPE, time, memory | MUST | TODO | Compare with global Gaussian threshold at equal edge budget. |
-| R006 | M1 | Accuracy reference | original graph / adaptive-only | LargeST-SD | MAE/RMSE/MAPE/WAPE | MUST | TODO | Fair reference. |
+| R006 | M1 | Accuracy reference | OSRM Gaussian global threshold + GraphWaveNet adaptive adjacency | LargeST-SD | MAE/RMSE/MAPE/WAPE | MUST | IN_PROGRESS | Added 5-beta GWNet `addaptadj=True` sweep on 2026-05-13 to compare fixed physical graph vs physical graph plus learned adaptive adjacency. |
 | R007 | M2 | Static learned weights | MaskedGraphWaveNet on best fixed support | LargeST-SD | MAE/RMSE/WAPE, time, memory | MUST | TODO | Dense attention caveat. |
 | R008 | M2 | Dynamic weights | dynamic sparse-edge weights on same support | LargeST-SD | MAE/RMSE/WAPE, peak/high-volatility MAE | MUST | TODO | Isolate edge-weight claim. |
 | R009 | M3 | Adaptive threshold | learned per-node threshold at matched degree | LargeST-SD | MAE/RMSE/WAPE, edge budget, degree stats | MUST | TODO | Core novelty test. |
