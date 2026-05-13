@@ -2,8 +2,9 @@
 set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${CITY_TRAFFIC_DATA_DIR:-/data/yuzhang_fei/Urban_Traffic_Benchmark}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-delay_selective/outputs/full_delay_audit}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-${SCRIPT_DIR}/outputs/full_delay_audit}"
 MAX_TIME_STEPS="${MAX_TIME_STEPS:-10000}"
 MAX_EDGES="${MAX_EDGES:-6000}"
 MAX_LAG="${MAX_LAG:-12}"
@@ -27,7 +28,7 @@ run_one() {
   echo "  dataset: ${npz}"
   echo "  output : ${output_dir}"
 
-  "${PYTHON_BIN}" delay_selective/run_quick_delay_audit.py \
+  "${PYTHON_BIN}" "${SCRIPT_DIR}/run_quick_delay_audit.py" \
     --dataset-npz "${npz}" \
     --output-dir "${output_dir}" \
     --split train \

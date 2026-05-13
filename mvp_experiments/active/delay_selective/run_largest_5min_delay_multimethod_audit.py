@@ -67,6 +67,7 @@ METHOD_CHOICES = [
 WINDOW_CHOICES = ["train_prefix", "month", "week_daily"]
 
 WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+EXPERIMENT_DIR = Path(__file__).resolve().parent
 
 
 def parse_args() -> argparse.Namespace:
@@ -75,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="delay_selective/outputs/largest_5min_delay_multimethod_audit",
+        default=str(EXPERIMENT_DIR / "outputs" / "largest_5min_delay_multimethod_audit"),
     )
     parser.add_argument(
         "--dataset",

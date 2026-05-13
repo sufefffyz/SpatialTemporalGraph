@@ -16,7 +16,7 @@ Paper-facing runs must use:
 
 ## Completed Smoke Checks
 
-- Created the zero-aware MVP experiment scaffold under `zero_aware_mvp/`.
+- Created the zero-aware MVP experiment scaffold under `mvp_experiments/active/zero_aware_mvp/`.
 - Prepared BasicTS datasets:
   - `TRAFFIC_VOLUME_5MIN`
   - `TRAFFIC_VOLUME_15MIN`
@@ -89,13 +89,13 @@ Use an environment with those packages, then run:
 ```bash
 cd /Users/richardo/Desktop/STproject/SpatialTemporalGraph
 export BASICTS_PYTHON=python
-ZA_MODEL=AGCRN ZA_NUM_EPOCHS=3 bash zero_aware_mvp/scripts/run_02_basicts_smoke.sh
-ZA_MODEL=GWNET ZA_NUM_EPOCHS=3 bash zero_aware_mvp/scripts/run_02_basicts_smoke.sh
+ZA_MODEL=AGCRN ZA_NUM_EPOCHS=3 bash mvp_experiments/active/zero_aware_mvp/scripts/run_02_basicts_smoke.sh
+ZA_MODEL=GWNET ZA_NUM_EPOCHS=3 bash mvp_experiments/active/zero_aware_mvp/scripts/run_02_basicts_smoke.sh
 ```
 
 Then evaluate:
 
 ```bash
-bash zero_aware_mvp/scripts/run_03_posthoc_eval.sh <BasicTS checkpoint dir>
-bash zero_aware_mvp/scripts/run_04_collect_results.sh
+bash mvp_experiments/active/zero_aware_mvp/scripts/run_03_posthoc_eval.sh <BasicTS checkpoint dir>
+bash mvp_experiments/active/zero_aware_mvp/scripts/run_04_collect_results.sh
 ```

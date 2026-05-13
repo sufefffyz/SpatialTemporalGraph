@@ -1,8 +1,9 @@
 # Machine-readable registry for idea-specific MVP experiments.
-# Use aliases for old top-level paths that remain as compatibility symlinks.
+# Use location as the canonical path. Former top-level aliases are recorded only
+# as migration notes and should not be recreated at the repository root.
 
 schema_version: 1
-updated: 2026-05-11
+updated: 2026-05-13
 
 experiments:
   - slug: adaptive_threshold_dynamic_weight
@@ -22,26 +23,26 @@ experiments:
     title: Delay-Selective Propagation
     status: active
     location: mvp_experiments/active/delay_selective
-    aliases:
+    former_top_level_paths:
       - delay_selective
     datasets:
       - LargeST
       - city-traffic-M
       - city-traffic-L
     main_claim: Delay effects are selective and should be modeled only where observable.
-    notes: Migrated into mvp_experiments/active; old top-level path remains as a compatibility symlink.
+    notes: Migrated into mvp_experiments/active; old top-level compatibility symlink has been removed.
 
   - slug: zero_aware_mvp
     title: Zero-Aware Traffic Forecasting
     status: active
     location: mvp_experiments/active/zero_aware_mvp
-    aliases:
+    former_top_level_paths:
       - zero_aware_mvp
     datasets:
       - Urban Traffic Benchmark
       - TRAFFIC_VOLUME_FULL
     main_claim: Standard masked MAE hides structured zeros in fine-grained traffic forecasting.
-    notes: Migrated into mvp_experiments/active; old top-level path remains as a compatibility symlink.
+    notes: Migrated into mvp_experiments/active; old top-level compatibility symlink has been removed.
 
 statuses:
   active: Current MVP with planned runs.

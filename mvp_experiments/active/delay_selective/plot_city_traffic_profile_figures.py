@@ -11,15 +11,18 @@ from pathlib import Path
 from typing import Any
 
 
+EXPERIMENT_DIR = Path(__file__).resolve().parent
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Generate publication-style figures from "
-            "delay_selective/profile_city_traffic_datasets.py outputs."
+            "profile_city_traffic_datasets.py outputs."
         )
     )
-    parser.add_argument("--profile-dir", default="delay_selective/outputs/dataset_profile")
-    parser.add_argument("--output-dir", default="delay_selective/figures/dataset_profile")
+    parser.add_argument("--profile-dir", default=str(EXPERIMENT_DIR / "outputs" / "dataset_profile"))
+    parser.add_argument("--output-dir", default=str(EXPERIMENT_DIR / "figures" / "dataset_profile"))
     parser.add_argument("--formats", default="pdf,png", help="Comma-separated output formats.")
     parser.add_argument(
         "--include-subgraphs",
@@ -444,7 +447,7 @@ def main() -> None:
             "Missing canonical profile outputs for: "
             + ", ".join(missing)
             + f". Expected files under {profile_dir}. "
-            + "Run delay_selective/run_city_traffic_profile.sh first, or pass --include-subgraphs."
+            + "Run run_city_traffic_profile.sh first, or pass --include-subgraphs."
         )
 
     made = []

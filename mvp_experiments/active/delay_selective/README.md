@@ -7,13 +7,13 @@ This folder is the workspace for delay-selective traffic forecasting validation.
 The dataset paper is summarized in:
 
 ```text
-delay_selective/city_traffic_dataset_notes.md
+mvp_experiments/active/delay_selective/city_traffic_dataset_notes.md
 ```
 
 Grouping options and the Zotero-backed literature synthesis are summarized in:
 
 ```text
-delay_selective/grouping_methods_plan.md
+mvp_experiments/active/delay_selective/grouping_methods_plan.md
 ```
 
 The important caution is that the current local files:
@@ -28,7 +28,7 @@ are category-specific subgraphs, not the canonical full `city-traffic-M` graph f
 On the server, run:
 
 ```bash
-bash delay_selective/run_city_traffic_profile.sh
+bash mvp_experiments/active/delay_selective/run_city_traffic_profile.sh
 ```
 
 The script automatically looks for full files first:
@@ -45,7 +45,7 @@ data/city_traffic_m_volume.npz
 and also profiles the `category=1.0` subgraphs when present. Outputs are written to:
 
 ```text
-delay_selective/outputs/dataset_profile/
+mvp_experiments/active/delay_selective/outputs/dataset_profile/
 ```
 
 Main outputs:
@@ -67,18 +67,18 @@ The profiler records paper-count checks and warnings whenever a file looks like 
 To generate cleaner figures from these profiling outputs:
 
 ```bash
-bash delay_selective/plot_city_traffic_profile_figures.sh
+bash mvp_experiments/active/delay_selective/plot_city_traffic_profile_figures.sh
 ```
 
 Default figure outputs:
 
 ```text
-delay_selective/figures/dataset_profile/city_traffic_target_distributions.pdf
-delay_selective/figures/dataset_profile/city_traffic_target_distributions.png
-delay_selective/figures/dataset_profile/city_traffic_degree_distributions.pdf
-delay_selective/figures/dataset_profile/city_traffic_degree_distributions.png
-delay_selective/figures/dataset_profile/city_traffic_target_distribution_summary.csv
-delay_selective/figures/dataset_profile/city_traffic_degree_summary.csv
+mvp_experiments/active/delay_selective/figures/dataset_profile/city_traffic_target_distributions.pdf
+mvp_experiments/active/delay_selective/figures/dataset_profile/city_traffic_target_distributions.png
+mvp_experiments/active/delay_selective/figures/dataset_profile/city_traffic_degree_distributions.pdf
+mvp_experiments/active/delay_selective/figures/dataset_profile/city_traffic_degree_distributions.png
+mvp_experiments/active/delay_selective/figures/dataset_profile/city_traffic_target_distribution_summary.csv
+mvp_experiments/active/delay_selective/figures/dataset_profile/city_traffic_degree_summary.csv
 ```
 
 ## Quick Delay Audit
@@ -102,13 +102,13 @@ while a smaller subset of longer-range or inter-segment relations shows identifi
 From the repository root:
 
 ```bash
-bash delay_selective/run_quick_delay_audit.sh
+bash mvp_experiments/active/delay_selective/run_quick_delay_audit.sh
 ```
 
 Outputs are written to:
 
 ```text
-delay_selective/outputs/quick_delay_audit/
+mvp_experiments/active/delay_selective/outputs/quick_delay_audit/
 ```
 
 ## What The Script Computes
@@ -156,14 +156,14 @@ For the first full-road-network audit, run the speed targets on the canonical ci
 
 ```bash
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/graph_ml/bin/python \
-bash delay_selective/run_full_delay_audit.sh
+bash mvp_experiments/active/delay_selective/run_full_delay_audit.sh
 ```
 
 Default outputs:
 
 ```text
-delay_selective/outputs/full_delay_audit/city_traffic_l_speed_full_train/
-delay_selective/outputs/full_delay_audit/city_traffic_m_speed_full_train/
+mvp_experiments/active/delay_selective/outputs/full_delay_audit/city_traffic_l_speed_full_train/
+mvp_experiments/active/delay_selective/outputs/full_delay_audit/city_traffic_m_speed_full_train/
 ```
 
 The script samples up to 6,000 eligible directed edges per graph after a coverage filter, uses the first 10,000 train timestamps, and computes lagged correlations for 0 to 12 five-minute lags. City-L uses `min_pair_coverage=0.80`; city-M uses `0.50` because the speed target has much heavier missingness.
@@ -175,7 +175,7 @@ bundles from the official LargeST CA raw files:
 
 ```bash
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
-bash delay_selective/build_largest_5min_basicts.sh --datasets GBA GLA --overwrite
+bash mvp_experiments/active/delay_selective/build_largest_5min_basicts.sh --datasets GBA GLA --overwrite
 ```
 
 The builder follows the LargeST notebooks:
@@ -190,7 +190,7 @@ Then run the 5-minute delay audit:
 
 ```bash
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
-python delay_selective/run_largest_5min_delay_audit.py
+python mvp_experiments/active/delay_selective/run_largest_5min_delay_audit.py
 ```
 
 By default this audits only the LargeST built-in graph edges:
@@ -205,19 +205,19 @@ comparison.
 Default outputs:
 
 ```text
-delay_selective/outputs/largest_5min_delay_audit/all_summary.csv
-delay_selective/outputs/largest_5min_delay_audit/all_distance_bin_summary.csv
-delay_selective/outputs/largest_5min_delay_audit/<DATASET>/edge_delay_scores.csv
-delay_selective/outputs/largest_5min_delay_audit/<DATASET>/summary.csv
-delay_selective/outputs/largest_5min_delay_audit/<DATASET>/distance_bin_summary.csv
-delay_selective/outputs/largest_5min_delay_audit/<DATASET>/best_lag_hist.png
-delay_selective/outputs/largest_5min_delay_audit/<DATASET>/delay_effect_ratios.png
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_audit/all_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_audit/all_distance_bin_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_audit/<DATASET>/edge_delay_scores.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_audit/<DATASET>/summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_audit/<DATASET>/distance_bin_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_audit/<DATASET>/best_lag_hist.png
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_audit/<DATASET>/delay_effect_ratios.png
 ```
 
 For the stricter delay-selective audit, use the multi-method script:
 
 ```bash
-bash delay_selective/run_largest_5min_delay_multimethod_audit.sh
+bash mvp_experiments/active/delay_selective/run_largest_5min_delay_multimethod_audit.sh
 ```
 
 This uses `corr >= 0.8` by default and compares:
@@ -231,29 +231,29 @@ lift_fft_abs            LIFT-style normalized-window FFT cross-correlation using
 It audits the first month and a one-week daily breakdown by default. Outputs:
 
 ```text
-delay_selective/outputs/largest_5min_delay_multimethod_audit/all_summary.csv
-delay_selective/outputs/largest_5min_delay_multimethod_audit/all_distance_bin_summary.csv
-delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/edge_delay_scores.csv
-delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/summary.csv
-delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/distance_bin_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_multimethod_audit/all_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_multimethod_audit/all_distance_bin_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/edge_delay_scores.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_delay_multimethod_audit/<DATASET>/distance_bin_summary.csv
 ```
 
 The shell wrapper also generates visual diagnostics:
 
 ```bash
-python delay_selective/plot_largest_5min_delay_multimethod_audit.py
+python mvp_experiments/active/delay_selective/plot_largest_5min_delay_multimethod_audit.py
 ```
 
 Default figures:
 
 ```text
-delay_selective/figures/largest_5min_delay_multimethod_audit/month_raw_best_delay_hist_log_count.pdf
-delay_selective/figures/largest_5min_delay_multimethod_audit/month_effective_delay_hist_log_count.pdf
-delay_selective/figures/largest_5min_delay_multimethod_audit/month_delay_acceptance_ratios.pdf
-delay_selective/figures/largest_5min_delay_multimethod_audit/week_daily_high_conf_nonzero_ratio.pdf
-delay_selective/figures/largest_5min_delay_multimethod_audit/month_distance_bin_high_conf_heatmap_mcc.pdf
-delay_selective/figures/largest_5min_delay_multimethod_audit/month_raw_best_delay_by_distance_bin_log_count.pdf
-delay_selective/figures/largest_5min_delay_multimethod_audit/month_effective_delay_by_distance_bin_log_count.pdf
+mvp_experiments/active/delay_selective/figures/largest_5min_delay_multimethod_audit/month_raw_best_delay_hist_log_count.pdf
+mvp_experiments/active/delay_selective/figures/largest_5min_delay_multimethod_audit/month_effective_delay_hist_log_count.pdf
+mvp_experiments/active/delay_selective/figures/largest_5min_delay_multimethod_audit/month_delay_acceptance_ratios.pdf
+mvp_experiments/active/delay_selective/figures/largest_5min_delay_multimethod_audit/week_daily_high_conf_nonzero_ratio.pdf
+mvp_experiments/active/delay_selective/figures/largest_5min_delay_multimethod_audit/month_distance_bin_high_conf_heatmap_mcc.pdf
+mvp_experiments/active/delay_selective/figures/largest_5min_delay_multimethod_audit/month_raw_best_delay_by_distance_bin_log_count.pdf
+mvp_experiments/active/delay_selective/figures/largest_5min_delay_multimethod_audit/month_effective_delay_by_distance_bin_log_count.pdf
 ```
 
 The delay histogram y-axis is log-count by default so the large zero-lag bar does not hide the non-zero delay tail. Edges whose best lag confidence is filtered by `corr < 0.8` are written as `NaN` in `effective_lag_*` and plotted as a separate `Filtered` bar instead of being merged into lag 0. If `corr >= 0.8`, the effective lag keeps the best-score lag even when the improvement over zero lag is below the strict high-confidence cutoff; those edges are separately marked by `low_improvement_nonzero_delay`. The distance-bin heatmaps use log-count colors for the same reason.
@@ -272,7 +272,7 @@ Run it on the server with:
 
 ```bash
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
-bash delay_selective/run_largest_5min_interpretable_group_delay.sh
+bash mvp_experiments/active/delay_selective/run_largest_5min_interpretable_group_delay.sh
 ```
 
 Defaults are intentionally conservative:
@@ -293,16 +293,16 @@ coarser directed group-to-group edges contain more observable non-zero delay.
 Main outputs:
 
 ```text
-delay_selective/outputs/largest_5min_interpretable_group_delay/all_group_delay_summary.csv
-delay_selective/outputs/largest_5min_interpretable_group_delay/all_group_delay_distance_bin_summary.csv
-delay_selective/outputs/largest_5min_interpretable_group_delay/all_group_delay_weekly_stability.csv
-delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_assignments.csv
-delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_summary.csv
-delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/inter_group_edges.csv
-delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_delay_edges.csv
-delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_delay_summary.csv
-delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_delay_weekly_stability.csv
-delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_signal_<WINDOW>_<LABEL>.npy
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/all_group_delay_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/all_group_delay_distance_bin_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/all_group_delay_weekly_stability.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_assignments.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/inter_group_edges.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_delay_edges.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_delay_summary.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_delay_weekly_stability.csv
+mvp_experiments/active/delay_selective/outputs/largest_5min_interpretable_group_delay/<DATASET>/group_signal_<WINDOW>_<LABEL>.npy
 ```
 
 The key comparison against the raw edge audit is:
@@ -323,24 +323,24 @@ Additional grouping baselines:
 ```bash
 # PatchSTG-style KDTree spatial patches.
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
-bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+bash mvp_experiments/active/delay_selective/run_largest_5min_interpretable_group_delay.sh \
   --grouping patchstg_kdtree \
   --target-group-size 32 \
-  --output-dir delay_selective/outputs/largest_5min_group_delay_patchstg_kdtree
+  --output-dir mvp_experiments/active/delay_selective/outputs/largest_5min_group_delay_patchstg_kdtree
 
 # Coordinate k-means spatial clusters.
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
-bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+bash mvp_experiments/active/delay_selective/run_largest_5min_interpretable_group_delay.sh \
   --grouping coordinate_kmeans \
   --target-group-size 32 \
-  --output-dir delay_selective/outputs/largest_5min_group_delay_coordinate_kmeans
+  --output-dir mvp_experiments/active/delay_selective/outputs/largest_5min_group_delay_coordinate_kmeans
 
 # Size-matched random negative control.
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
-bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+bash mvp_experiments/active/delay_selective/run_largest_5min_interpretable_group_delay.sh \
   --grouping random_size_matched \
   --target-group-size 32 \
-  --output-dir delay_selective/outputs/largest_5min_group_delay_random
+  --output-dir mvp_experiments/active/delay_selective/outputs/largest_5min_group_delay_random
 ```
 
 Additional group signal modes:
@@ -348,19 +348,19 @@ Additional group signal modes:
 ```bash
 # Preserve the top-k principal component time series inside each group.
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
-bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+bash mvp_experiments/active/delay_selective/run_largest_5min_interpretable_group_delay.sh \
   --grouping patchstg_kdtree \
   --group-signal-mode pca \
   --group-components 3 \
-  --output-dir delay_selective/outputs/largest_5min_group_delay_patchstg_pca
+  --output-dir mvp_experiments/active/delay_selective/outputs/largest_5min_group_delay_patchstg_pca
 
 # Brute-force sampled node-node delay across connected groups.
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
-bash delay_selective/run_largest_5min_interpretable_group_delay.sh \
+bash mvp_experiments/active/delay_selective/run_largest_5min_interpretable_group_delay.sh \
   --grouping patchstg_kdtree \
   --group-signal-mode node_pair \
   --max-node-pairs-per-group-edge 256 \
-  --output-dir delay_selective/outputs/largest_5min_group_delay_patchstg_node_pair
+  --output-dir mvp_experiments/active/delay_selective/outputs/largest_5min_group_delay_patchstg_node_pair
 ```
 
 `patchstg_kdtree` follows PatchSTG's spatial data-management idea: recursively

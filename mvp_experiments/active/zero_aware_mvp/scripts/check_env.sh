@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ACTIVE_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+export PYTHONPATH="${ACTIVE_ROOT}:${PYTHONPATH:-}"
 PYTHON_BIN="${PYTHON_BIN:-$REPO_ROOT/.conda/causalrivers-macos/bin/python}"
 BASICTS_PYTHON="${BASICTS_PYTHON:-python}"
 
@@ -25,4 +28,3 @@ for module in ["torch", "easydict", "easytorch"]:
     except Exception as exc:
         print(f"{module}: MISSING ({exc})")
 PY
-

@@ -30,6 +30,7 @@ METHOD_COLORS = {
 }
 FILTERED_LAG_SENTINEL = -5
 FILTERED_LAG_LABEL = "Filtered"
+EXPERIMENT_DIR = Path(__file__).resolve().parent
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,12 +39,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--audit-dir",
-        default="delay_selective/outputs/largest_5min_delay_multimethod_audit",
+        default=str(EXPERIMENT_DIR / "outputs" / "largest_5min_delay_multimethod_audit"),
         help="Directory containing all_summary.csv and per-dataset edge_delay_scores.csv files.",
     )
     parser.add_argument(
         "--output-dir",
-        default="delay_selective/figures/largest_5min_delay_multimethod_audit",
+        default=str(EXPERIMENT_DIR / "figures" / "largest_5min_delay_multimethod_audit"),
     )
     parser.add_argument("--formats", default="pdf,png", help="Comma-separated output formats.")
     parser.add_argument("--count-y-scale", default="log", choices=["log", "linear"])

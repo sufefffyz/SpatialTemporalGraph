@@ -13,8 +13,6 @@ to keep new research ideas organized without breaking older scripts.
 | `benchmark/` | Shared graph baselines, data prep, and evaluation scripts. | Track reusable benchmark code and small docs. |
 | `scripts/` | Repo-level automation such as remote run and note sync helpers. | Track scripts and example env files; keep real secrets ignored. |
 | `mvp_experiments/` | Stable home for idea-specific MVP experiments. | Track plans, configs, scripts, prototype code, and small summaries. Ignore raw outputs. |
-| `delay_selective/` | Compatibility alias for `mvp_experiments/active/delay_selective/`. | Keep as a symlink so old commands still work. |
-| `zero_aware_mvp/` | Compatibility alias for `mvp_experiments/active/zero_aware_mvp/`. | Keep as a symlink so old commands still work. |
 | `LargeST/`, `PatchSTG/`, `BiST/`, `urban-traffic-benchmark/`, `causalrivers/` | Vendored or upstream project code used for experiments and comparison. | Track source/docs needed for reproducibility; avoid generated data and outputs. |
 | `data/`, `datasets/`, `product/`, `test-output/` | Local data, generated products, and bulky run artifacts. | Ignored by default. |
 
@@ -69,13 +67,12 @@ The MVP folder should remain as the experiment record after promotion.
 ## Legacy Policy
 
 Older MVP folders have been moved into `mvp_experiments/active/`. The old
-top-level paths remain as symlinks for command compatibility:
+top-level compatibility symlinks have been removed, so use the canonical paths:
 
 ```text
-delay_selective -> mvp_experiments/active/delay_selective
-zero_aware_mvp -> mvp_experiments/active/zero_aware_mvp
+mvp_experiments/active/delay_selective/
+mvp_experiments/active/zero_aware_mvp/
 ```
 
-When updating old scripts, prefer the canonical `mvp_experiments/active/...`
-path, but do not remove the compatibility aliases until all historical run
-commands have been refreshed.
+When updating old scripts or reproducing historical runs, refresh command paths
+to the canonical `mvp_experiments/active/...` location.

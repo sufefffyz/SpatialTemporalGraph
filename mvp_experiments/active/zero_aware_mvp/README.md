@@ -51,14 +51,14 @@ export PYTHON_BIN=/Users/richardo/Desktop/STproject/SpatialTemporalGraph/.conda/
 Prepare BasicTS datasets from the full dataset:
 
 ```bash
-bash zero_aware_mvp/scripts/prepare_mvp_datasets.sh
+bash mvp_experiments/active/zero_aware_mvp/scripts/prepare_mvp_datasets.sh
 ```
 
 If the full dataset is mounted elsewhere:
 
 ```bash
 INPUT_NPZ=/absolute/path/to/city_traffic_m_volume.npz \
-bash zero_aware_mvp/scripts/prepare_mvp_datasets.sh
+bash mvp_experiments/active/zero_aware_mvp/scripts/prepare_mvp_datasets.sh
 ```
 
 For the full city-M graph, keep the default `ADJ_MODE=none`. A dense adjacency
@@ -69,14 +69,14 @@ write datasets under `/data` and point the evaluators there:
 ```bash
 OUTPUT_ROOT=/data/yuzhang_fei/zero_aware_mvp_datasets \
 BASICTS_DATASETS_ROOT=/data/yuzhang_fei/zero_aware_mvp_datasets \
-bash zero_aware_mvp/scripts/prepare_mvp_datasets.sh
+bash mvp_experiments/active/zero_aware_mvp/scripts/prepare_mvp_datasets.sh
 ```
 
 Run the cheapest must-pass checks:
 
 ```bash
-bash zero_aware_mvp/scripts/run_00_diagnostics.sh
-bash zero_aware_mvp/scripts/run_01_naive_baselines.sh
+bash mvp_experiments/active/zero_aware_mvp/scripts/run_00_diagnostics.sh
+bash mvp_experiments/active/zero_aware_mvp/scripts/run_01_naive_baselines.sh
 ```
 
 Run short BasicTS smoke experiments once a BasicTS environment with `torch`,
@@ -85,13 +85,13 @@ Run short BasicTS smoke experiments once a BasicTS environment with `torch`,
 ```bash
 export BASICTS_PYTHON=python
 export ZA_NUM_EPOCHS=3
-bash zero_aware_mvp/scripts/run_02_basicts_smoke.sh
+bash mvp_experiments/active/zero_aware_mvp/scripts/run_02_basicts_smoke.sh
 ```
 
 Evaluate saved BasicTS predictions:
 
 ```bash
-bash zero_aware_mvp/scripts/run_03_posthoc_eval.sh checkpoints/zero_aware_mvp/GWNet/TRAFFIC_VOLUME_FULL_5MIN_3_12_12_seed42
+bash mvp_experiments/active/zero_aware_mvp/scripts/run_03_posthoc_eval.sh checkpoints/zero_aware_mvp/GWNet/TRAFFIC_VOLUME_FULL_5MIN_3_12_12_seed42
 ```
 
 If the exact checkpoint folder has an EasyTorch hash suffix, pass that concrete
@@ -99,10 +99,10 @@ directory instead.
 
 ## Main Outputs
 
-- `zero_aware_mvp/results/diagnostics/zero_diagnostics_*.json`
-- `zero_aware_mvp/results/naive_baselines/naive_metrics_*.json`
-- `zero_aware_mvp/results/posthoc/basicts_zero_metrics_*.json`
-- `zero_aware_mvp/results/summary/mvp_ranking.csv`
+- `mvp_experiments/active/zero_aware_mvp/results/diagnostics/zero_diagnostics_*.json`
+- `mvp_experiments/active/zero_aware_mvp/results/naive_baselines/naive_metrics_*.json`
+- `mvp_experiments/active/zero_aware_mvp/results/posthoc/basicts_zero_metrics_*.json`
+- `mvp_experiments/active/zero_aware_mvp/results/summary/mvp_ranking.csv`
 
 Full-dataset BasicTS bundles are named:
 

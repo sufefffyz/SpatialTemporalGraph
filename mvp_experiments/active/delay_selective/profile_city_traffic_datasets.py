@@ -60,6 +60,8 @@ PAPER_DATASETS = {
     "city_traffic_l": PAPER_CITY_TRAFFIC_L,
 }
 
+EXPERIMENT_DIR = Path(__file__).resolve().parent
+
 DEFAULT_DATASETS = [
     ("speed_category_1_0", "data/city_traffic_m_speed__category__1_0.npz"),
     ("volume_category_1_0", "data/city_traffic_m_volume__category__1_0.npz"),
@@ -68,7 +70,7 @@ DEFAULT_DATASETS = [
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Profile city-traffic speed/volume datasets.")
-    parser.add_argument("--output-dir", default="delay_selective/outputs/dataset_profile")
+    parser.add_argument("--output-dir", default=str(EXPERIMENT_DIR / "outputs" / "dataset_profile"))
     parser.add_argument(
         "--dataset",
         action="append",

@@ -34,23 +34,23 @@ notes/                 related work, decisions, scratch notes
 | Idea | Location | Status | Notes |
 |---|---|---|---|
 | Adaptive threshold + dynamic edge weights | `mvp_experiments/active/adaptive_threshold_dynamic_weight/` | active | Current MVP for budgeted physical sparse STGNN support and dynamic edge weights. |
-| Delay-selective propagation | `mvp_experiments/active/delay_selective/` | active | Old path `delay_selective/` is a compatibility symlink. |
-| Zero-aware traffic forecasting | `mvp_experiments/active/zero_aware_mvp/` | active | Old path `zero_aware_mvp/` is a compatibility symlink. |
+| Delay-selective propagation | `mvp_experiments/active/delay_selective/` | active | Migrated from the former top-level `delay_selective/` entry. |
+| Zero-aware traffic forecasting | `mvp_experiments/active/zero_aware_mvp/` | active | Migrated from the former top-level `zero_aware_mvp/` entry. |
 
 The machine-readable registry is `mvp_experiments/registry.yml`.
 
-## Compatibility Aliases
+## Canonical Paths
 
-Some older scripts and notes still refer to the historical top-level paths:
+Use the canonical MVP locations for new commands and notes:
 
 ```text
-delay_selective/
-zero_aware_mvp/
+mvp_experiments/active/delay_selective/
+mvp_experiments/active/zero_aware_mvp/
 ```
 
-Those paths are kept as symlinks to the canonical `mvp_experiments/active/...`
-folders. New scripts should use the canonical paths, while old commands should
-continue to work through the aliases.
+The former top-level aliases have been removed to keep the project root focused.
+When reproducing an old command, replace the historical top-level path with the
+matching `mvp_experiments/active/...` path.
 
 ## When Adding a New MVP
 

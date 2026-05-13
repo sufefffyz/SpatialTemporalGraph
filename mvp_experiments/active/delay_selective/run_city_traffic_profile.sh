@@ -2,7 +2,8 @@
 set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-OUTPUT_DIR="${OUTPUT_DIR:-delay_selective/outputs/dataset_profile}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/outputs/dataset_profile}"
 TARGET_MAX_LOAD_GB="${TARGET_MAX_LOAD_GB:-64}"
 
 DATA_ROOTS=()
@@ -86,7 +87,7 @@ done
 printf 'Profiling datasets:\n'
 printf '  %s\n' "${SPECS[@]}"
 
-"${PYTHON_BIN}" delay_selective/profile_city_traffic_datasets.py \
+"${PYTHON_BIN}" "${SCRIPT_DIR}/profile_city_traffic_datasets.py" \
   --output-dir "${OUTPUT_DIR}" \
   --sample-time-steps "${SAMPLE_TIME_STEPS:-8000}" \
   --sample-nodes "${SAMPLE_NODES:-1500}" \

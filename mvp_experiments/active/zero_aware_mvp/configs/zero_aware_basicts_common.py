@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 BASICTS_ROOT = REPO_ROOT / "BasicTS"
 if str(BASICTS_ROOT) not in sys.path:
     sys.path.append(str(BASICTS_ROOT))

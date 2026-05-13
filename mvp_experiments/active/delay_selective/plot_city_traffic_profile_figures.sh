@@ -2,11 +2,12 @@
 set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
-PROFILE_DIR="${PROFILE_DIR:-delay_selective/outputs/dataset_profile}"
-OUTPUT_DIR="${OUTPUT_DIR:-delay_selective/figures/dataset_profile}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROFILE_DIR="${PROFILE_DIR:-${SCRIPT_DIR}/outputs/dataset_profile}"
+OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/figures/dataset_profile}"
 FORMATS="${FORMATS:-pdf,png}"
 
-"${PYTHON_BIN}" delay_selective/plot_city_traffic_profile_figures.py \
+"${PYTHON_BIN}" "${SCRIPT_DIR}/plot_city_traffic_profile_figures.py" \
   --profile-dir "${PROFILE_DIR}" \
   --output-dir "${OUTPUT_DIR}" \
   --formats "${FORMATS}" \

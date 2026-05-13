@@ -29,12 +29,14 @@ DEFAULT_DATASET_CANDIDATES = {
     ],
 }
 
+EXPERIMENT_DIR = Path(__file__).resolve().parent
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compute lagged-correlation delay effects on SD/GLA/GBA 5-minute datasets."
     )
-    parser.add_argument("--output-dir", default="delay_selective/outputs/largest_5min_delay_audit")
+    parser.add_argument("--output-dir", default=str(EXPERIMENT_DIR / "outputs" / "largest_5min_delay_audit"))
     parser.add_argument(
         "--dataset",
         action="append",

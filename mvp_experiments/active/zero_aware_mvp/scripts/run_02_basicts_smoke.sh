@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ACTIVE_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+EXPERIMENT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+export PYTHONPATH="${ACTIVE_ROOT}:${PYTHONPATH:-}"
 BASICTS_PYTHON="${BASICTS_PYTHON:-python}"
 ZA_MODEL="${ZA_MODEL:-GWNET}"
 ZA_NUM_EPOCHS="${ZA_NUM_EPOCHS:-3}"
@@ -10,10 +14,10 @@ ZA_GPUS="${ZA_GPUS:-0}"
 
 case "$ZA_MODEL" in
   AGCRN)
-    CFG="../zero_aware_mvp/configs/AGCRN_TRAFFIC_VOLUME_ZERO_MVP.py"
+    CFG="${EXPERIMENT_DIR}/configs/AGCRN_TRAFFIC_VOLUME_ZERO_MVP.py"
     ;;
   GWNET|GWNet|gwnet)
-    CFG="../zero_aware_mvp/configs/GWNET_TRAFFIC_VOLUME_ZERO_MVP.py"
+    CFG="${EXPERIMENT_DIR}/configs/GWNET_TRAFFIC_VOLUME_ZERO_MVP.py"
     ;;
   *)
     echo "Unsupported ZA_MODEL=$ZA_MODEL. Use AGCRN or GWNET." >&2

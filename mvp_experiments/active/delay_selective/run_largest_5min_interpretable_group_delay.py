@@ -73,9 +73,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build interpretable topology groups and audit inter-group delay on LargeST 5min data."
     )
+    experiment_dir = Path(__file__).resolve().parent
     parser.add_argument(
         "--output-dir",
-        default="delay_selective/outputs/largest_5min_interpretable_group_delay",
+        default=str(experiment_dir / "outputs" / "largest_5min_interpretable_group_delay"),
     )
     parser.add_argument(
         "--dataset",
