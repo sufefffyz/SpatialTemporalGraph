@@ -14,7 +14,7 @@ tables, because they cannot support the distance/physical-threshold motivation.
 
 | Claim | Minimum evidence |
 |---|---|
-| Sparse physical support is enough | LargeST-SD avg degree 4-8 is within about 1% MAE of the original graph. |
+| Sparse physical support is enough | Gaussian OSRM global-threshold graphs can match the LargeST-SD original average degree and then trace a controlled degree/accuracy curve around it. |
 | Adaptive support beats fixed sparsity | Learned threshold beats fixed global threshold and fixed top-k at equal edge budget. |
 | Dynamic edge weights help | On the same fixed support, dynamic weights beat fixed/static learned weights. |
 | Efficiency is real | Sparse edge-index/CSR implementation is faster or lower-memory on LargeST-CA/GBA/GLA. |
@@ -32,12 +32,37 @@ Compare under the same GraphWaveNet backbone:
 
 - identity graph
 - original graph
-- global distance threshold at avg degree `{2, 4, 8, 12, 24}`
-- per-node top-k at `k in {2, 4, 8, 12, 24}`
+- OSRM Gaussian global threshold with target average degree ratios relative to
+  the LargeST-SD original graph: `{0.25, 0.5, 1.0, 1.5, 2.0}`
+- per-node top-k at matched edge budgets from the same target degrees
 - adaptive-only GraphWaveNet reference
 
 Metrics: MAE, RMSE, MAPE, WAPE, edge count, avg degree, train time, inference
 throughput, GPU memory.
+
+The LargeST-SD reference graph has 716 nodes and 17,319 off-diagonal directed
+edges, so its reference average out-degree is:
+
+```text
+k_L = 17319 / 716 = 24.1885
+```
+
+For a target ratio beta, set:
+
+```text
+k_beta = beta * k_L
+E_beta = round(N * k_beta)
+```
+
+Build scores from the OSRM distance matrix:
+
+```text
+S_ij = exp(-(d_ij^osrm / sigma)^2)
+```
+
+Then choose the global score quantile whose top `E_beta` off-diagonal entries
+are retained. This avoids hand-picking kilometer thresholds while preserving a
+clear comparison against the LargeST original sparsity.
 
 ### B2: Dynamic Weights on Fixed Support
 
@@ -80,4 +105,3 @@ reliable, mark the dataset as excluded rather than forcing it into the table.
 5. `R007/R008`: static vs dynamic weights on the best fixed support.
 6. `R009/R010`: adaptive threshold and full two-stage operator.
 7. `R011`: sparse runtime proof on LargeST-CA/GBA/GLA.
-

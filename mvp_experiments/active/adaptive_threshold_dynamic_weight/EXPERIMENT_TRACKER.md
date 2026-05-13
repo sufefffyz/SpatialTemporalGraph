@@ -5,8 +5,8 @@
 | R001 | M0 | LargeST graph diagnostics | original / global threshold / top-k | SD/GBA/GLA/CA | coordinate coverage, degree, density, isolated rows, row sums, K-hop coverage | MUST | IN_PROGRESS | Data availability check: `notes/data_availability_2026-05-11.md`; full diagnostics still pending. |
 | R002 | M0 | PEMS coordinate validation | PEMS-BAY and PEMS03/04/07/08 if mappable | PEMS | coordinate coverage, matched-node rate | MUST | TODO | Exclude unreliable mappings. |
 | R003 | M0 | One-batch smoke | GraphWaveNet original graph | LargeST-SD | forward/backward, finite loss | MUST | TODO | Baseline sanity. |
-| R004 | M1 | Fixed sparse Pareto | global threshold degree 2/4/8/12/24 | LargeST-SD | MAE/RMSE/MAPE/WAPE, time, memory | MUST | TODO | Single seed first. |
-| R005 | M1 | Fixed sparse Pareto | per-node top-k 2/4/8/12/24 | LargeST-SD | MAE/RMSE/MAPE/WAPE, time, memory | MUST | TODO | Compare with global threshold. |
+| R004 | M1 | Fixed sparse Pareto | OSRM Gaussian global threshold beta 0.25/0.5/1.0/1.5/2.0 of LargeST-SD original degree | LargeST-SD | MAE/RMSE/MAPE/WAPE, time, memory | MUST | IN_PROGRESS | Launched GWNet and DCRNN sweeps on 2026-05-13. Threshold is chosen by score quantile; beta 1.0 targets avg degree 24.1885. |
+| R005 | M1 | Fixed sparse Pareto | OSRM top-k at matched average degrees | LargeST-SD | MAE/RMSE/MAPE/WAPE, time, memory | MUST | TODO | Compare with global Gaussian threshold at equal edge budget. |
 | R006 | M1 | Accuracy reference | original graph / adaptive-only | LargeST-SD | MAE/RMSE/MAPE/WAPE | MUST | TODO | Fair reference. |
 | R007 | M2 | Static learned weights | MaskedGraphWaveNet on best fixed support | LargeST-SD | MAE/RMSE/WAPE, time, memory | MUST | TODO | Dense attention caveat. |
 | R008 | M2 | Dynamic weights | dynamic sparse-edge weights on same support | LargeST-SD | MAE/RMSE/WAPE, peak/high-volatility MAE | MUST | TODO | Isolate edge-weight claim. |
