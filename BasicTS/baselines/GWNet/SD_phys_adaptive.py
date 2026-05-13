@@ -43,7 +43,7 @@ MODEL_PARAM = {
     "blocks": 4,
     "layers": 2,
 }
-NUM_EPOCHS = 30
+NUM_EPOCHS = 100
 
 CFG = EasyDict()
 CFG.DESCRIPTION = "GraphWaveNet on SD_phys with adaptive graph only"
@@ -124,7 +124,7 @@ CFG.TRAIN.DATA = EasyDict()
 CFG.TRAIN.DATA.BATCH_SIZE = 64
 CFG.TRAIN.DATA.SHUFFLE = True
 CFG.TRAIN.CLIP_GRAD_PARAM = {"max_norm": 5.0}
-CFG.TRAIN.EARLY_STOPPING_PATIENCE = 15
+CFG.TRAIN.EARLY_STOPPING_PATIENCE = 50
 
 CFG.VAL = EasyDict()
 CFG.VAL.INTERVAL = 1

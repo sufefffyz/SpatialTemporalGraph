@@ -30,7 +30,7 @@ def parse_args():
     parser.add_argument(
         "--high",
         type=int,
-        default=999999,
+        default=10000,
         help="Inclusive upper bound of the random seed range.",
     )
     parser.add_argument(

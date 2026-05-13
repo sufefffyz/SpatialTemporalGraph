@@ -121,7 +121,7 @@ def _common_cfg(model_arch, runner_cls, model_param: dict, split_filename: str, 
     )
     cfg.TRAIN.LOSS = loss_fn
     cfg.TRAIN.DATA = EasyDict({"BATCH_SIZE": 64, "SHUFFLE": True})
-    cfg.TRAIN.EARLY_STOPPING_PATIENCE = 15
+    cfg.TRAIN.EARLY_STOPPING_PATIENCE = 50
 
     cfg.VAL = EasyDict({"INTERVAL": 1, "DATA": EasyDict({"BATCH_SIZE": 64})})
     cfg.TEST = EasyDict({"INTERVAL": 10, "DATA": EasyDict({"BATCH_SIZE": 64})})
@@ -206,5 +206,5 @@ def build_dcrnn_cfg() -> EasyDict:
     cfg.MODEL.SETUP_GRAPH = True
     cfg.TRAIN.OPTIM = EasyDict({"TYPE": "Adam", "PARAM": {"lr": 0.003, "eps": 1e-3}})
     cfg.TRAIN.LR_SCHEDULER = EasyDict({"TYPE": "MultiStepLR", "PARAM": {"milestones": [80], "gamma": 0.3}})
-    cfg.TEST.INTERVAL = 1
+    cfg.TEST.INTERVAL = 10
     return cfg

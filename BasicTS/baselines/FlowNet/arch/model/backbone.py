@@ -4,6 +4,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from ..blocks.hyper_flow import FlowBlock
+from ..blocks.nlinear import MoNLinear
 from ..layers.patch import FeatPatchEmbedding
 
 
@@ -33,6 +34,7 @@ class FlowNet(nn.Module):
         self.num_patches = (config.seq_len - config.patch_len) // config.stride + 1
         # self.seq_embed = ConvEmbedding(1, config.d_model, config.moving_avg, 1, int(config.moving_avg // 2))
         # num_patches = config.seq_len
+        self.seq_est = MoNLinear(config.seq_len, config.pred_len, config.n_expert)
         self.feat_est = FlowBlock(
             self.num_patches,
             config.pred_len,
@@ -55,7 +57,9 @@ class FlowNet(nn.Module):
 
     def initialize(self):
         nn.init.zeros_(self.dist_est.weight)
-        nn.init.constant_(self.dist_est.bias, float(self.dist_mtx.mean().item()))
+        # Match the official implementation's effective behavior: the
+        # multiplication by distance mean is not assigned, so bias stays at 1.0.
+        nn.init.ones_(self.dist_est.bias)
 
     def forward(
         self,

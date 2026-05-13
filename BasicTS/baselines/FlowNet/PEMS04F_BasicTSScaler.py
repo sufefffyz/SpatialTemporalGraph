@@ -3,23 +3,21 @@ import os
 import sys
 from pathlib import Path
 
-import torch
+import numpy as np
 from easydict import EasyDict
 
 sys.path.append(os.path.abspath(__file__ + "/../../.."))
 
-from basicts.data import TimeSeriesForecastingDataset
-from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
-from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
-from basicts.utils.adjacent_matrix_norm import calculate_transition_matrix
-from basicts.utils.serialization import load_pkl
 
-from .arch import GraphWaveNet
+from .arch import BasicTSFlowNet
+from .dataset import FlowNetOfficialDataset
+from .metrics import plain_mae, plain_mse, plain_rmse
+from .runner import FlowNetOfficialWandBRunner
 
-DATA_NAME = "SD_phys"
+
+DATA_NAME = "PEMS04F"
 DESC_PATH = Path("datasets") / DATA_NAME / "desc.json"
-ADJ_PATH = Path("datasets") / DATA_NAME / "adj_mx.pkl"
 DESC = json.loads(DESC_PATH.read_text(encoding="utf-8"))
 REGULAR_SETTINGS = DESC["regular_settings"]
 INPUT_LEN = REGULAR_SETTINGS["INPUT_LEN"]
@@ -27,48 +25,38 @@ OUTPUT_LEN = REGULAR_SETTINGS["OUTPUT_LEN"]
 TRAIN_VAL_TEST_RATIO = REGULAR_SETTINGS["TRAIN_VAL_TEST_RATIO"]
 NORM_EACH_CHANNEL = REGULAR_SETTINGS["NORM_EACH_CHANNEL"]
 RESCALE = REGULAR_SETTINGS["RESCALE"]
-NULL_VAL = REGULAR_SETTINGS["NULL_VAL"]
+NULL_VAL = np.nan
 
-raw_adj = load_pkl(str(ADJ_PATH))
-if isinstance(raw_adj, (list, tuple)):
-    if len(raw_adj) == 3:
-        raw_adj = raw_adj[2]
-    elif len(raw_adj) == 1:
-        raw_adj = raw_adj[0]
-
-support_forward = calculate_transition_matrix(raw_adj).T
-support_backward = calculate_transition_matrix(raw_adj.T).T
-
-MODEL_ARCH = GraphWaveNet
+MODEL_ARCH = BasicTSFlowNet
+DIST_MTX_PATH = os.environ.get("FLOWNET_DIST_MTX", str(Path("datasets") / DATA_NAME / "dist_mtx_norm.npy"))
 MODEL_PARAM = {
     "num_nodes": int(DESC["num_nodes"]),
-    "supports": [
-        torch.tensor(support_forward, dtype=torch.float32),
-        torch.tensor(support_backward, dtype=torch.float32),
-    ],
-    "dropout": 0.3,
-    "gcn_bool": True,
-    "addaptadj": True,
-    "aptinit": None,
-    "in_dim": 2,
-    "out_dim": OUTPUT_LEN,
-    "residual_channels": 32,
-    "dilation_channels": 32,
-    "skip_channels": 256,
-    "end_channels": 512,
-    "kernel_size": 2,
-    "blocks": 4,
-    "layers": 2,
+    "seq_len": INPUT_LEN,
+    "pred_len": OUTPUT_LEN,
+    "patch_len": 4,
+    "stride": 2,
+    "moving_avg": 3,
+    "nhead": 4,
+    "ffn_dim": 128,
+    "d_model": 64,
+    "n_expert": 16,
+    "n_layer": 2,
+    "dropout": 0.1,
+    "rate": 4,
+    "freq": "5min",
+    "dist_mtx_path": DIST_MTX_PATH,
+    "dist_norm": "none",
 }
 NUM_EPOCHS = 100
+RUN_TAG = os.environ.get("BASICTS_RUN_TAG", "").strip()
 
 CFG = EasyDict()
-CFG.DESCRIPTION = "GraphWaveNet on SD_phys with physical graph plus adaptive adjacency"
+CFG.DESCRIPTION = "FlowNet PEMS04F reproduction in BasicTS with train-split ZScoreScaler"
 CFG.GPU_NUM = 1
-CFG.RUNNER = WandBTimeSeriesForecastingRunner
+CFG.RUNNER = FlowNetOfficialWandBRunner
 
 CFG.ENV = EasyDict()
-CFG.ENV.SEED = 42
+CFG.ENV.SEED = int(os.environ.get("BASICTS_SEED", "2023"))
 CFG.ENV.DETERMINISTIC = True
 CFG.ENV.CUDNN = EasyDict()
 CFG.ENV.CUDNN.ENABLED = True
@@ -77,7 +65,7 @@ CFG.ENV.CUDNN.DETERMINISTIC = True
 
 CFG.DATASET = EasyDict()
 CFG.DATASET.NAME = DATA_NAME
-CFG.DATASET.TYPE = TimeSeriesForecastingDataset
+CFG.DATASET.TYPE = FlowNetOfficialDataset
 CFG.DATASET.PARAM = EasyDict(
     {
         "dataset_name": DATA_NAME,
@@ -102,16 +90,15 @@ CFG.MODEL = EasyDict()
 CFG.MODEL.NAME = MODEL_ARCH.__name__
 CFG.MODEL.ARCH = MODEL_ARCH
 CFG.MODEL.PARAM = MODEL_PARAM
-CFG.MODEL.FORWARD_FEATURES = [0, 1]
+CFG.MODEL.FORWARD_FEATURES = [0]
 CFG.MODEL.TARGET_FEATURES = [0]
 
 CFG.METRICS = EasyDict()
 CFG.METRICS.FUNCS = EasyDict(
     {
-        "MAE": masked_mae,
-        "MAPE": masked_mape,
-        "RMSE": masked_rmse,
-        "WAPE": masked_wape,
+        "MAE": plain_mae,
+        "RMSE": plain_rmse,
+        "MSE": plain_mse,
     }
 )
 CFG.METRICS.TARGET = "MAE"
@@ -119,39 +106,41 @@ CFG.METRICS.NULL_VAL = NULL_VAL
 
 CFG.TRAIN = EasyDict()
 CFG.TRAIN.NUM_EPOCHS = NUM_EPOCHS
-CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
-    "checkpoints",
-    MODEL_ARCH.__name__,
-    "_".join([DATA_NAME, "phys_adaptive", str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)]),
-)
-CFG.TRAIN.LOSS = masked_mae
+CKPT_NAME_PARTS = [DATA_NAME, "basicts_scaler", str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)]
+if RUN_TAG:
+    CKPT_NAME_PARTS.append(RUN_TAG)
+CFG.TRAIN.CKPT_SAVE_DIR = os.path.join("checkpoints", "FlowNet", "_".join(CKPT_NAME_PARTS))
+CFG.TRAIN.LOSS = plain_mae
 CFG.TRAIN.OPTIM = EasyDict()
-CFG.TRAIN.OPTIM.TYPE = "Adam"
+CFG.TRAIN.OPTIM.TYPE = "AdamW"
 CFG.TRAIN.OPTIM.PARAM = {
-    "lr": 0.002,
+    "lr": 0.001,
     "weight_decay": 0.0001,
 }
 CFG.TRAIN.LR_SCHEDULER = EasyDict()
 CFG.TRAIN.LR_SCHEDULER.TYPE = "MultiStepLR"
 CFG.TRAIN.LR_SCHEDULER.PARAM = {
-    "milestones": [1, 50],
+    "milestones": [10, 20, 30, 40],
     "gamma": 0.5,
 }
-CFG.TRAIN.DATA = EasyDict()
-CFG.TRAIN.DATA.BATCH_SIZE = 64
-CFG.TRAIN.DATA.SHUFFLE = True
 CFG.TRAIN.CLIP_GRAD_PARAM = {"max_norm": 5.0}
-CFG.TRAIN.EARLY_STOPPING_PATIENCE = 50
+CFG.TRAIN.EARLY_STOPPING_WARMUP = 20
+CFG.TRAIN.EARLY_STOPPING_PATIENCE = 10
+CFG.TRAIN.DATA = EasyDict()
+CFG.TRAIN.DATA.BATCH_SIZE = 8
+CFG.TRAIN.DATA.SHUFFLE = True
 
 CFG.VAL = EasyDict()
 CFG.VAL.INTERVAL = 1
 CFG.VAL.DATA = EasyDict()
-CFG.VAL.DATA.BATCH_SIZE = 64
+CFG.VAL.DATA.BATCH_SIZE = 8
+CFG.VAL.DATA.SHUFFLE = False
 
 CFG.TEST = EasyDict()
-CFG.TEST.INTERVAL = 10
+CFG.TEST.INTERVAL = NUM_EPOCHS
 CFG.TEST.DATA = EasyDict()
-CFG.TEST.DATA.BATCH_SIZE = 64
+CFG.TEST.DATA.BATCH_SIZE = 8
+CFG.TEST.DATA.SHUFFLE = False
 
 CFG.EVAL = EasyDict()
 CFG.EVAL.HORIZONS = [3, 6, 12]
