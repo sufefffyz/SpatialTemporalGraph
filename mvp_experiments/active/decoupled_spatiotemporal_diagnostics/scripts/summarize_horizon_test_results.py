@@ -216,7 +216,9 @@ def basicts_mae(pred: np.ndarray, target: np.ndarray, null_val: float) -> float:
 def basicts_mape(pred: np.ndarray, target: np.ndarray, null_val: float) -> float:
     mask = base_valid_mask(target, null_val) & ~np.isclose(target, 0.0, atol=EPS, rtol=0.0)
     mask = normalized_mask(mask)
-    loss = np.abs((pred - target) / target) * mask
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.divide(pred - target, target, out=np.zeros_like(pred, dtype=np.float32), where=np.abs(target) > EPS)
+    loss = np.abs(ratio) * mask
     return float(np.mean(np.nan_to_num(loss, posinf=0.0, neginf=0.0)))
 
 
