@@ -3,7 +3,7 @@
 # as migration notes and should not be recreated at the repository root.
 
 schema_version: 1
-updated: 2026-05-13
+updated: 2026-05-15
 
 experiments:
   - slug: adaptive_threshold_dynamic_weight
@@ -43,6 +43,15 @@ experiments:
       - TRAFFIC_VOLUME_FULL
     main_claim: Standard masked MAE hides structured zeros in fine-grained traffic forecasting.
     notes: Migrated into mvp_experiments/active; old top-level compatibility symlink has been removed.
+
+  - slug: decoupled_spatiotemporal_diagnostics
+    title: Decoupled Spatiotemporal Diagnostics
+    status: active
+    location: mvp_experiments/active/decoupled_spatiotemporal_diagnostics
+    datasets:
+      - SD_5min_full
+    main_claim: Aggregate traffic forecasting metrics hide whether baselines fit low-frequency trends, high-frequency perturbations, spatial residual structure, or distribution tails.
+    notes: Post-hoc diagnostics over existing BasicTS saved test predictions; no retraining required.
 
 statuses:
   active: Current MVP with planned runs.

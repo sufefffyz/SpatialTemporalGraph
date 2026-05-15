@@ -36,6 +36,7 @@ notes/                 related work, decisions, scratch notes
 | Adaptive threshold + dynamic edge weights | `mvp_experiments/active/adaptive_threshold_dynamic_weight/` | active | Current MVP for budgeted physical sparse STGNN support and dynamic edge weights. |
 | Delay-selective propagation | `mvp_experiments/active/delay_selective/` | active | Migrated from the former top-level `delay_selective/` entry. |
 | Zero-aware traffic forecasting | `mvp_experiments/active/zero_aware_mvp/` | active | Migrated from the former top-level `zero_aware_mvp/` entry. |
+| Decoupled spatiotemporal diagnostics | `mvp_experiments/active/decoupled_spatiotemporal_diagnostics/` | active | Post-hoc low/high-frequency, peak-window, distribution, and optional spatial residual diagnostics for saved SD predictions. |
 
 The machine-readable registry is `mvp_experiments/registry.yml`.
 
@@ -46,6 +47,7 @@ Use the canonical MVP locations for new commands and notes:
 ```text
 mvp_experiments/active/delay_selective/
 mvp_experiments/active/zero_aware_mvp/
+mvp_experiments/active/decoupled_spatiotemporal_diagnostics/
 ```
 
 The former top-level aliases have been removed to keep the project root focused.
