@@ -118,6 +118,14 @@ def normalize_result_dir(path: Path) -> Path:
     return path / "test_results"
 
 
+def default_run_name(result_dir: Path) -> str:
+    run_dir = result_dir.parent
+    variant_dir = run_dir.parent
+    if len(run_dir.name) >= 8 and all(ch in "0123456789abcdef" for ch in run_dir.name.lower()):
+        return f"{variant_dir.name}__{run_dir.name[:8]}"
+    return run_dir.name
+
+
 def discover_runs(args: argparse.Namespace) -> list[RunSpec]:
     runs: list[RunSpec] = []
     seen: set[Path] = set()
@@ -128,7 +136,7 @@ def discover_runs(args: argparse.Namespace) -> list[RunSpec]:
         if result_dir in seen:
             continue
         seen.add(result_dir)
-        runs.append(RunSpec(name=name or result_dir.parent.name, result_dir=result_dir))
+        runs.append(RunSpec(name=name or default_run_name(result_dir), result_dir=result_dir))
 
     for root in args.search_root:
         root = root.expanduser()
@@ -147,10 +155,7 @@ def discover_runs(args: argparse.Namespace) -> list[RunSpec]:
             if result_dir in seen:
                 continue
             seen.add(result_dir)
-            name = result_dir.parent.name
-            if name in {"test_results", ""}:
-                name = result_dir.parent.parent.name
-            runs.append(RunSpec(name=name, result_dir=result_dir))
+            runs.append(RunSpec(name=default_run_name(result_dir), result_dir=result_dir))
 
     runs.sort(key=lambda run: str(run.result_dir))
     if args.max_runs and len(runs) > args.max_runs:
