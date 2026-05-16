@@ -28,7 +28,7 @@ The pipeline keeps the official CityFlow release format:
 - Avoids CityFlow replay logs by default because official replay splitting code treats them as bulky artifacts.
 
 One deliberate preprocessing choice is exposed in `make_cityflow_config.py`: default traffic-light mode is fixed-time (`rlTrafficLight=false`) so a no-agent replay follows roadnet signal phases. Pass `--tl-mode official_rl` to preserve the official training config's `rlTrafficLight=true`.
-Another deliberate preprocessing step is route filtering: the daily Xuancheng flow can contain route anchors that are unreachable in the released roadnet. `run_server_xuancheng_one_day.sh` defaults to `FILTER_FLOW=1`, creating `*.valid.json` before simulation so CityFlow does not abort inside its C++ router.
+Another deliberate preprocessing step is route filtering/expansion: the daily Xuancheng flow can contain route anchors that are unreachable in the released roadnet, and long anchor routes can trigger CityFlow's C++ router. `run_server_xuancheng_one_day.sh` defaults to `FILTER_FLOW=1`, creating `*.valid.json` with reachable anchors expanded to full shortest paths before simulation.
 
 ## AI-Supplemented Pieces
 
@@ -36,7 +36,7 @@ These pieces are not official repository logic and should be reported as added p
 
 - `download_xuancheng_figshare.py`: a convenience downloader built from the Figshare file manifest.
 - `make_cityflow_config.py`: a config generator that rewrites paths into CityFlow-friendly `dir + relative filename` form.
-- `filter_cityflow_flow.py`: an added guard that removes flows whose route anchors are unreachable in the released roadnet. CityFlow supports anchor routes and fills shortest paths internally; this filter checks reachability, not direct adjacent turns.
+- `filter_cityflow_flow.py`: an added guard that removes flows whose route anchors are unreachable in the released roadnet and expands reachable anchor routes into full shortest paths. CityFlow supports anchor routes and fills shortest paths internally, but the full-day Xuancheng flow triggered a CityFlow C++ router assertion without this expansion.
 - `run_cityflow_road_aggregation.py`: the actual 1-minute road-level aggregation into dense CSV/NPZ tensors. The official repo exposes CityFlow state APIs but does not provide this STGNN tensor builder.
 - Server environment workaround: Docker Hub timed out, so CityFlow was built from official `cityflow-project/CityFlow` source into `/data/yuzhang_fei/xuancheng_cityflow/pydeps`.
 

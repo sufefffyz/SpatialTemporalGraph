@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Filter CityFlow flow records whose routes are not connected in the roadnet."""
+"""Filter and optionally expand CityFlow flow routes against the roadnet."""
 
 from __future__ import annotations
 
@@ -32,50 +32,68 @@ def load_roadnet(path: Path) -> tuple[set[str], dict[str, set[str]]]:
     return road_ids, adjacency
 
 
-def has_path(
+def find_path(
     start: str,
     end: str,
     adjacency: dict[str, set[str]],
-    reachability_cache: dict[tuple[str, str], bool],
-) -> bool:
+    path_cache: dict[tuple[str, str], list[str] | None],
+) -> list[str] | None:
     key = (start, end)
-    if key in reachability_cache:
-        return reachability_cache[key]
+    if key in path_cache:
+        return path_cache[key]
     if start == end:
-        reachability_cache[key] = True
-        return True
+        path_cache[key] = [start]
+        return path_cache[key]
 
     queue = deque([start])
     visited = {start}
+    parent: dict[str, str] = {}
     while queue:
         road_id = queue.popleft()
         for nxt in adjacency.get(road_id, ()):
             if nxt == end:
-                reachability_cache[key] = True
-                return True
+                parent[nxt] = road_id
+                path = [end]
+                while path[-1] != start:
+                    path.append(parent[path[-1]])
+                path.reverse()
+                path_cache[key] = path
+                return path_cache[key]
             if nxt not in visited:
                 visited.add(nxt)
+                parent[nxt] = road_id
                 queue.append(nxt)
-    reachability_cache[key] = False
-    return False
+    path_cache[key] = None
+    return None
 
 
-def invalid_reason(
+def validate_and_expand_route(
     route: object,
     road_ids: set[str],
     adjacency: dict[str, set[str]],
-    reachability_cache: dict[tuple[str, str], bool],
-) -> str | None:
+    path_cache: dict[tuple[str, str], list[str] | None],
+    expand_routes: bool,
+) -> tuple[str | None, list[str] | None, bool]:
     if not isinstance(route, list) or not route:
-        return "empty_or_nonlist_route"
+        return "empty_or_nonlist_route", None, False
     route_ids = [str(road_id) for road_id in route]
     for road_id in route_ids:
         if road_id not in road_ids:
-            return "unknown_road"
+            return "unknown_road", None, False
+    expanded = [route_ids[0]]
+    changed = False
     for start, end in zip(route_ids, route_ids[1:]):
-        if not has_path(start, end, adjacency, reachability_cache):
-            return "unreachable_anchor"
-    return None
+        path = find_path(start, end, adjacency, path_cache)
+        if path is None:
+            return "unreachable_anchor", None, False
+        if len(path) > 2:
+            changed = True
+        if len(path) == 1:
+            continue
+        expanded.extend(path[1:])
+    if not expand_routes:
+        return None, route_ids, changed
+    return None, expanded, changed
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,6 +104,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--flow", help="Input flow JSON. Default: <data-root>/raw/data_YYYY_MM_DD_type_filtered.json.")
     parser.add_argument("--output", help="Filtered flow JSON. Default: <data-root>/raw/data_YYYY_MM_DD_type_filtered.valid.json.")
     parser.add_argument("--summary", help="Summary JSON. Default: <output>.summary.json.")
+    parser.add_argument(
+        "--no-expand",
+        action="store_true",
+        help="Only filter unreachable anchor routes; do not expand anchors to full shortest paths.",
+    )
     parser.add_argument("--force", action="store_true", help="Overwrite an existing filtered flow.")
     return parser.parse_args()
 
@@ -110,16 +133,30 @@ def main() -> int:
 
     kept = []
     reasons: Counter[str] = Counter()
-    reachability_cache: dict[tuple[str, str], bool] = {}
+    path_cache: dict[tuple[str, str], list[str] | None] = {}
+    expanded_records = 0
+    original_route_lengths = []
+    output_route_lengths = []
     for flow in flows:
-        reason = invalid_reason(
+        reason, route, changed = validate_and_expand_route(
             flow.get("route") if isinstance(flow, dict) else None,
             road_ids,
             adjacency,
-            reachability_cache,
+            path_cache,
+            expand_routes=not args.no_expand,
         )
         if reason is None:
-            kept.append(flow)
+            if not isinstance(flow, dict):
+                reasons["non_dict_flow"] += 1
+                continue
+            flow_out = dict(flow)
+            assert route is not None
+            original_route_lengths.append(len(flow["route"]))
+            output_route_lengths.append(len(route))
+            if changed:
+                expanded_records += 1
+            flow_out["route"] = route
+            kept.append(flow_out)
         else:
             reasons[reason] += 1
 
@@ -138,7 +175,15 @@ def main() -> int:
         "kept_records": len(kept),
         "dropped_records": len(flows) - len(kept),
         "drop_reasons": dict(sorted(reasons.items())),
-        "unique_anchor_pairs_checked": len(reachability_cache),
+        "expand_routes": not args.no_expand,
+        "expanded_records": expanded_records,
+        "unique_anchor_pairs_checked": len(path_cache),
+        "mean_input_route_length": sum(original_route_lengths) / len(original_route_lengths)
+        if original_route_lengths
+        else 0,
+        "mean_output_route_length": sum(output_route_lengths) / len(output_route_lengths)
+        if output_route_lengths
+        else 0,
     }
     with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
