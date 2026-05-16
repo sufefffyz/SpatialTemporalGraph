@@ -92,3 +92,13 @@ bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuanc
 ```
 
 The wrapper first tries native Python with `cityflow`; if unavailable, it tries the official Docker image `kingsleycl/cityflow_env:latest`.
+On the current server, Docker Hub timed out, so CityFlow was built from official source into `/data/yuzhang_fei/xuancheng_cityflow/pydeps`. Use:
+
+```bash
+PYTHONPATH=/data/yuzhang_fei/xuancheng_cityflow/pydeps \
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
+DATA_ROOT=/data/yuzhang_fei/xuancheng_cityflow \
+DURATION=1800 \
+BUCKET_SECONDS=60 \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_one_day.sh 2023-04-03
+```
