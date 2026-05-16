@@ -7,3 +7,5 @@
 | R002 | `run_server_xuancheng_one_day.sh 2023-04-03` with `DURATION=86400 BUCKET_SECONDS=60` | TODO | daily `csv.gz` and `.npz` | Full first day at 1-min resolution. |
 | R003 | loop `2023-04-01..2023-04-07` | TODO | seven daily tensors | Pilot week. |
 | R004 | `download_xuancheng_figshare.py --all-days` plus daily aggregation loop | TODO | monthly tensor files | Full official release. |
+| R005 | `run_cityflow_paper_mp_road_aggregation.py --start-second 0 --duration 3600` | DONE | `/data/yuzhang_fei/xuancheng_cityflow/road_agg_paper_mp/xuancheng_2023-04-03_paper_mp_road_agg_60s_start0_dur3600.*` | Paper-style max-pressure control smoke/full-hour check; shape `(60, 1744, 5)`, 116 signal intersections, 360 decisions, `total_entered=42732`. |
+| R006 | `run_cityflow_paper_mp_road_aggregation.py --start-second 61200 --duration 3600` | FAILED | `/data/yuzhang_fei/xuancheng_cityflow/logs/paper_mp_1700_1800_2023-04-03.log` | Strict paper window 17:00-18:00 failed before aggregation with CityFlow `router.cpp:84` assertion, even using the `.valid.json` route-filtered flow. |
