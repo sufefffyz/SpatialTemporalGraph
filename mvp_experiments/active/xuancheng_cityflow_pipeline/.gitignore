@@ -1,0 +1,9 @@
+data/
+logs/
+outputs/*
+results/*
+!outputs/.gitkeep
+!results/.gitkeep
+*.csv.gz
+*.npz
+*.log

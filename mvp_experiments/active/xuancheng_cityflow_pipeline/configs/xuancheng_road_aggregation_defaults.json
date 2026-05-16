@@ -1,0 +1,17 @@
+{
+  "data_root": "/data/yuzhang_fei/xuancheng_cityflow",
+  "output_root": "/data/yuzhang_fei/xuancheng_cityflow/road_agg",
+  "default_date": "2023-04-03",
+  "available_start_date": "2023-04-01",
+  "available_end_date": "2023-04-30",
+  "bucket_seconds": 60,
+  "duration_seconds": 86400,
+  "features": [
+    "entered_veh",
+    "exited_veh",
+    "mean_active_veh",
+    "mean_speed_kmh",
+    "density_veh_per_lane_km"
+  ],
+  "traffic_light_mode": "fixed_time"
+}

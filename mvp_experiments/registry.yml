@@ -53,6 +53,15 @@ experiments:
     main_claim: Aggregate traffic forecasting metrics hide whether baselines fit low-frequency trends, high-frequency perturbations, spatial residual structure, or distribution tails.
     notes: Post-hoc diagnostics over existing BasicTS saved test predictions; no retraining required.
 
+  - slug: xuancheng_cityflow_pipeline
+    title: Xuancheng CityFlow Road-Aggregation Pipeline
+    status: active
+    location: mvp_experiments/active/xuancheng_cityflow_pipeline
+    datasets:
+      - Xuancheng-CityFlow-2023-04
+    main_claim: Official Xuancheng CityFlow flows can be converted into 1-minute road-level simulated traffic tensors for controlled robustness experiments.
+    notes: First stage is data generation and sanity checking; released temporal coverage is one month only.
+
 statuses:
   active: Current MVP with planned runs.
   paused: Idea is currently stopped but may resume.
