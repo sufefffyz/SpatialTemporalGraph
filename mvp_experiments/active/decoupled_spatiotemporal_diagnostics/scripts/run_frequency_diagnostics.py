@@ -119,6 +119,15 @@ def normalize_result_dir(path: Path) -> Path:
 
 
 def default_run_name(result_dir: Path) -> str:
+    parts = result_dir.parts
+    if "checkpoints" in parts:
+        idx = parts.index("checkpoints")
+        if idx + 1 < len(parts):
+            name = parts[idx + 1]
+            aliases = {
+                "STGCNChebGraphConv": "STGCN",
+            }
+            return aliases.get(name, name)
     run_dir = result_dir.parent
     variant_dir = run_dir.parent
     if len(run_dir.name) >= 8 and all(ch in "0123456789abcdef" for ch in run_dir.name.lower()):
@@ -359,6 +368,40 @@ def pair_corr(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.sum(x * y) / denom)
 
 
+def residual_structure_row(system: str, horizon: int, component: str, residual: np.ndarray) -> dict[str, float | int | str]:
+    residual = np.asarray(residual, dtype=np.float32)
+    valid = np.isfinite(residual)
+    if not np.any(valid):
+        return {
+            "system": system,
+            "horizon": horizon,
+            "component": component,
+            "bias": float("nan"),
+            "residual_std": float("nan"),
+            "mean_abs_residual": float("nan"),
+            "under_prediction_rate": float("nan"),
+            "temporal_lag1_corr": float("nan"),
+            "node_bias_std": float("nan"),
+            "valid_count": 0,
+        }
+    values = residual[valid]
+    lag1 = pair_corr(residual[:-1, :].reshape(-1), residual[1:, :].reshape(-1)) if residual.shape[0] > 1 else float("nan")
+    with np.errstate(invalid="ignore"):
+        node_bias = np.nanmean(np.where(valid, residual, np.nan), axis=0)
+    return {
+        "system": system,
+        "horizon": horizon,
+        "component": component,
+        "bias": float(np.mean(values)),
+        "residual_std": float(np.std(values)),
+        "mean_abs_residual": float(np.mean(np.abs(values))),
+        "under_prediction_rate": float(np.mean(values > 0)),
+        "temporal_lag1_corr": lag1,
+        "node_bias_std": float(np.nanstd(node_bias)),
+        "valid_count": int(np.sum(valid)),
+    }
+
+
 def spatial_rows(
     system: str,
     horizon: int,
@@ -414,7 +457,13 @@ def json_default(value):
     return value
 
 
-def build_markdown(report: dict, component_rows: list[dict], peak_metric_rows: list[dict], spatial_metric_rows: list[dict]) -> str:
+def build_markdown(
+    report: dict,
+    component_rows: list[dict],
+    peak_metric_rows: list[dict],
+    residual_metric_rows: list[dict],
+    spatial_metric_rows: list[dict],
+) -> str:
     lines = [
         "# Decoupled Spatiotemporal Diagnostic Summary",
         "",
@@ -449,6 +498,17 @@ def build_markdown(report: dict, component_rows: list[dict], peak_metric_rows: l
             lines.append(
                 f"| {row['system']} | {row['horizon']} | {row['window_type']} | "
                 f"{row['MAE']:.4g} | {row['WAPE']:.4g} | {row['W1']:.4g} |"
+            )
+
+    if residual_metric_rows:
+        lines.extend(["", "## Residual Structure Metrics", ""])
+        lines.append("| System | Horizon | Component | Bias | Abs Residual | Lag1 Corr | Under Rate | Node Bias Std |")
+        lines.append("|---|---:|---|---:|---:|---:|---:|---:|")
+        for row in residual_metric_rows[:80]:
+            lines.append(
+                f"| {row['system']} | {row['horizon']} | {row['component']} | "
+                f"{row['bias']:.4g} | {row['mean_abs_residual']:.4g} | {row['temporal_lag1_corr']:.4g} | "
+                f"{row['under_prediction_rate']:.4g} | {row['node_bias_std']:.4g} |"
             )
 
     if spatial_metric_rows:
@@ -490,6 +550,7 @@ def main() -> None:
     component_rows: list[dict] = []
     peak_metric_rows: list[dict] = []
     distribution_rows: list[dict] = []
+    residual_metric_rows: list[dict] = []
     spatial_metric_rows: list[dict] = []
     run_reports: list[dict] = []
 
@@ -534,6 +595,7 @@ def main() -> None:
                         "W1": row["W1"],
                     }
                 )
+                residual_metric_rows.append(residual_structure_row(run.name, horizon, component, target_component - pred_component))
 
             peak_metric_rows.extend(peak_rows(run.name, horizon, pred_h, target_h, args.peak_q))
 
@@ -561,10 +623,11 @@ def main() -> None:
     write_csv(args.output_dir / "component_metrics.csv", component_rows)
     write_csv(args.output_dir / "peak_window_metrics.csv", peak_metric_rows)
     write_csv(args.output_dir / "distribution_metrics.csv", distribution_rows)
+    write_csv(args.output_dir / "residual_structure_metrics.csv", residual_metric_rows)
     write_csv(args.output_dir / "spatial_residual_metrics.csv", spatial_metric_rows)
     (args.output_dir / "summary.json").write_text(json.dumps(report, indent=2, default=json_default), encoding="utf-8")
     (args.output_dir / "diagnostic_summary.md").write_text(
-        build_markdown(report, component_rows, peak_metric_rows, spatial_metric_rows),
+        build_markdown(report, component_rows, peak_metric_rows, residual_metric_rows, spatial_metric_rows),
         encoding="utf-8",
     )
 
