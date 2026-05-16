@@ -120,3 +120,11 @@ To force the dedicated env explicitly:
 PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow/bin/python \
 bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_one_day.sh 2023-04-03
 ```
+
+For smoke checks, avoid overwriting the main `road_agg` directory:
+
+```bash
+OUTPUT_DIR=/data/yuzhang_fei/xuancheng_cityflow/road_agg_envcheck \
+DURATION=60 \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_one_day.sh 2023-04-03
+```

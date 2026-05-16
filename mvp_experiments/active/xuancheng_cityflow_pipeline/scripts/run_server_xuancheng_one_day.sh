@@ -15,6 +15,7 @@ else
 fi
 DOCKER_IMAGE="${DOCKER_IMAGE:-kingsleycl/cityflow_env:latest}"
 FILTER_FLOW="${FILTER_FLOW:-1}"
+OUTPUT_DIR="${OUTPUT_DIR:-${DATA_ROOT}/road_agg}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -23,6 +24,7 @@ REPO_ROOT="$(cd "${EXP_DIR}/../../.." && pwd)"
 echo "[info] repo=${REPO_ROOT}"
 echo "[info] date=${DATE} data_root=${DATA_ROOT} duration=${DURATION} bucket=${BUCKET_SECONDS}"
 echo "[info] python=${PYTHON_BIN}"
+echo "[info] output_dir=${OUTPUT_DIR}"
 
 "${PYTHON_BIN}" "${SCRIPT_DIR}/download_xuancheng_figshare.py" \
   --data-root "${DATA_ROOT}" \
@@ -52,7 +54,7 @@ if "${PYTHON_BIN}" -c "import cityflow" >/dev/null 2>&1; then
     --duration "${DURATION}" \
     --bucket-seconds "${BUCKET_SECONDS}" \
     --thread-num "${THREAD_NUM}" \
-    --output-dir "${DATA_ROOT}/road_agg"
+    --output-dir "${OUTPUT_DIR}"
 else
   if ! command -v docker >/dev/null 2>&1; then
     echo "[error] cityflow is not importable and docker is unavailable." >&2
@@ -75,5 +77,5 @@ else
         --duration '${DURATION}' \
         --bucket-seconds '${BUCKET_SECONDS}' \
         --thread-num '${THREAD_NUM}' \
-        --output-dir /data/road_agg"
+        --output-dir '${OUTPUT_DIR/#${DATA_ROOT}/\/data}'"
 fi
