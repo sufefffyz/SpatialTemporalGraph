@@ -254,6 +254,38 @@ def target_index_to_sample(args: argparse.Namespace, horizon: int, input_len: in
     return target_index - test_start_index(args) - input_len - (horizon - 1)
 
 
+def target_index_for_sample(args: argparse.Namespace, sample_index: int, horizon: int, input_len: int) -> int:
+    return test_start_index(args) + sample_index + input_len + (horizon - 1)
+
+
+def datetime_for_target_index(args: argparse.Namespace, target_index: int, frequency: int) -> str | None:
+    if not args.dataset_start_datetime:
+        return None
+    dataset_dt = datetime.fromisoformat(args.dataset_start_datetime)
+    return (dataset_dt + timedelta(minutes=int(target_index) * frequency)).isoformat(sep=" ")
+
+
+def valid_slice_range_message(
+    args: argparse.Namespace,
+    horizon: int,
+    input_len: int,
+    frequency: int,
+    num_samples: int,
+) -> str:
+    max_start_sample = num_samples - args.steps
+    min_target_index = target_index_for_sample(args, 0, horizon, input_len)
+    max_target_index = target_index_for_sample(args, max_start_sample, horizon, input_len)
+    message = (
+        f"For H{horizon} with steps={args.steps}, valid start_sample is [0, {max_start_sample}], "
+        f"valid start_target_index is [{min_target_index}, {max_target_index}]."
+    )
+    min_dt = datetime_for_target_index(args, min_target_index, frequency)
+    max_dt = datetime_for_target_index(args, max_target_index, frequency)
+    if min_dt and max_dt:
+        message += f" Valid start_datetime is approximately [{min_dt}, {max_dt}]."
+    return message
+
+
 def x_values(
     args: argparse.Namespace,
     sample_start: int,
@@ -327,10 +359,18 @@ def main() -> int:
     for horizon in horizons:
         sample_start = target_index_to_sample(args, horizon, input_len, frequency)
         if sample_start < 0:
-            raise ValueError(f"Selected start resolves to negative sample index {sample_start} for H{horizon}.")
-        if sample_start + args.steps > num_samples:
+            selected_target_index = target_index_for_sample(args, sample_start, horizon, input_len)
             raise ValueError(
-                f"Slice [{sample_start}, {sample_start + args.steps}) exceeds available samples {num_samples} for H{horizon}."
+                f"Selected start resolves to negative sample index {sample_start} for H{horizon}. "
+                f"Selected target_global_index is {selected_target_index}. "
+                f"{valid_slice_range_message(args, horizon, input_len, frequency, num_samples)}"
+            )
+        if sample_start + args.steps > num_samples:
+            selected_target_index = target_index_for_sample(args, sample_start, horizon, input_len)
+            raise ValueError(
+                f"Slice [{sample_start}, {sample_start + args.steps}) exceeds available samples {num_samples} for H{horizon}. "
+                f"Selected target_global_index is {selected_target_index}. "
+                f"{valid_slice_range_message(args, horizon, input_len, frequency, num_samples)}"
             )
         sample_end = sample_start + args.steps
         x, xlabel = x_values(args, sample_start, args.steps, horizon, input_len, frequency)
