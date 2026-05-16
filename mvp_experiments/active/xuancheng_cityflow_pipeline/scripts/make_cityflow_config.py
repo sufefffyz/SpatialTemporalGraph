@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-root", required=True, help="Root with raw/ downloaded files.")
     parser.add_argument("--date", required=True, help="Date such as 2023-04-03.")
     parser.add_argument("--output", required=True, help="Config JSON path to write.")
+    parser.add_argument("--flow-file", help="Optional flow JSON path to use instead of the raw daily file.")
     parser.add_argument("--template", help="Optional official config to patch.")
     parser.add_argument(
         "--tl-mode",
@@ -56,7 +57,7 @@ def main() -> int:
     data_root = Path(args.data_root).expanduser().resolve()
     raw_dir = data_root / "raw"
     roadnet = raw_dir / "roadnet_xuancheng250319.json"
-    flow = raw_dir / daily_name(args.date)
+    flow = Path(args.flow_file).expanduser().resolve() if args.flow_file else raw_dir / daily_name(args.date)
     output = Path(args.output).expanduser().resolve()
 
     if not args.no_validate:
@@ -71,7 +72,7 @@ def main() -> int:
             "seed": args.seed,
             "dir": str(raw_dir) + "/",
             "roadnetFile": roadnet.name,
-            "flowFile": flow.name,
+            "flowFile": str(flow.relative_to(raw_dir)) if flow.is_relative_to(raw_dir) else str(flow),
             "rlTrafficLight": args.tl_mode == "official_rl",
             "laneChange": False,
             "saveReplay": bool(args.save_replay),

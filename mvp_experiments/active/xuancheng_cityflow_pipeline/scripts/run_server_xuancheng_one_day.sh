@@ -9,6 +9,7 @@ THREAD_NUM="${THREAD_NUM:-1}"
 TL_MODE="${TL_MODE:-fixed_time}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-kingsleycl/cityflow_env:latest}"
+FILTER_FLOW="${FILTER_FLOW:-1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -24,10 +25,20 @@ echo "[info] date=${DATE} data_root=${DATA_ROOT} duration=${DURATION} bucket=${B
 if "${PYTHON_BIN}" -c "import cityflow" >/dev/null 2>&1; then
   echo "[info] using native Python cityflow"
   CONFIG_PATH="${DATA_ROOT}/configs/config_xuancheng_${DATE}_roadagg.json"
+  FLOW_ARGS=()
+  if [[ "${FILTER_FLOW}" == "1" ]]; then
+    FILTERED_FLOW="${DATA_ROOT}/raw/data_${DATE//-/_}_type_filtered.valid.json"
+    "${PYTHON_BIN}" "${SCRIPT_DIR}/filter_cityflow_flow.py" \
+      --data-root "${DATA_ROOT}" \
+      --date "${DATE}" \
+      --output "${FILTERED_FLOW}"
+    FLOW_ARGS=(--flow-file "${FILTERED_FLOW}")
+  fi
   "${PYTHON_BIN}" "${SCRIPT_DIR}/make_cityflow_config.py" \
     --data-root "${DATA_ROOT}" \
     --date "${DATE}" \
     --tl-mode "${TL_MODE}" \
+    "${FLOW_ARGS[@]}" \
     --output "${CONFIG_PATH}"
   "${PYTHON_BIN}" "${SCRIPT_DIR}/run_cityflow_road_aggregation.py" \
     --config "${CONFIG_PATH}" \
