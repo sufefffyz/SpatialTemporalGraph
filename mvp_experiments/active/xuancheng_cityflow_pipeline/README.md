@@ -38,6 +38,7 @@ These pieces are not official repository logic and should be reported as added p
 - `make_cityflow_config.py`: a config generator that rewrites paths into CityFlow-friendly `dir + relative filename` form.
 - `filter_cityflow_flow.py`: an added guard that removes flows whose route anchors are unreachable in the released roadnet and expands reachable anchor routes into full shortest paths. CityFlow supports anchor routes and fills shortest paths internally, but the full-day Xuancheng flow triggered a CityFlow C++ router assertion without this expansion.
 - `run_cityflow_road_aggregation.py`: the actual 1-minute road-level aggregation into dense CSV/NPZ tensors. The official repo exposes CityFlow state APIs but does not provide this STGNN tensor builder.
+- `render_xuancheng_osm_map.py`: an added visualization utility that converts the released SUMO/CityFlow local coordinates back to lon/lat and renders the roadnet or road-aggregation values on an OpenStreetMap Leaflet basemap.
 - Server environment workaround: Docker Hub timed out, so CityFlow was built from official `cityflow-project/CityFlow` source, then installed into the dedicated `/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow` conda environment. The earlier `/data/yuzhang_fei/xuancheng_cityflow/pydeps` directory remains the source-built staging area.
 
 The main behavioral deviation from the official config is the default `rlTrafficLight=false` fixed-time replay. Use `TL_MODE=official_rl` only when an official-compatible signal-control loop is added; otherwise the raw official RL mode has no controlling agent in this pipeline.
@@ -127,4 +128,21 @@ For smoke checks, avoid overwriting the main `road_agg` directory:
 OUTPUT_DIR=/data/yuzhang_fei/xuancheng_cityflow/road_agg_envcheck \
 DURATION=60 \
 bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_one_day.sh 2023-04-03
+```
+
+Render the roadnet or an aggregation result on OpenStreetMap:
+
+```bash
+python mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/download_xuancheng_figshare.py \
+  --data-root /data/yuzhang_fei/xuancheng_cityflow \
+  --days 2023-04-03 \
+  --include-sumo
+
+python mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/render_xuancheng_osm_map.py \
+  --roadnet /data/yuzhang_fei/xuancheng_cityflow/raw/roadnet_xuancheng250319.json \
+  --sumo-net /data/yuzhang_fei/xuancheng_cityflow/raw/xuancheng.net.xml \
+  --npz /data/yuzhang_fei/xuancheng_cityflow/road_agg_paper_mp/xuancheng_2023-04-03_paper_mp_road_agg_60s_start0_dur3600.npz \
+  --feature entered_veh \
+  --time-agg sum \
+  --output-html /data/yuzhang_fei/xuancheng_cityflow/maps/xuancheng_2023-04-03_paper_mp_entered_sum_osm.html
 ```
