@@ -93,7 +93,7 @@ def human_size(num_bytes: int) -> str:
     return f"{size:.2f} GiB"
 
 
-def download_one(url: str, dest: Path, expected_size: int, force: bool) -> None:
+def download_one(url: str, dest: Path, expected_size: int, force: bool, retries: int) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() and not force:
         actual_size = dest.stat().st_size
@@ -105,43 +105,51 @@ def download_one(url: str, dest: Path, expected_size: int, force: bool) -> None:
             f"expected {human_size(expected_size)}; re-downloading"
         )
 
-    part = dest.with_suffix(dest.suffix + ".part")
-    if part.exists():
-        part.unlink()
-
-    print(f"[download] {url} -> {dest} ({human_size(expected_size)})")
-    req = urllib.request.Request(url, headers={"User-Agent": "xuancheng-cityflow-pipeline/1.0"})
-    started = time.time()
-    last_report = started
-    bytes_done = 0
-    try:
-        with urllib.request.urlopen(req, timeout=120) as response, part.open("wb") as out:
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
-                bytes_done += len(chunk)
-                now = time.time()
-                if now - last_report >= 10:
-                    pct = 100.0 * bytes_done / expected_size if expected_size else 0.0
-                    print(f"  {human_size(bytes_done)} / {human_size(expected_size)} ({pct:.1f}%)")
-                    last_report = now
-    except urllib.error.URLError as exc:
+    retries = max(1, retries)
+    for attempt in range(1, retries + 1):
+        part = dest.with_suffix(dest.suffix + ".part")
         if part.exists():
             part.unlink()
-        raise SystemExit(f"download failed for {url}: {exc}") from exc
 
-    actual_size = part.stat().st_size
-    if expected_size and actual_size != expected_size:
-        part.unlink()
-        raise SystemExit(
-            f"downloaded size mismatch for {dest.name}: "
-            f"got {actual_size}, expected {expected_size}"
-        )
-    part.replace(dest)
-    elapsed = max(time.time() - started, 1e-6)
-    print(f"[done] {dest.name}: {human_size(actual_size)} in {elapsed:.1f}s")
+        suffix = f" attempt {attempt}/{retries}" if retries > 1 else ""
+        print(f"[download] {url} -> {dest} ({human_size(expected_size)}){suffix}")
+        req = urllib.request.Request(url, headers={"User-Agent": "xuancheng-cityflow-pipeline/1.0"})
+        started = time.time()
+        last_report = started
+        bytes_done = 0
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response, part.open("wb") as out:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    bytes_done += len(chunk)
+                    now = time.time()
+                    if now - last_report >= 10:
+                        pct = 100.0 * bytes_done / expected_size if expected_size else 0.0
+                        print(f"  {human_size(bytes_done)} / {human_size(expected_size)} ({pct:.1f}%)")
+                        last_report = now
+
+            actual_size = part.stat().st_size
+            if expected_size and actual_size != expected_size:
+                raise RuntimeError(
+                    f"downloaded size mismatch for {dest.name}: "
+                    f"got {actual_size}, expected {expected_size}"
+                )
+            part.replace(dest)
+            elapsed = max(time.time() - started, 1e-6)
+            print(f"[done] {dest.name}: {human_size(actual_size)} in {elapsed:.1f}s")
+            return
+        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+            if part.exists():
+                part.unlink()
+            if attempt >= retries:
+                raise SystemExit(f"download failed for {url} after {retries} attempts: {exc}") from exc
+            sleep_s = min(30, 5 * attempt)
+            print(f"[warn] download attempt {attempt}/{retries} failed for {dest.name}: {exc}")
+            print(f"[warn] retrying in {sleep_s}s")
+            time.sleep(sleep_s)
 
 
 def build_manifest(args: argparse.Namespace) -> list[tuple[str, str, int, Path]]:
@@ -183,6 +191,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-sumo", action="store_true", help="Also download xuancheng.net.xml.")
     parser.add_argument("--include-doc", action="store_true", help="Also download release Documentation.pdf.")
     parser.add_argument("--force", action="store_true", help="Re-download even if files already exist.")
+    parser.add_argument("--retries", type=int, default=3, help="Download attempts per file. Default: 3.")
     parser.add_argument("--dry-run", action="store_true", help="Print files and sizes without downloading.")
     return parser.parse_args()
 
@@ -199,7 +208,7 @@ def main() -> int:
         print(f"  {name}: {human_size(size)} -> {dest}")
         if args.dry_run:
             continue
-        download_one(url, dest, size, args.force)
+        download_one(url, dest, size, args.force, args.retries)
 
     return 0
 

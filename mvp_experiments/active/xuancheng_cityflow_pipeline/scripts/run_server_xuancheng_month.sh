@@ -11,6 +11,7 @@ TL_MODE="${TL_MODE:-fixed_time}"
 FILTER_FLOW="${FILTER_FLOW:-1}"
 DOWNLOAD_FIRST="${DOWNLOAD_FIRST:-1}"
 SKIP_EXISTING="${SKIP_EXISTING:-1}"
+DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-5}"
 DEFAULT_CITYFLOW_PYTHON="/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow/bin/python"
 if [[ -z "${PYTHON_BIN:-}" && -x "${DEFAULT_CITYFLOW_PYTHON}" ]]; then
   PYTHON_BIN="${DEFAULT_CITYFLOW_PYTHON}"
@@ -64,7 +65,8 @@ echo "[info] python=${PYTHON_BIN}"
 if [[ "${DOWNLOAD_FIRST}" == "1" ]]; then
   "${PYTHON_BIN}" "${SCRIPT_DIR}/download_xuancheng_figshare.py" \
     --data-root "${DATA_ROOT}" \
-    --all-days
+    --all-days \
+    --retries "${DOWNLOAD_RETRIES}"
 fi
 
 for DATE in "${DATES[@]}"; do
