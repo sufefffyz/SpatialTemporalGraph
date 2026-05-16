@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections import Counter
+from collections import Counter, deque
 from pathlib import Path
 
 
@@ -18,18 +18,54 @@ def default_output_name(date_text: str) -> str:
     return f"data_{date_text.replace('-', '_')}_type_filtered.valid.json"
 
 
-def load_roadnet(path: Path) -> tuple[set[str], set[tuple[str, str]]]:
+def load_roadnet(path: Path) -> tuple[set[str], dict[str, set[str]]]:
     with path.open("r", encoding="utf-8") as f:
         roadnet = json.load(f)
     road_ids = {str(road["id"]) for road in roadnet["roads"]}
-    transitions: set[tuple[str, str]] = set()
+    adjacency = {road_id: set() for road_id in road_ids}
     for inter in roadnet["intersections"]:
         for link in inter.get("roadLinks", []):
-            transitions.add((str(link["startRoad"]), str(link["endRoad"])))
-    return road_ids, transitions
+            start = str(link["startRoad"])
+            end = str(link["endRoad"])
+            if start in adjacency:
+                adjacency[start].add(end)
+    return road_ids, adjacency
 
 
-def invalid_reason(route: object, road_ids: set[str], transitions: set[tuple[str, str]]) -> str | None:
+def has_path(
+    start: str,
+    end: str,
+    adjacency: dict[str, set[str]],
+    reachability_cache: dict[tuple[str, str], bool],
+) -> bool:
+    key = (start, end)
+    if key in reachability_cache:
+        return reachability_cache[key]
+    if start == end:
+        reachability_cache[key] = True
+        return True
+
+    queue = deque([start])
+    visited = {start}
+    while queue:
+        road_id = queue.popleft()
+        for nxt in adjacency.get(road_id, ()):
+            if nxt == end:
+                reachability_cache[key] = True
+                return True
+            if nxt not in visited:
+                visited.add(nxt)
+                queue.append(nxt)
+    reachability_cache[key] = False
+    return False
+
+
+def invalid_reason(
+    route: object,
+    road_ids: set[str],
+    adjacency: dict[str, set[str]],
+    reachability_cache: dict[tuple[str, str], bool],
+) -> str | None:
     if not isinstance(route, list) or not route:
         return "empty_or_nonlist_route"
     route_ids = [str(road_id) for road_id in route]
@@ -37,8 +73,8 @@ def invalid_reason(route: object, road_ids: set[str], transitions: set[tuple[str
         if road_id not in road_ids:
             return "unknown_road"
     for start, end in zip(route_ids, route_ids[1:]):
-        if (start, end) not in transitions:
-            return "disconnected_turn"
+        if not has_path(start, end, adjacency, reachability_cache):
+            return "unreachable_anchor"
     return None
 
 
@@ -68,14 +104,20 @@ def main() -> int:
         print(f"[skip] summary: {summary_path}")
         return 0
 
-    road_ids, transitions = load_roadnet(roadnet_path)
+    road_ids, adjacency = load_roadnet(roadnet_path)
     with flow_path.open("r", encoding="utf-8") as f:
         flows = json.load(f)
 
     kept = []
     reasons: Counter[str] = Counter()
+    reachability_cache: dict[tuple[str, str], bool] = {}
     for flow in flows:
-        reason = invalid_reason(flow.get("route") if isinstance(flow, dict) else None, road_ids, transitions)
+        reason = invalid_reason(
+            flow.get("route") if isinstance(flow, dict) else None,
+            road_ids,
+            adjacency,
+            reachability_cache,
+        )
         if reason is None:
             kept.append(flow)
         else:
@@ -96,6 +138,7 @@ def main() -> int:
         "kept_records": len(kept),
         "dropped_records": len(flows) - len(kept),
         "drop_reasons": dict(sorted(reasons.items())),
+        "unique_anchor_pairs_checked": len(reachability_cache),
     }
     with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)

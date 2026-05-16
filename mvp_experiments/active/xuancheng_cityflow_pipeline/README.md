@@ -28,7 +28,7 @@ The pipeline keeps the official CityFlow release format:
 - Avoids CityFlow replay logs by default because official replay splitting code treats them as bulky artifacts.
 
 One deliberate preprocessing choice is exposed in `make_cityflow_config.py`: default traffic-light mode is fixed-time (`rlTrafficLight=false`) so a no-agent replay follows roadnet signal phases. Pass `--tl-mode official_rl` to preserve the official training config's `rlTrafficLight=true`.
-Another deliberate preprocessing step is route filtering: the daily Xuancheng flow can contain routes whose adjacent roads are not connected by the released roadnet. `run_server_xuancheng_one_day.sh` defaults to `FILTER_FLOW=1`, creating `*.valid.json` before simulation so CityFlow does not abort inside its C++ router.
+Another deliberate preprocessing step is route filtering: the daily Xuancheng flow can contain route anchors that are unreachable in the released roadnet. `run_server_xuancheng_one_day.sh` defaults to `FILTER_FLOW=1`, creating `*.valid.json` before simulation so CityFlow does not abort inside its C++ router.
 
 ## Storage Estimate
 
