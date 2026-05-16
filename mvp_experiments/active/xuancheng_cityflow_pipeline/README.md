@@ -38,7 +38,7 @@ These pieces are not official repository logic and should be reported as added p
 - `make_cityflow_config.py`: a config generator that rewrites paths into CityFlow-friendly `dir + relative filename` form.
 - `filter_cityflow_flow.py`: an added guard that removes flows whose route anchors are unreachable in the released roadnet and expands reachable anchor routes into full shortest paths. CityFlow supports anchor routes and fills shortest paths internally, but the full-day Xuancheng flow triggered a CityFlow C++ router assertion without this expansion.
 - `run_cityflow_road_aggregation.py`: the actual 1-minute road-level aggregation into dense CSV/NPZ tensors. The official repo exposes CityFlow state APIs but does not provide this STGNN tensor builder.
-- Server environment workaround: Docker Hub timed out, so CityFlow was built from official `cityflow-project/CityFlow` source into `/data/yuzhang_fei/xuancheng_cityflow/pydeps`.
+- Server environment workaround: Docker Hub timed out, so CityFlow was built from official `cityflow-project/CityFlow` source, then installed into the dedicated `/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow` conda environment. The earlier `/data/yuzhang_fei/xuancheng_cityflow/pydeps` directory remains the source-built staging area.
 
 The main behavioral deviation from the official config is the default `rlTrafficLight=false` fixed-time replay. Use `TL_MODE=official_rl` only when an official-compatible signal-control loop is added; otherwise the raw official RL mode has no controlling agent in this pipeline.
 
@@ -105,13 +105,18 @@ bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuanc
 ```
 
 The wrapper first tries native Python with `cityflow`; if unavailable, it tries the official Docker image `kingsleycl/cityflow_env:latest`.
-On the current server, Docker Hub timed out, so CityFlow was built from official source into `/data/yuzhang_fei/xuancheng_cityflow/pydeps`. Use:
+On the current server, Docker Hub timed out, so CityFlow was built from official source and installed into a dedicated conda env. The wrapper auto-detects this Python when it exists:
 
 ```bash
-PYTHONPATH=/data/yuzhang_fei/xuancheng_cityflow/pydeps \
-PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python \
 DATA_ROOT=/data/yuzhang_fei/xuancheng_cityflow \
 DURATION=1800 \
 BUCKET_SECONDS=60 \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_one_day.sh 2023-04-03
+```
+
+To force the dedicated env explicitly:
+
+```bash
+PYTHON_BIN=/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow/bin/python \
 bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_one_day.sh 2023-04-03
 ```

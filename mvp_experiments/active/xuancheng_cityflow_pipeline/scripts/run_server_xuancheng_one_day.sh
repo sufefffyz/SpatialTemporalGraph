@@ -7,7 +7,12 @@ DURATION="${DURATION:-86400}"
 BUCKET_SECONDS="${BUCKET_SECONDS:-60}"
 THREAD_NUM="${THREAD_NUM:-1}"
 TL_MODE="${TL_MODE:-fixed_time}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+DEFAULT_CITYFLOW_PYTHON="/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow/bin/python"
+if [[ -z "${PYTHON_BIN:-}" && -x "${DEFAULT_CITYFLOW_PYTHON}" ]]; then
+  PYTHON_BIN="${DEFAULT_CITYFLOW_PYTHON}"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
 DOCKER_IMAGE="${DOCKER_IMAGE:-kingsleycl/cityflow_env:latest}"
 FILTER_FLOW="${FILTER_FLOW:-1}"
 
@@ -17,6 +22,7 @@ REPO_ROOT="$(cd "${EXP_DIR}/../../.." && pwd)"
 
 echo "[info] repo=${REPO_ROOT}"
 echo "[info] date=${DATE} data_root=${DATA_ROOT} duration=${DURATION} bucket=${BUCKET_SECONDS}"
+echo "[info] python=${PYTHON_BIN}"
 
 "${PYTHON_BIN}" "${SCRIPT_DIR}/download_xuancheng_figshare.py" \
   --data-root "${DATA_ROOT}" \
