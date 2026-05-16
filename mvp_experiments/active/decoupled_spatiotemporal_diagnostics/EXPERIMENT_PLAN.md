@@ -9,7 +9,7 @@
 | Claim | Why It Matters | Minimum Convincing Evidence | Linked Runs |
 |---|---|---|---|
 | C1: Baselines differ beyond aggregate MAE. | A better average MAE may still hide high-frequency or tail failure. | At least two baselines have different low/high or peak/normal profiles. | R002, R003 |
-| C2: High-frequency errors explain hard traffic failures. | This determines whether event-aware or retrieval-based follow-up is worth doing. | High-frequency component error is disproportionately large or ranks models differently from full-series MAE. | R002 |
+| C2: High-frequency errors explain hard traffic failures. | This determines whether event-aware or retrieval-based follow-up is worth doing. | High-frequency component error is disproportionately large or ranks models differently from full-series MAE under more than one decomposition method. | R002, R011 |
 | C3: Graph structure should reduce spatially correlated residuals if it is useful. | This tests whether STGNNs really help beyond temporal smoothing. | Graph baselines show lower edge residual correlation or smoother high-frequency residuals than temporal baselines. | R004 |
 
 ## Experiment Blocks
@@ -29,8 +29,18 @@
 - Dataset / split / task: each horizon of saved SD predictions.
 - Compared systems: each discovered baseline.
 - Metrics: MAE, RMSE, WAPE on full, low, and high components; high/full error ratio.
-- Setup details: centered moving-average low-pass filter, default window 12 samples.
+- Setup details: centered moving-average low-pass filter and FFT low-pass filter. Defaults use a 12-step moving window and a 12-step FFT cutoff period.
 - Success criterion: high-frequency errors reveal a different failure profile from aggregate MAE.
+- Priority: MUST-RUN.
+
+### Block 2b: Decomposition-Method Robustness
+
+- Claim tested: low/high conclusions are not an artifact of one arbitrary filter.
+- Dataset / split / task: each horizon of saved SD predictions.
+- Compared systems: each discovered baseline.
+- Metrics: per-method low/high MAE, W1, residual lag1, edge residual correlation, residual Dirichlet; method deltas relative to moving average.
+- Setup details: compare `moving_average` against `fft_lowpass` with matched 12-step scale.
+- Success criterion: model ranking or qualitative failure modes are stable enough to interpret, or instability is explicitly reported.
 - Priority: MUST-RUN.
 
 ### Block 3: Peak-Window Diagnostics
@@ -59,7 +69,8 @@
 | M1 | Discover saved predictions | R001 | at least two runs found | seconds-minutes | results are under a different root |
 | M2 | Run diagnostics | R002/R003 | CSV/JSON/MD generated | minutes | raw memmap shape inference mismatch |
 | M3 | Optional graph diagnostics | R004 | adjacency is available | minutes | graph node order may not match predictions |
-| M4 | Interpret next direction | summary table | clear failure profile | manual | signal may be weak |
+| M4 | Compare decomposition methods | R011 | method comparison table generated | minutes | FFT and moving average may disagree |
+| M5 | Interpret next direction | summary table | clear failure profile | manual | signal may be weak |
 
 ## Risks and Mitigations
 
@@ -72,10 +83,14 @@
 - Risk: optional graph diagnostics use a mismatched adjacency.
 - Mitigation: run graph diagnostics only when adjacency shape equals prediction node count.
 
+- Risk: a moving-average residual is not a reliable high-frequency definition.
+- Mitigation: add an FFT low-pass split and report both method-specific metrics plus paired deltas.
+
 ## Final Checklist
 
 - [ ] Existing server predictions discovered
 - [ ] Low/high component table generated
 - [ ] Peak-window table generated
 - [ ] Optional spatial diagnostics generated or explicitly skipped
+- [ ] Moving-average vs FFT low-pass comparison generated
 - [ ] Next modeling direction chosen from diagnostic evidence

@@ -68,6 +68,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-dim", type=int, default=1)
     parser.add_argument("--dtype", default="float32")
     parser.add_argument("--moving-window", type=int, default=12)
+    parser.add_argument(
+        "--decomp-methods",
+        nargs="+",
+        default=["moving_average"],
+        choices=["moving_average", "fft_lowpass"],
+        help="Low/high decomposition methods to evaluate. Use both to compare moving-average and frequency-domain splits.",
+    )
+    parser.add_argument(
+        "--fft-cutoff-period",
+        type=float,
+        default=None,
+        help="FFT low-pass cutoff in time steps. Low frequency keeps periods >= this value. Defaults to --moving-window.",
+    )
     parser.add_argument("--peak-q", type=float, default=0.90)
     parser.add_argument("--horizons", nargs="+", type=int, default=[1, 3, 6, 12], help="1-based horizons.")
     parser.add_argument("--adj-path", type=Path, default=None, help="Optional adjacency pickle/npy for spatial residual diagnostics.")
@@ -272,10 +285,57 @@ def centered_moving_average(series: np.ndarray, window: int) -> np.ndarray:
     return low.astype(np.float32)
 
 
-def metric_row(system: str, horizon: int, component: str, pred: np.ndarray, target: np.ndarray) -> dict[str, float | int | str]:
+def fill_nonfinite_for_fft(series: np.ndarray) -> np.ndarray:
+    work = np.asarray(series, dtype=np.float64)
+    valid = np.isfinite(work)
+    if np.all(valid):
+        return work
+    with np.errstate(invalid="ignore"):
+        col_mean = np.nanmean(np.where(valid, work, np.nan), axis=0)
+    col_mean = np.where(np.isfinite(col_mean), col_mean, 0.0)
+    return np.where(valid, work, col_mean.reshape(1, -1))
+
+
+def fft_lowpass(series: np.ndarray, cutoff_period: float) -> np.ndarray:
+    series = np.asarray(series, dtype=np.float32)
+    if cutoff_period <= 1 or series.shape[0] <= 1:
+        return series.copy()
+    n_steps = int(series.shape[0])
+    cutoff_freq = 1.0 / float(cutoff_period)
+    freqs = np.fft.rfftfreq(n_steps, d=1.0)
+    keep = freqs <= cutoff_freq + 1e-12
+
+    work = fill_nonfinite_for_fft(series)
+    spectrum = np.fft.rfft(work, axis=0)
+    spectrum[~keep, :] = 0.0
+    low = np.fft.irfft(spectrum, n=n_steps, axis=0).astype(np.float32)
+    low[~np.isfinite(series)] = np.nan
+    return low
+
+
+def decompose_series(series: np.ndarray, method: str, moving_window: int, fft_cutoff_period: float) -> tuple[np.ndarray, np.ndarray]:
+    if method == "moving_average":
+        low = centered_moving_average(series, moving_window)
+    elif method == "fft_lowpass":
+        low = fft_lowpass(series, fft_cutoff_period)
+    else:
+        raise ValueError(f"Unknown decomposition method: {method}")
+    high = np.asarray(series, dtype=np.float32) - low
+    return low, high
+
+
+def metric_row(
+    system: str,
+    horizon: int,
+    decomposition_method: str,
+    component: str,
+    pred: np.ndarray,
+    target: np.ndarray,
+) -> dict[str, float | int | str]:
     return {
         "system": system,
         "horizon": horizon,
+        "decomposition_method": decomposition_method,
         "component": component,
         "MAE": masked_mae(pred, target),
         "RMSE": masked_rmse(pred, target),
@@ -289,7 +349,14 @@ def quantile_peak_mask(target: np.ndarray, q: float) -> np.ndarray:
     return target >= thresholds.reshape(1, -1)
 
 
-def peak_rows(system: str, horizon: int, pred: np.ndarray, target: np.ndarray, q: float) -> list[dict[str, float | int | str]]:
+def peak_rows(
+    system: str,
+    horizon: int,
+    decomposition_method: str,
+    pred: np.ndarray,
+    target: np.ndarray,
+    q: float,
+) -> list[dict[str, float | int | str]]:
     peak = quantile_peak_mask(target, q)
     normal = ~peak
     rows = []
@@ -298,6 +365,7 @@ def peak_rows(system: str, horizon: int, pred: np.ndarray, target: np.ndarray, q
             {
                 "system": system,
                 "horizon": horizon,
+                "decomposition_method": decomposition_method,
                 "window_type": split_name,
                 "MAE": masked_mae(pred, target, mask),
                 "RMSE": masked_rmse(pred, target, mask),
@@ -368,13 +436,20 @@ def pair_corr(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.sum(x * y) / denom)
 
 
-def residual_structure_row(system: str, horizon: int, component: str, residual: np.ndarray) -> dict[str, float | int | str]:
+def residual_structure_row(
+    system: str,
+    horizon: int,
+    decomposition_method: str,
+    component: str,
+    residual: np.ndarray,
+) -> dict[str, float | int | str]:
     residual = np.asarray(residual, dtype=np.float32)
     valid = np.isfinite(residual)
     if not np.any(valid):
         return {
             "system": system,
             "horizon": horizon,
+            "decomposition_method": decomposition_method,
             "component": component,
             "bias": float("nan"),
             "residual_std": float("nan"),
@@ -391,6 +466,7 @@ def residual_structure_row(system: str, horizon: int, component: str, residual: 
     return {
         "system": system,
         "horizon": horizon,
+        "decomposition_method": decomposition_method,
         "component": component,
         "bias": float(np.mean(values)),
         "residual_std": float(np.std(values)),
@@ -405,6 +481,7 @@ def residual_structure_row(system: str, horizon: int, component: str, residual: 
 def spatial_rows(
     system: str,
     horizon: int,
+    decomposition_method: str,
     component: str,
     residual: np.ndarray,
     edges: np.ndarray,
@@ -414,6 +491,7 @@ def spatial_rows(
         return {
             "system": system,
             "horizon": horizon,
+            "decomposition_method": decomposition_method,
             "component": component,
             "edge_residual_corr": float("nan"),
             "residual_dirichlet": float("nan"),
@@ -440,6 +518,7 @@ def spatial_rows(
     return {
         "system": system,
         "horizon": horizon,
+        "decomposition_method": decomposition_method,
         "component": component,
         "edge_residual_corr": float(np.mean(finite_corrs)) if finite_corrs.size else float("nan"),
         "residual_dirichlet": dirichlet,
@@ -469,7 +548,9 @@ def build_markdown(
         "",
         f"- Dataset: `{report['dataset_name']}`",
         f"- Runs analyzed: {report['num_runs']}",
+        f"- Decomposition methods: {', '.join(report['decomposition_methods'])}",
         f"- Moving-average window: {report['moving_window']}",
+        f"- FFT cutoff period: {report['fft_cutoff_period']}",
         f"- Horizons: {', '.join(str(h) for h in report['horizons'])}",
         "",
         "## Runs",
@@ -480,11 +561,11 @@ def build_markdown(
 
     lines.extend(["", "## Component Metrics", ""])
     if component_rows:
-        lines.append("| System | Horizon | Component | MAE | RMSE | WAPE | W1 |")
-        lines.append("|---|---:|---|---:|---:|---:|---:|")
+        lines.append("| System | Method | Horizon | Component | MAE | RMSE | WAPE | W1 |")
+        lines.append("|---|---|---:|---|---:|---:|---:|---:|")
         for row in component_rows[:80]:
             lines.append(
-                f"| {row['system']} | {row['horizon']} | {row['component']} | "
+                f"| {row['system']} | {row['decomposition_method']} | {row['horizon']} | {row['component']} | "
                 f"{row['MAE']:.4g} | {row['RMSE']:.4g} | {row['WAPE']:.4g} | {row['W1']:.4g} |"
             )
     else:
@@ -492,32 +573,32 @@ def build_markdown(
 
     lines.extend(["", "## Peak Metrics", ""])
     if peak_metric_rows:
-        lines.append("| System | Horizon | Window | MAE | WAPE | W1 |")
-        lines.append("|---|---:|---|---:|---:|---:|")
+        lines.append("| System | Method | Horizon | Window | MAE | WAPE | W1 |")
+        lines.append("|---|---|---:|---|---:|---:|---:|")
         for row in peak_metric_rows[:80]:
             lines.append(
-                f"| {row['system']} | {row['horizon']} | {row['window_type']} | "
+                f"| {row['system']} | {row['decomposition_method']} | {row['horizon']} | {row['window_type']} | "
                 f"{row['MAE']:.4g} | {row['WAPE']:.4g} | {row['W1']:.4g} |"
             )
 
     if residual_metric_rows:
         lines.extend(["", "## Residual Structure Metrics", ""])
-        lines.append("| System | Horizon | Component | Bias | Abs Residual | Lag1 Corr | Under Rate | Node Bias Std |")
-        lines.append("|---|---:|---|---:|---:|---:|---:|---:|")
+        lines.append("| System | Method | Horizon | Component | Bias | Abs Residual | Lag1 Corr | Under Rate | Node Bias Std |")
+        lines.append("|---|---|---:|---|---:|---:|---:|---:|---:|")
         for row in residual_metric_rows[:80]:
             lines.append(
-                f"| {row['system']} | {row['horizon']} | {row['component']} | "
+                f"| {row['system']} | {row['decomposition_method']} | {row['horizon']} | {row['component']} | "
                 f"{row['bias']:.4g} | {row['mean_abs_residual']:.4g} | {row['temporal_lag1_corr']:.4g} | "
                 f"{row['under_prediction_rate']:.4g} | {row['node_bias_std']:.4g} |"
             )
 
     if spatial_metric_rows:
         lines.extend(["", "## Spatial Residual Metrics", ""])
-        lines.append("| System | Horizon | Component | Edge Corr | Dirichlet | Edges |")
-        lines.append("|---|---:|---|---:|---:|---:|")
+        lines.append("| System | Method | Horizon | Component | Edge Corr | Dirichlet | Edges |")
+        lines.append("|---|---|---:|---|---:|---:|---:|")
         for row in spatial_metric_rows[:80]:
             lines.append(
-                f"| {row['system']} | {row['horizon']} | {row['component']} | "
+                f"| {row['system']} | {row['decomposition_method']} | {row['horizon']} | {row['component']} | "
                 f"{row['edge_residual_corr']:.4g} | {row['residual_dirichlet']:.4g} | {row['num_edges']} |"
             )
     else:
@@ -534,6 +615,10 @@ def main() -> None:
     horizons = sorted({h for h in args.horizons if 1 <= h <= output_len})
     if not horizons:
         raise ValueError(f"No valid horizons in {args.horizons}; output_len={output_len}")
+    decomposition_methods = list(dict.fromkeys(args.decomp_methods))
+    fft_cutoff_period = float(args.fft_cutoff_period or args.moving_window)
+    if fft_cutoff_period <= 0:
+        raise ValueError(f"--fft-cutoff-period must be positive, got {fft_cutoff_period}")
 
     runs = discover_runs(args)
     if not runs:
@@ -574,39 +659,41 @@ def main() -> None:
             pred_h = pred[:, h_idx, :]
             target_h = target[:, h_idx, :]
 
-            pred_low = centered_moving_average(pred_h, args.moving_window)
-            target_low = centered_moving_average(target_h, args.moving_window)
-            pred_high = pred_h - pred_low
-            target_high = target_h - target_low
+            for method in decomposition_methods:
+                pred_low, pred_high = decompose_series(pred_h, method, args.moving_window, fft_cutoff_period)
+                target_low, target_high = decompose_series(target_h, method, args.moving_window, fft_cutoff_period)
 
-            components = {
-                "full": (pred_h, target_h),
-                "low": (pred_low, target_low),
-                "high": (pred_high, target_high),
-            }
-            for component, (pred_component, target_component) in components.items():
-                row = metric_row(run.name, horizon, component, pred_component, target_component)
-                component_rows.append(row)
-                distribution_rows.append(
-                    {
-                        "system": run.name,
-                        "horizon": horizon,
-                        "component": component,
-                        "W1": row["W1"],
-                    }
-                )
-                residual_metric_rows.append(residual_structure_row(run.name, horizon, component, target_component - pred_component))
-
-            peak_metric_rows.extend(peak_rows(run.name, horizon, pred_h, target_h, args.peak_q))
-
-            if adj is not None:
-                residual_components = {
-                    "full": target_h - pred_h,
-                    "low": target_low - pred_low,
-                    "high": target_high - pred_high,
+                components = {
+                    "full": (pred_h, target_h),
+                    "low": (pred_low, target_low),
+                    "high": (pred_high, target_high),
                 }
-                for component, residual in residual_components.items():
-                    spatial_metric_rows.append(spatial_rows(run.name, horizon, component, residual, edges, adj))
+                for component, (pred_component, target_component) in components.items():
+                    row = metric_row(run.name, horizon, method, component, pred_component, target_component)
+                    component_rows.append(row)
+                    distribution_rows.append(
+                        {
+                            "system": run.name,
+                            "horizon": horizon,
+                            "decomposition_method": method,
+                            "component": component,
+                            "W1": row["W1"],
+                        }
+                    )
+                    residual_metric_rows.append(
+                        residual_structure_row(run.name, horizon, method, component, target_component - pred_component)
+                    )
+
+                peak_metric_rows.extend(peak_rows(run.name, horizon, method, pred_h, target_h, args.peak_q))
+
+                if adj is not None:
+                    residual_components = {
+                        "full": target_h - pred_h,
+                        "low": target_low - pred_low,
+                        "high": target_high - pred_high,
+                    }
+                    for component, residual in residual_components.items():
+                        spatial_metric_rows.append(spatial_rows(run.name, horizon, method, component, residual, edges, adj))
 
     report = {
         "dataset_name": args.dataset_name,
@@ -614,7 +701,9 @@ def main() -> None:
         "num_nodes": num_nodes,
         "output_len": output_len,
         "horizons": horizons,
+        "decomposition_methods": decomposition_methods,
         "moving_window": args.moving_window,
+        "fft_cutoff_period": fft_cutoff_period,
         "peak_q": args.peak_q,
         "num_runs": len(run_reports),
         "runs": run_reports,

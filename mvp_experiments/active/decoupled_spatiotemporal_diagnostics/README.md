@@ -17,20 +17,22 @@ One-sentence thesis:
 2. Run low-frequency / high-frequency decomposition diagnostics on each available baseline.
 3. Compare normal windows against high-traffic windows.
 4. Add optional graph residual diagnostics if an SD adjacency file is available.
-5. Use the signal to decide whether to pursue event-aware, retrieval-based, or graph-contribution follow-up work.
+5. Compare decomposition methods so the conclusion does not depend on one arbitrary low-pass filter.
+6. Use the signal to decide whether to pursue event-aware, retrieval-based, or graph-contribution follow-up work.
 
 ## Success Gate
 
 Proceed if:
 
 - At least two baselines produce usable saved predictions.
-- The low/high-frequency split is stable enough that model rankings or failure modes are interpretable.
+- The low/high-frequency split is stable enough under moving-average and FFT low-pass decompositions that model rankings or failure modes are interpretable.
 - The summary table shows a clear difference between aggregate error and one diagnostic dimension.
 
 Stop or pivot if:
 
 - Available predictions are missing or not aligned with the same SD split.
 - Low/high decomposition is unstable across moving-average windows.
+- Moving-average and FFT low-pass decompositions produce incompatible conclusions.
 - All diagnostic dimensions reproduce the same ordering as aggregate MAE with no extra signal.
 
 ## Quick Start
@@ -55,10 +57,19 @@ For a specific checkpoint directory:
 python mvp_experiments/active/decoupled_spatiotemporal_diagnostics/scripts/run_frequency_diagnostics.py \
   --dataset-name SD_5min_full \
   --run "GWNet_distthre=BasicTS/checkpoints/GraphWaveNet/SD_5min_full_distthre_1m_100_12_12" \
+  --decomp-methods moving_average fft_lowpass \
+  --moving-window 12 \
+  --fft-cutoff-period 12 \
   --output-dir mvp_experiments/active/decoupled_spatiotemporal_diagnostics/results/manual
 ```
 
 The script accepts either a checkpoint directory containing `test_results/` or the `test_results/` directory itself.
+
+## Low / High Decomposition Methods
+
+- `moving_average`: low frequency is a centered moving average over `--moving-window` time steps; high frequency is original minus low.
+- `fft_lowpass`: low frequency is reconstructed from the real FFT after keeping only frequencies with period at least `--fft-cutoff-period` time steps; high frequency is original minus low.
+- The server wrapper now defaults to both methods: `DECOMP_METHODS="moving_average fft_lowpass"`.
 
 ## Outputs
 
@@ -69,6 +80,7 @@ peak_window_metrics.csv              normal-vs-high-traffic errors
 distribution_metrics.csv             Wasserstein-style distribution distances
 spatial_residual_metrics.csv         optional graph residual diagnostics
 diagnostic_summary.md                compact human-readable summary
+decoupled_method_comparison.csv       metric deltas between decomposition methods
 ```
 
 ## Tracker
