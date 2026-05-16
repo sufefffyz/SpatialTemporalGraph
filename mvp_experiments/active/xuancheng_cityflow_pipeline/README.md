@@ -130,6 +130,18 @@ DURATION=60 \
 bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_one_day.sh 2023-04-03
 ```
 
+Run all released 30 days as 1-minute road aggregation, one file pair per day:
+
+```bash
+DATA_ROOT=/data/yuzhang_fei/xuancheng_cityflow \
+OUTPUT_DIR=/data/yuzhang_fei/xuancheng_cityflow/road_agg_30d_fixed_time \
+DURATION=86400 \
+BUCKET_SECONDS=60 \
+TL_MODE=fixed_time \
+FILTER_FLOW=1 \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_month.sh
+```
+
 Render the roadnet or an aggregation result on OpenStreetMap:
 
 ```bash
