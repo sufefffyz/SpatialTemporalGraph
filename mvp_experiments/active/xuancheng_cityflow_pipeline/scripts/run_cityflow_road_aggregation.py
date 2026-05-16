@@ -40,6 +40,16 @@ def load_config(path: Path) -> dict:
         return json.load(f)
 
 
+def resolve_cityflow_path(config_path: Path, cfg: dict, key: str) -> Path:
+    path = Path(cfg[key]).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    base = Path(cfg.get("dir", ".")).expanduser()
+    if not base.is_absolute():
+        base = config_path.parent / base
+    return (base / path).resolve()
+
+
 def road_length_m(points: list[dict]) -> float:
     total = 0.0
     for p0, p1 in zip(points, points[1:]):
@@ -126,7 +136,7 @@ def main() -> int:
     if interval <= 0:
         raise SystemExit(f"invalid CityFlow interval in config: {interval}")
 
-    roadnet_path = Path(cfg["roadnetFile"]).expanduser().resolve()
+    roadnet_path = resolve_cityflow_path(config_path, cfg, "roadnetFile")
     road_ids, lane_to_road_idx, road_meta = load_roadnet(roadnet_path)
     n_roads = len(road_ids)
     expected_buckets = int(math.ceil(args.duration / args.bucket_seconds))

@@ -69,9 +69,9 @@ def main() -> int:
         {
             "interval": float(cfg.get("interval", 1.0)),
             "seed": args.seed,
-            "dir": "./",
-            "roadnetFile": str(roadnet),
-            "flowFile": str(flow),
+            "dir": str(raw_dir) + "/",
+            "roadnetFile": roadnet.name,
+            "flowFile": flow.name,
             "rlTrafficLight": args.tl_mode == "official_rl",
             "laneChange": False,
             "saveReplay": bool(args.save_replay),
