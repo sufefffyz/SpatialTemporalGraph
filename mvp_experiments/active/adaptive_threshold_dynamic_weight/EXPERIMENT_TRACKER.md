@@ -12,7 +12,7 @@
 | R008 | M2 | Dynamic weights | dynamic sparse-edge weights on same support | LargeST-SD | MAE/RMSE/WAPE, peak/high-volatility MAE | MUST | TODO | Isolate edge-weight claim. |
 | R009 | M3 | Adaptive threshold | learned per-node threshold at matched degree | LargeST-SD | MAE/RMSE/WAPE, edge budget, degree stats | MUST | TODO | Core novelty test. |
 | R010 | M3 | Full method | adaptive support + dynamic weights | LargeST-SD | MAE/RMSE/WAPE, budget, time, memory | MUST | TODO | Only after R008/R009 promising. |
-| R011 | M4 | Sparse runtime proof | dense masked vs edge-index/CSR | LargeST-CA/GBA/GLA | wall-clock, memory, throughput | MUST | TODO | Required for efficiency claim. |
+| R011 | M4 | Sparse runtime proof | dense masked vs edge-index/CSR | LargeST-CA/GBA/GLA | wall-clock, memory, throughput | MUST | IN_PROGRESS | Added `SparseGraphWaveNet` gather-sum MVP and nconv benchmark script; run on GPU before making efficiency claims. |
 | R012 | M5 | Stability | top 2 methods, 3 seeds | LargeST-SD + one larger LargeST subset | mean/std metrics | MUST | TODO | Paper-grade evidence. |
 | R013 | M5 | Qualitative diagnosis | learned degree/edge weights by region/time | LargeST-SD | degree distribution, peak/off-peak patterns | NICE | TODO | After positive quantitative signal. |
 | R014 | M5 | PEMS replication | best method | coordinate-validated PEMS | MAE/RMSE/MAPE/WAPE | MUST | TODO | Main-table replication only if coordinates validated. |
