@@ -186,6 +186,24 @@ FILTER_FLOW=1 \
 bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_month.sh
 ```
 
+Current official-raw mainline, with no route filtering or expansion:
+
+```bash
+DATA_ROOT=/data/yuzhang_fei/xuancheng_cityflow \
+DURATION=3600 \
+BUCKET_SECONDS=60 \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_official_raw_one_day.sh 2023-04-03
+
+DATA_ROOT=/data/yuzhang_fei/xuancheng_cityflow \
+DURATION=86400 \
+BUCKET_SECONDS=60 \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_official_raw_month.sh
+```
+
+These official-raw wrappers force `FILTER_FLOW=0` and preserve the official
+`rlTrafficLight=true` setting through `TL_MODE=official_rl`. CityFlow's own
+`Invalid route ... Omitted by default` behavior is therefore kept intact.
+
 Render the roadnet or an aggregation result on OpenStreetMap:
 
 ```bash

@@ -44,3 +44,13 @@ Use raw official flow files and either:
    baseline, or
 2. continue with the reported `mpagent-launcher` workaround to aggregate
    official `MPAgent` simulations, while clearly labeling the launcher bypass.
+
+Adopted immediate solution:
+
+- Official-raw direct-engine road aggregation uses raw daily
+  `data_2023_04_DD_type_filtered.json` files with `FILTER_FLOW=0`.
+- The wrapper preserves the official `rlTrafficLight=true` config through
+  `TL_MODE=official_rl`.
+- Output is isolated under `road_agg_official_raw_direct` or
+  `road_agg_30d_official_raw_direct`, separate from earlier `.valid.json`
+  experiments.
