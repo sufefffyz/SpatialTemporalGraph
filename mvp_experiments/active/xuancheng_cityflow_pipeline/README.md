@@ -204,6 +204,20 @@ These official-raw wrappers force `FILTER_FLOW=0` and preserve the official
 `rlTrafficLight=true` setting through `TL_MODE=official_rl`. CityFlow's own
 `Invalid route ... Omitted by default` behavior is therefore kept intact.
 
+Lane-level official-raw smoke, NPZ only by default:
+
+```bash
+DATA_ROOT=/data/yuzhang_fei/xuancheng_cityflow \
+OUTPUT_DIR=/data/yuzhang_fei/xuancheng_cityflow/lane_agg_official_raw_direct_smoke \
+DURATION=3600 \
+BUCKET_SECONDS=60 \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_official_raw_lane_one_day.sh 2023-04-03
+```
+
+Lane-level output has shape `(time_buckets, 3546 lanes, 5 features)` and can be
+aggregated to road-level later. Dense lane CSV is intentionally opt-in through
+`WRITE_CSV=1`.
+
 Render the roadnet or an aggregation result on OpenStreetMap:
 
 ```bash
