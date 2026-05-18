@@ -6,18 +6,24 @@ from .gwnet_arch import linear
 
 
 class PackedSparseSupport(nn.Module):
-    """Column-wise packed sparse support for Graph WaveNet nconv.
+    """Sparse support for Graph WaveNet nconv.
 
     Dense Graph WaveNet applies ``einsum('ncvl,vw->ncwl')``.  For each target
-    node ``w`` this module stores only source nodes ``v`` with non-zero
-    ``A[v, w]`` and computes the same aggregation with gather + weighted sum.
+    node ``w`` it aggregates source nodes ``v`` with ``A[v, w]``.  The default
+    backend stores ``A.T`` as sparse CSR and computes ``A.T @ X`` with
+    ``torch.sparse.mm``; this is the path that showed actual GPU speedup in the
+    SD beta1 microbenchmark.
     """
 
-    def __init__(self, dense_support, include_self_for_empty=False):
+    def __init__(self, dense_support, include_self_for_empty=False, backend="csr"):
         super().__init__()
         support = torch.as_tensor(dense_support, dtype=torch.float32).detach().cpu()
         if support.ndim != 2 or support.shape[0] != support.shape[1]:
             raise ValueError(f"support must be a square matrix, got {tuple(support.shape)}")
+
+        backend = str(backend).lower()
+        if backend not in {"csr", "coo", "gather"}:
+            raise ValueError(f"unsupported sparse backend: {backend}")
 
         num_nodes = int(support.shape[0])
         nonzero = support != 0
@@ -43,13 +49,28 @@ class PackedSparseSupport(nn.Module):
         self.num_nodes = num_nodes
         self.max_degree = max_degree
         self.num_edges = int(nonzero.sum().item())
-        self.register_buffer("source_index", source_index)
-        self.register_buffer("edge_weight", edge_weight)
+        self.backend = backend
+        if backend == "csr":
+            self.register_buffer("support_t", support.T.to_sparse_csr())
+        elif backend == "coo":
+            self.register_buffer("support_t", support.T.to_sparse_coo().coalesce())
+        else:
+            self.register_buffer("source_index", source_index)
+            self.register_buffer("edge_weight", edge_weight)
 
     def forward(self, x):
         batch_size, channels, num_nodes, steps = x.shape
         if num_nodes != self.num_nodes:
             raise ValueError(f"x has {num_nodes} nodes, support has {self.num_nodes}")
+
+        if self.backend in {"csr", "coo"}:
+            x_flat = x.permute(2, 0, 1, 3).reshape(num_nodes, -1)
+            y_flat = torch.sparse.mm(self.support_t, x_flat)
+            return (
+                y_flat.reshape(num_nodes, batch_size, channels, steps)
+                .permute(1, 2, 0, 3)
+                .contiguous()
+            )
 
         flat_sources = self.source_index.reshape(-1)
         gathered = x.index_select(2, flat_sources)
@@ -61,7 +82,7 @@ class PackedSparseSupport(nn.Module):
 
     def extra_repr(self):
         return (
-            f"num_nodes={self.num_nodes}, num_edges={self.num_edges}, "
+            f"backend={self.backend}, num_nodes={self.num_nodes}, num_edges={self.num_edges}, "
             f"max_degree={self.max_degree}"
         )
 
@@ -150,7 +171,7 @@ class SparseGraphWaveNet(nn.Module):
             self.supports = None
             self.supports_len = 0
         else:
-            self.supports = nn.ModuleList([PackedSparseSupport(s) for s in supports])
+            self.supports = nn.ModuleList([PackedSparseSupport(s, backend="csr") for s in supports])
             self.supports_len = len(self.supports)
 
         receptive_field = 1
