@@ -58,3 +58,5 @@ Adopted immediate solution:
   `(60, 1744, 5)` and `total_entered=5408`.
 - The 30-day official-raw direct-engine aggregation is running in screen
   `xuancheng_30d_official_raw_direct`.
+- A lane-level 3,600-second smoke on `2023-04-03` succeeded with tensor shape
+  `(60, 3546, 5)`, NPZ size 293K, and `total_entered=5408`.
