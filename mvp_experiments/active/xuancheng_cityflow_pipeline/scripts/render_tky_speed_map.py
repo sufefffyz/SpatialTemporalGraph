@@ -170,6 +170,8 @@ def render_html(
     feature_json = json.dumps(feature_collection, ensure_ascii=False, separators=(",", ":"))
     breaks_json = json.dumps(breaks)
     colors_json = json.dumps(SPEED_COLORS)
+    tile_url_json = json.dumps(tile["tiles"])
+    tile_attribution_json = json.dumps(tile["attribution"])
     html_text = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -220,9 +222,9 @@ def render_html(
     let mode = "mean";
 
     const map = L.map("map", {{ preferCanvas: true }});
-    L.tileLayer("{tile['tiles']}", {{
+    L.tileLayer({tile_url_json}, {{
       maxZoom: 19,
-      attribution: "{tile['attribution']}"
+      attribution: {tile_attribution_json}
     }}).addTo(map);
 
     function colorFor(value) {{
