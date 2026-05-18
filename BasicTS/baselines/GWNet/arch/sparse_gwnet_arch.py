@@ -1,3 +1,5 @@
+import warnings
+
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -51,7 +53,14 @@ class PackedSparseSupport(nn.Module):
         self.num_edges = int(nonzero.sum().item())
         self.backend = backend
         if backend == "csr":
-            self.register_buffer("support_t", support.T.to_sparse_csr())
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    message="Sparse CSR tensor support is in beta state.*",
+                    category=UserWarning,
+                )
+                support_t = support.T.to_sparse_csr()
+            self.register_buffer("support_t", support_t)
         elif backend == "coo":
             self.register_buffer("support_t", support.T.to_sparse_coo().coalesce())
         else:
