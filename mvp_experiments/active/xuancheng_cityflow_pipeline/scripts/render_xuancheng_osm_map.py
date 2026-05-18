@@ -17,6 +17,38 @@ DEFAULT_OSM_TILES = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 DEFAULT_OSM_ATTRIBUTION = (
     '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 )
+TILE_PRESETS = {
+    "osm": {
+        "tiles": DEFAULT_OSM_TILES,
+        "attribution": DEFAULT_OSM_ATTRIBUTION,
+    },
+    "carto-positron": {
+        "tiles": "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        "attribution": (
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
+            'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        ),
+    },
+    "carto-dark": {
+        "tiles": "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+        "attribution": (
+            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
+            'contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+        ),
+    },
+    "esri-imagery": {
+        "tiles": (
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/"
+            "MapServer/tile/{z}/{y}/{x}"
+        ),
+        "attribution": "Tiles &copy; Esri",
+    },
+}
+COLOR_PALETTES = {
+    "traffic": ["#2a9d8f", "#8ab17d", "#e9c46a", "#f4a261", "#e76f51", "#b91c1c"],
+    "high-contrast": ["#00a86b", "#7ccf00", "#ffdd00", "#ff8a00", "#ff3b30", "#b00020"],
+    "cyan-magenta": ["#06b6d4", "#22d3ee", "#a3e635", "#facc15", "#fb7185", "#d946ef"],
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,7 +103,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--line-weight-max", type=float, default=7.0)
     parser.add_argument("--line-opacity", type=float, default=0.78)
     parser.add_argument("--zoom-start", type=int, default=12)
-    parser.add_argument("--tiles", default=DEFAULT_OSM_TILES, help="Leaflet tile URL template.")
+    parser.add_argument(
+        "--tile-preset",
+        choices=sorted(TILE_PRESETS),
+        default="osm",
+        help="Background tile preset. Ignored when --tiles is passed.",
+    )
+    parser.add_argument("--tiles", default=None, help="Custom Leaflet tile URL template.")
+    parser.add_argument("--tile-attribution", default=None, help="Attribution for --tiles.")
+    parser.add_argument(
+        "--color-palette",
+        choices=sorted(COLOR_PALETTES),
+        default="traffic",
+        help="Road-value color palette.",
+    )
+    parser.add_argument("--zero-color", default="#64748b", help="Color for zero/missing values.")
+    parser.add_argument("--line-halo-color", default="#111827", help="Road outline color for contrast.")
+    parser.add_argument("--line-halo-extra", type=float, default=2.2, help="Extra width for road outline.")
+    parser.add_argument("--line-halo-opacity", type=float, default=0.45, help="Road outline opacity.")
     parser.add_argument("--title", default="Xuancheng CityFlow roads on OpenStreetMap")
     return parser.parse_args()
 
@@ -324,10 +373,9 @@ def build_color_breaks(values: list[float]) -> list[float]:
     return [percentile(positives, q) for q in (20.0, 40.0, 60.0, 80.0, 95.0)]
 
 
-def color_for_value(value: float | None, breaks: list[float]) -> str:
+def color_for_value(value: float | None, breaks: list[float], palette: list[str], zero_color: str) -> str:
     if value is None or not math.isfinite(value) or value <= 0:
-        return "#64748b"
-    palette = ["#2a9d8f", "#8ab17d", "#e9c46a", "#f4a261", "#e76f51", "#b91c1c"]
+        return zero_color
     for index, threshold in enumerate(breaks):
         if value <= threshold:
             return palette[index]
@@ -349,6 +397,8 @@ def build_geojson(
     hide_zero: bool,
     min_weight: float,
     max_weight: float,
+    color_palette: str,
+    zero_color: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     roads = roadnet.get("roads", [])
     resolved_mode = infer_coord_mode(roads) if coord_mode == "auto" else coord_mode
@@ -356,6 +406,7 @@ def build_geojson(
     all_values = list(values_by_road.values()) if values_by_road else []
     max_value = max(finite_positive(all_values), default=0.0)
     breaks = build_color_breaks(all_values)
+    palette = COLOR_PALETTES[color_palette]
     features = []
     bounds: list[tuple[float, float]] = []
 
@@ -388,7 +439,9 @@ def build_geojson(
         properties = {
             "road_id": road_id,
             "value": round(value, 6) if value is not None and math.isfinite(value) else None,
-            "color": color_for_value(value, breaks) if values_by_road is not None else "#2563eb",
+            "color": color_for_value(value, breaks, palette, zero_color)
+            if values_by_road is not None
+            else "#2563eb",
             "weight": round(weight_for_value(value, max_value, min_weight, max_weight), 3)
             if values_by_road is not None
             else min_weight,
@@ -417,6 +470,8 @@ def build_geojson(
         "bounds": [[min(lats), min(lons)], [max(lats), max(lons)]],
         "value_breaks": breaks,
         "max_value": max_value,
+        "color_palette": color_palette,
+        "zero_color": zero_color,
     }
     return {"type": "FeatureCollection", "features": features}, summary
 
@@ -431,8 +486,12 @@ def build_html(
     summary: dict[str, Any],
     value_metadata: dict[str, Any] | None,
     tiles: str,
+    tile_attribution: str,
     zoom_start: int,
     line_opacity: float,
+    line_halo_color: str,
+    line_halo_extra: float,
+    line_halo_opacity: float,
 ) -> str:
     safe_title = html.escape(title)
     map_summary = dict(summary)
@@ -442,6 +501,8 @@ def build_html(
     legend_text = " | ".join(f"{value:.2f}" for value in legend_breaks if math.isfinite(float(value)))
     if not legend_text:
         legend_text = "roadnet only"
+
+    halo_enabled = line_halo_extra > 0 and line_halo_opacity > 0
 
     return f"""<!doctype html>
 <html lang="en">
@@ -546,7 +607,7 @@ def build_html(
     const map = L.map("map", {{ zoomControl: true }});
     L.tileLayer("{tiles}", {{
       maxZoom: 19,
-      attribution: `{DEFAULT_OSM_ATTRIBUTION}`
+      attribution: {html_json(tile_attribution)}
     }}).addTo(map);
 
     function popupHtml(properties) {{
@@ -558,6 +619,22 @@ def build_html(
         length: ${{properties.length_m}} m<br>
         speed limit: ${{properties.speed_limit_kmh}} km/h
       `;
+    }}
+
+    const haloEnabled = {str(halo_enabled).lower()};
+    if (haloEnabled) {{
+      L.geoJSON(roadData, {{
+        interactive: false,
+        style: function(feature) {{
+          return {{
+            color: "{line_halo_color}",
+            opacity: {line_halo_opacity:.4f},
+            weight: feature.properties.weight + {line_halo_extra:.3f},
+            lineCap: "round",
+            lineJoin: "round"
+          }};
+        }}
+      }}).addTo(map);
     }}
 
     const roads = L.geoJSON(roadData, {{
@@ -605,8 +682,16 @@ def write_summary(output_html: Path, summary: dict[str, Any], value_metadata: di
     return summary_path
 
 
+def resolve_tiles(args: argparse.Namespace) -> tuple[str, str, str]:
+    if args.tiles:
+        return args.tiles, args.tile_attribution or DEFAULT_OSM_ATTRIBUTION, "custom"
+    preset = TILE_PRESETS[args.tile_preset]
+    return preset["tiles"], preset["attribution"], args.tile_preset
+
+
 def main() -> int:
     args = parse_args()
+    tiles, tile_attribution, resolved_tile_preset = resolve_tiles(args)
     roadnet_path = Path(args.roadnet).expanduser().resolve()
     sumo_net_path = Path(args.sumo_net).expanduser().resolve() if args.sumo_net else None
     output_html = Path(args.output_html).expanduser().resolve()
@@ -630,8 +715,20 @@ def main() -> int:
         args.hide_zero,
         args.line_weight_min,
         args.line_weight_max,
+        args.color_palette,
+        args.zero_color,
     )
-    summary.update({"roadnet": str(roadnet_path), "output_html": str(output_html)})
+    summary.update(
+        {
+            "roadnet": str(roadnet_path),
+            "output_html": str(output_html),
+            "tile_preset": resolved_tile_preset,
+            "tiles": tiles,
+            "line_halo_color": args.line_halo_color,
+            "line_halo_extra": args.line_halo_extra,
+            "line_halo_opacity": args.line_halo_opacity,
+        }
+    )
 
     output_html.parent.mkdir(parents=True, exist_ok=True)
     output_html.write_text(
@@ -640,9 +737,13 @@ def main() -> int:
             geojson,
             summary,
             value_metadata,
-            args.tiles,
+            tiles,
+            tile_attribution,
             args.zoom_start,
             args.line_opacity,
+            args.line_halo_color,
+            args.line_halo_extra,
+            args.line_halo_opacity,
         ),
         encoding="utf-8",
     )
