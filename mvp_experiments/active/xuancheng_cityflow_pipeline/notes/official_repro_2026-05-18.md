@@ -54,3 +54,7 @@ Adopted immediate solution:
 - Output is isolated under `road_agg_official_raw_direct` or
   `road_agg_30d_official_raw_direct`, separate from earlier `.valid.json`
   experiments.
+- A 3,600-second smoke on `2023-04-03` succeeded with tensor shape
+  `(60, 1744, 5)` and `total_entered=5408`.
+- The 30-day official-raw direct-engine aggregation is running in screen
+  `xuancheng_30d_official_raw_direct`.
