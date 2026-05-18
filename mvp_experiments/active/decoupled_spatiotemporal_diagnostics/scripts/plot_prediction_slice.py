@@ -67,6 +67,24 @@ def parse_args() -> argparse.Namespace:
         default="centered",
         help="Low-frequency moving average style. Diagnostic default is centered.",
     )
+    parser.add_argument(
+        "--low-components",
+        nargs="+",
+        choices=["moving_average", "fft_lowpass"],
+        default=["moving_average"],
+        help="Low-pass curves to overlay for the ground-truth signal.",
+    )
+    parser.add_argument(
+        "--fft-cutoff-period",
+        type=float,
+        default=None,
+        help="FFT low-pass cutoff in time steps. Defaults to --low-window.",
+    )
+    parser.add_argument(
+        "--hide-predictions",
+        action="store_true",
+        help="Only plot ground truth and low-pass components; still needs one run to load targets.",
+    )
     parser.add_argument("--num-nodes", type=int, default=None)
     parser.add_argument("--output-len", type=int, default=None)
     parser.add_argument("--target-dim", type=int, default=1)
@@ -237,6 +255,46 @@ def moving_average_1d(series: np.ndarray, window: int, method: str) -> np.ndarra
     return ((cumsum[window:] - cumsum[:-window]) / float(window)).astype(np.float32)
 
 
+def fill_nonfinite_1d(series: np.ndarray) -> np.ndarray:
+    work = np.asarray(series, dtype=np.float64)
+    valid = np.isfinite(work)
+    if np.all(valid):
+        return work
+    fallback = float(np.nanmean(work[valid])) if np.any(valid) else 0.0
+    return np.where(valid, work, fallback)
+
+
+def fft_lowpass_1d(series: np.ndarray, cutoff_period: float) -> np.ndarray:
+    series = np.asarray(series, dtype=np.float32)
+    if cutoff_period <= 1 or series.size <= 1:
+        return series.copy()
+    n_steps = int(series.size)
+    cutoff_freq = 1.0 / float(cutoff_period)
+    freqs = np.fft.rfftfreq(n_steps, d=1.0)
+    keep = freqs <= cutoff_freq + 1e-12
+    spectrum = np.fft.rfft(fill_nonfinite_1d(series))
+    spectrum[~keep] = 0.0
+    low = np.fft.irfft(spectrum, n=n_steps).astype(np.float32)
+    low[~np.isfinite(series)] = np.nan
+    return low
+
+
+def low_component_1d(series: np.ndarray, component: str, window: int, method: str, fft_cutoff_period: float) -> np.ndarray:
+    if component == "moving_average":
+        return moving_average_1d(series, window, method)
+    if component == "fft_lowpass":
+        return fft_lowpass_1d(series, fft_cutoff_period)
+    raise ValueError(f"Unknown low component: {component}")
+
+
+def low_component_label(component: str, window: int, method: str, fft_cutoff_period: float) -> str:
+    if component == "moving_average":
+        return f"GT low moving-average ({method}, w={window})"
+    if component == "fft_lowpass":
+        return f"GT low FFT low-pass (P>={fft_cutoff_period:g})"
+    return component
+
+
 def target_index_to_sample(args: argparse.Namespace, horizon: int, input_len: int, frequency: int) -> int:
     if args.start_datetime:
         if not args.dataset_start_datetime:
@@ -339,6 +397,10 @@ def main() -> int:
     runs = discover_runs(args)
     if not runs:
         raise FileNotFoundError("No test_results runs found. Pass --run or --search-root.")
+    low_components = list(dict.fromkeys(args.low_components))
+    fft_cutoff_period = float(args.fft_cutoff_period or args.low_window)
+    if fft_cutoff_period <= 0:
+        raise ValueError(f"--fft-cutoff-period must be positive, got {fft_cutoff_period}")
 
     horizons = sorted({h for h in args.horizon if 1 <= h <= output_len})
     nodes = sorted({node for node in args.node if 0 <= node < num_nodes})
@@ -348,10 +410,12 @@ def main() -> int:
         raise ValueError(f"No valid node in {args.node}; num_nodes={num_nodes}")
 
     target_arr = load_saved_array(runs[0].result_dir / "targets.npy", args.dtype, output_len, num_nodes, args.target_dim)
-    pred_by_run = {
-        run.name: load_saved_array(run.result_dir / "predictions.npy", args.dtype, output_len, num_nodes, args.target_dim)
-        for run in runs
-    }
+    pred_by_run = {}
+    if not args.hide_predictions:
+        pred_by_run = {
+            run.name: load_saved_array(run.result_dir / "predictions.npy", args.dtype, output_len, num_nodes, args.target_dim)
+            for run in runs
+        }
     num_samples = int(target_arr.shape[0])
     colors = plt.cm.tab10.colors
     written: list[str] = []
@@ -377,29 +441,49 @@ def main() -> int:
 
         for node in nodes:
             target_full = np.asarray(target_arr[:, horizon - 1, node], dtype=np.float32)
-            target_low = moving_average_1d(target_full, args.low_window, args.low_method)
+            target_low_by_component = {
+                component: low_component_1d(
+                    target_full,
+                    component,
+                    args.low_window,
+                    args.low_method,
+                    fft_cutoff_period,
+                )
+                for component in low_components
+            }
             target_slice = target_full[sample_start:sample_end]
-            low_slice = target_low[sample_start:sample_end]
 
             fig, ax = plt.subplots(figsize=(11.5, 4.8))
             ax.plot(x, target_slice, color="black", linewidth=2.2, label="Ground truth")
-            ax.plot(
-                x,
-                low_slice,
-                color="black",
-                linewidth=2.0,
-                linestyle="--",
-                alpha=0.72,
-                label=f"GT low ({args.low_method}, w={args.low_window})",
-            )
+            low_styles = {
+                "moving_average": {"color": "#1f77b4", "linestyle": "--"},
+                "fft_lowpass": {"color": "#d62728", "linestyle": "-."},
+            }
+            low_slices = {}
+            for component in low_components:
+                low_slice = target_low_by_component[component][sample_start:sample_end]
+                low_slices[component] = low_slice
+                style = low_styles.get(component, {})
+                ax.plot(
+                    x,
+                    low_slice,
+                    linewidth=2.0,
+                    alpha=0.86,
+                    label=low_component_label(component, args.low_window, args.low_method, fft_cutoff_period),
+                    **style,
+                )
             csv_rows = []
             for idx in range(args.steps):
                 row = {
                     "sample_index": sample_start + idx,
                     "target_global_index": test_start_index(args) + sample_start + idx + input_len + (horizon - 1),
                     "ground_truth": float(target_slice[idx]),
-                    "ground_truth_low": float(low_slice[idx]),
                 }
+                for component, low_slice in low_slices.items():
+                    column = f"ground_truth_low_{component}"
+                    row[column] = float(low_slice[idx])
+                    if component == "moving_average":
+                        row["ground_truth_low"] = float(low_slice[idx])
                 if args.dataset_start_datetime:
                     dataset_dt = datetime.fromisoformat(args.dataset_start_datetime)
                     row["target_datetime"] = (
@@ -447,6 +531,9 @@ def main() -> int:
         "steps": args.steps,
         "low_window": args.low_window,
         "low_method": args.low_method,
+        "low_components": low_components,
+        "fft_cutoff_period": fft_cutoff_period,
+        "hide_predictions": args.hide_predictions,
         "test_start_index": test_start_index(args),
         "input_len": input_len,
         "output_len": output_len,
