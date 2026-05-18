@@ -21,6 +21,25 @@ One-sentence thesis:
 
 ## Official-Code Alignment
 
+Current strict-official status, checked on the server against official commit
+`81e64b2`:
+
+- The released raw `cfg/xuancheng/config_xuancheng_test.json` path can run
+  directly with `cityflow.Engine` for at least 3,600 seconds using the original
+  `data_2023_04_03_type_filtered.json`. CityFlow emits official
+  `Invalid route ... Omitted by default` warnings and continues.
+- The official `test.py` entrypoint is not directly reproducible from the
+  public release in the current environment: after installing its direct
+  `orjson` dependency, it fails because `trip_2023_04_04_17.json` is not in
+  the downloaded public Xuancheng release.
+- The official `from agent import MPAgent` import path currently fails before
+  MPAgent is reached because `agent/__init__.py` imports baseline agents that
+  require missing `agent.dqn_agent` source.
+- A diagnostic launcher can run the official `CityFlowEnv` plus official
+  `agent/base_agent.py` and `agent/mp_agent.py` for 3,600 seconds, but only by
+  bypassing the broken `agent/__init__.py`. This is reported as a launcher
+  workaround, not a fully official as-is entrypoint.
+
 The pipeline keeps the official CityFlow release format:
 
 - Uses the released `roadnet_xuancheng250319.json` and daily `data_2023_04_DD_type_filtered.json` flow files.
@@ -28,7 +47,11 @@ The pipeline keeps the official CityFlow release format:
 - Avoids CityFlow replay logs by default because official replay splitting code treats them as bulky artifacts.
 
 One deliberate preprocessing choice is exposed in `make_cityflow_config.py`: default traffic-light mode is fixed-time (`rlTrafficLight=false`) so a no-agent replay follows roadnet signal phases. Pass `--tl-mode official_rl` to preserve the official training config's `rlTrafficLight=true`.
-Another deliberate preprocessing step is route filtering/expansion: the daily Xuancheng flow can contain route anchors that are unreachable in the released roadnet, and long anchor routes can trigger CityFlow's C++ router. `run_server_xuancheng_one_day.sh` defaults to `FILTER_FLOW=1`, creating `*.valid.json` with reachable anchors expanded to full shortest paths before simulation.
+
+Earlier route filtering/expansion created `*.valid.json` files and is now
+treated as an experimental deviation, not the strict-official mainline. The
+strict-official reproduction path must first use raw released flow files and
+CityFlow's own invalid-route omission behavior.
 
 ## AI-Supplemented Pieces
 
@@ -38,6 +61,10 @@ These pieces are not official repository logic and should be reported as added p
 - `make_cityflow_config.py`: a config generator that rewrites paths into CityFlow-friendly `dir + relative filename` form.
 - `filter_cityflow_flow.py`: an added guard that removes flows whose route anchors are unreachable in the released roadnet and expands reachable anchor routes into full shortest paths. CityFlow supports anchor routes and fills shortest paths internally, but the full-day Xuancheng flow triggered a CityFlow C++ router assertion without this expansion.
 - `run_cityflow_road_aggregation.py`: the actual 1-minute road-level aggregation into dense CSV/NPZ tensors. The official repo exposes CityFlow state APIs but does not provide this STGNN tensor builder.
+- `run_official_xuancheng_repro.py`: a strict-official diagnostic runner. Its
+  `direct-engine` mode uses raw official config/data. Its `mpagent-launcher`
+  mode requires `--allow-bypass-agent-init` and only exists because the official
+  package import chain fails before MPAgent is reached.
 - `render_xuancheng_osm_map.py`: an added visualization utility that converts the released SUMO/CityFlow local coordinates back to lon/lat and renders the roadnet or road-aggregation values on an OpenStreetMap Leaflet basemap.
 - Server environment workaround: Docker Hub timed out, so CityFlow was built from official `cityflow-project/CityFlow` source, then installed into the dedicated `/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow` conda environment. The earlier `/data/yuzhang_fei/xuancheng_cityflow/pydeps` directory remains the source-built staging area.
 
@@ -128,6 +155,23 @@ For smoke checks, avoid overwriting the main `road_agg` directory:
 OUTPUT_DIR=/data/yuzhang_fei/xuancheng_cityflow/road_agg_envcheck \
 DURATION=60 \
 bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_one_day.sh 2023-04-03
+```
+
+Strict-official diagnostics against the separate official checkout:
+
+```bash
+/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow/bin/python \
+  mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_official_xuancheng_repro.py \
+  --official-repo /home/yuzhang_fei/code/Hierarchical_traffic_control_platform_official \
+  --mode direct-engine \
+  --duration 3600
+
+/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow/bin/python \
+  mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_official_xuancheng_repro.py \
+  --official-repo /home/yuzhang_fei/code/Hierarchical_traffic_control_platform_official \
+  --mode mpagent-launcher \
+  --allow-bypass-agent-init \
+  --duration 3600
 ```
 
 Run all released 30 days as 1-minute road aggregation, one file pair per day:
