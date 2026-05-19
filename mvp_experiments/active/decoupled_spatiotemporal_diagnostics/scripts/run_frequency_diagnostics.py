@@ -658,15 +658,15 @@ def conditional_shift_rows(
     return metric_rows, curve_rows
 
 
-def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: bool) -> dict[int, object]:
+def build_reach_lists(adj: np.ndarray | None, hop_ks: list[int], directed: bool) -> dict[int, list[np.ndarray]]:
     if adj is None:
         return {}
     max_k = max([0, *hop_ks])
-    if max_k <= 0:
-        return {0: [np.asarray([idx], dtype=np.int64) for idx in range(adj.shape[0])]}
     work = np.asarray(adj)
     if work.ndim != 2 or work.shape[0] != work.shape[1]:
         raise ValueError(f"Adjacency must be square, got {work.shape}")
+    if max_k <= 0:
+        return {0: [np.asarray([idx], dtype=np.int64) for idx in range(work.shape[0])]}
     base = work > 0
     if not directed:
         base = base | base.T
@@ -688,9 +688,17 @@ def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: boo
             next_frontiers.append(next_nodes)
         frontier_sets = next_frontiers
         reach_by_k[hop] = [np.asarray(sorted(items), dtype=np.int64) for items in reach_sets]
+    return {k: reach_by_k[k] for k in sorted(set(hop_ks)) if k in reach_by_k}
+
+
+def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: bool) -> dict[int, object]:
+    reach_by_k = build_reach_lists(adj, hop_ks, directed)
+    if not reach_by_k:
+        return {}
     if HAS_SCIPY:
         reach_sparse: dict[int, object] = {}
         for hop, indices_by_node in reach_by_k.items():
+            num_nodes = len(indices_by_node)
             rows = []
             cols = []
             for node, indices in enumerate(indices_by_node):
@@ -700,6 +708,154 @@ def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: boo
             reach_sparse[hop] = sparse.csr_matrix((data, (rows, cols)), shape=(num_nodes, num_nodes))
         return {k: reach_sparse[k] for k in sorted(set(hop_ks)) if k in reach_sparse}
     return {k: reach_by_k[k] for k in sorted(set(hop_ks)) if k in reach_by_k}
+
+
+def shifted_slices(
+    pred: np.ndarray,
+    target: np.ndarray,
+    base_mask: np.ndarray,
+    condition_mask: np.ndarray,
+    delta: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    num_steps = pred.shape[0]
+    if delta < 0:
+        return pred[: num_steps + delta], target[-delta:], base_mask[-delta:] & condition_mask[-delta:]
+    if delta > 0:
+        return pred[delta:], target[: num_steps - delta], base_mask[: num_steps - delta] & condition_mask[: num_steps - delta]
+    return pred, target, base_mask & condition_mask
+
+
+def spatial_min_abs_error(
+    pred: np.ndarray,
+    target: np.ndarray,
+    valid: np.ndarray,
+    reach_indices: list[np.ndarray] | None,
+) -> np.ndarray:
+    pred = np.asarray(pred, dtype=np.float32)
+    target = np.asarray(target, dtype=np.float32)
+    valid = np.asarray(valid, dtype=bool) & np.isfinite(target)
+    if reach_indices is None:
+        pair_valid = valid & np.isfinite(pred)
+        return np.where(pair_valid, np.abs(pred - target), np.nan).astype(np.float32)
+
+    pred_finite = np.isfinite(pred)
+    err = np.full(target.shape, np.nan, dtype=np.float32)
+    for node, indices in enumerate(reach_indices):
+        node_valid = valid[:, node]
+        if not np.any(node_valid):
+            continue
+        candidate_pred = pred[:, indices]
+        candidate_finite = pred_finite[:, indices]
+        candidate_err = np.abs(candidate_pred - target[:, node : node + 1])
+        candidate_err = np.where(candidate_finite, candidate_err, np.inf)
+        best = np.min(candidate_err, axis=1)
+        keep = node_valid & np.isfinite(best)
+        err[keep, node] = best[keep]
+    return err
+
+
+def finite_mean_and_count(values: np.ndarray) -> tuple[float, int]:
+    finite = np.isfinite(values)
+    count = int(np.sum(finite))
+    if count == 0:
+        return float("nan"), 0
+    return float(np.mean(values[finite])), count
+
+
+def best_st_shift_summary(
+    curve_rows: list[dict[str, float | int]],
+    exact_zero_mae: float,
+) -> dict[str, float | int]:
+    zero_st_mae = next((float(row["st_shift_MAE"]) for row in curve_rows if int(row["time_shift_delta"]) == 0), float("nan"))
+    finite = [row for row in curve_rows if np.isfinite(float(row["st_shift_MAE"]))]
+    if not finite:
+        return {
+            "best_time_shift_delta": 0,
+            "best_ST_MAE": float("nan"),
+            "zero_shift_ST_MAE": zero_st_mae,
+            "exact_zero_MAE": exact_zero_mae,
+            "st_shift_gain": float("nan"),
+            "spatial_gain_at_zero": float("nan"),
+        }
+    best = min(finite, key=lambda row: (float(row["st_shift_MAE"]), abs(int(row["time_shift_delta"]))))
+    best_mae = float(best["st_shift_MAE"])
+    return {
+        "best_time_shift_delta": int(best["time_shift_delta"]),
+        "best_ST_MAE": best_mae,
+        "zero_shift_ST_MAE": zero_st_mae,
+        "exact_zero_MAE": exact_zero_mae,
+        "st_shift_gain": (exact_zero_mae - best_mae) / exact_zero_mae if exact_zero_mae and np.isfinite(exact_zero_mae) else float("nan"),
+        "spatial_gain_at_zero": (exact_zero_mae - zero_st_mae) / exact_zero_mae if exact_zero_mae and np.isfinite(exact_zero_mae) else float("nan"),
+    }
+
+
+def joint_st_shift_rows(
+    system: str,
+    horizon: int,
+    pred: np.ndarray,
+    target: np.ndarray,
+    mask: np.ndarray,
+    max_shift: int,
+    hop_ks: list[int],
+    reach_lists_by_k: dict[int, list[np.ndarray]],
+    peak_q: float,
+    high_q: float,
+    ramp_q: float,
+) -> tuple[list[dict], list[dict]]:
+    conditions = conditional_shift_masks(target, mask, peak_q, high_q, ramp_q)
+    exact_error = spatial_min_abs_error(pred, target, mask, None)
+    exact_zero_by_condition = {
+        condition: finite_mean_and_count(np.where(condition_mask, exact_error, np.nan))
+        for condition, condition_mask in conditions.items()
+    }
+    curves_by_key: dict[tuple[int, str], list[dict[str, float | int]]] = {}
+    curve_rows: list[dict] = []
+    metric_rows: list[dict] = []
+
+    for hop_k in sorted(set(hop_ks)):
+        if hop_k == 0:
+            reach_indices = None
+        else:
+            reach_indices = reach_lists_by_k.get(hop_k)
+            if reach_indices is None:
+                continue
+        for delta in range(-int(max_shift), int(max_shift) + 1):
+            pred_slice, target_slice, base_slice = shifted_slices(pred, target, mask, mask, delta)
+            st_error = spatial_min_abs_error(pred_slice, target_slice, base_slice, reach_indices)
+            for condition, condition_mask in conditions.items():
+                _, _, condition_slice = shifted_slices(pred, target, mask, condition_mask, delta)
+                mae, count = finite_mean_and_count(np.where(condition_slice, st_error, np.nan))
+                row = {
+                    "time_shift_delta": delta,
+                    "st_shift_MAE": mae,
+                    "valid_count": count,
+                }
+                curves_by_key.setdefault((hop_k, condition), []).append(row)
+                curve_rows.append(
+                    {
+                        "system": system,
+                        "horizon": horizon,
+                        "alignment_hop_k": hop_k,
+                        "condition": condition,
+                        **row,
+                    }
+                )
+
+    for (hop_k, condition), curve in curves_by_key.items():
+        exact_zero_mae, exact_count = exact_zero_by_condition[condition]
+        zero_count = next((int(row["valid_count"]) for row in curve if int(row["time_shift_delta"]) == 0), 0)
+        metric_rows.append(
+            {
+                "system": system,
+                "horizon": horizon,
+                "alignment_hop_k": hop_k,
+                "condition": condition,
+                "exact_valid_count": exact_count,
+                "condition_valid_count": zero_count,
+                **best_st_shift_summary(curve, exact_zero_mae),
+            }
+        )
+    return metric_rows, curve_rows
 
 
 def spatial_dilate(mask: np.ndarray, reach_indices: object | None) -> np.ndarray:
@@ -1253,6 +1409,7 @@ def build_markdown(
     rank_summary_rows: list[dict],
     alignment_metric_rows: list[dict],
     conditional_shift_metric_rows: list[dict],
+    joint_st_shift_metric_rows: list[dict],
     component_rows: list[dict],
     peak_metric_rows: list[dict],
     residual_metric_rows: list[dict],
@@ -1332,6 +1489,20 @@ def build_markdown(
             )
     else:
         lines.append("No conditional ShiftGain diagnostics were generated.")
+
+    lines.extend(["", "## Joint Spatiotemporal ShiftGain Diagnostics", ""])
+    if joint_st_shift_metric_rows:
+        lines.append("STShiftGain allows both prediction-time shifts and k-hop spatial substitution, using exact same-node/time MAE as the denominator.")
+        lines.append("| System | Horizon | Hop k | Condition | STShiftGain | Spatial Gain @0 | Best Shift | Exact MAE | Best ST-MAE | Count |")
+        lines.append("|---|---:|---:|---|---:|---:|---:|---:|---:|---:|")
+        for row in joint_st_shift_metric_rows[:120]:
+            lines.append(
+                f"| {row['system']} | {row['horizon']} | {row['alignment_hop_k']} | {row['condition']} | "
+                f"{row['st_shift_gain']:.4g} | {row['spatial_gain_at_zero']:.4g} | {row['best_time_shift_delta']} | "
+                f"{row['exact_zero_MAE']:.4g} | {row['best_ST_MAE']:.4g} | {row['condition_valid_count']} |"
+            )
+    else:
+        lines.append("No joint spatiotemporal ShiftGain diagnostics were generated.")
 
     lines.extend(["", "## Decomposition-Dependent Low/High Metrics", ""])
     if component_rows:
@@ -1436,12 +1607,15 @@ def main() -> None:
     time_shift_curve_rows: list[dict] = []
     conditional_shift_metric_rows: list[dict] = []
     conditional_time_shift_curve_rows: list[dict] = []
+    joint_st_shift_metric_rows: list[dict] = []
+    joint_st_time_shift_curve_rows: list[dict] = []
     component_rows: list[dict] = []
     peak_metric_rows: list[dict] = []
     distribution_rows: list[dict] = []
     residual_metric_rows: list[dict] = []
     spatial_metric_rows: list[dict] = []
     run_reports: list[dict] = []
+    reach_lists_by_k = build_reach_lists(adj, alignment_hop_ks, directed=args.alignment_directed)
 
     for run in runs:
         pred_path = run.result_dir / "predictions.npy"
@@ -1505,6 +1679,21 @@ def main() -> None:
             )
             conditional_shift_metric_rows.extend(cond_rows)
             conditional_time_shift_curve_rows.extend(cond_curve_rows)
+            st_rows, st_curve_rows = joint_st_shift_rows(
+                run.name,
+                horizon,
+                pred_h,
+                target_h,
+                target_mask,
+                args.alignment_max_shift,
+                alignment_hop_ks,
+                reach_lists_by_k,
+                args.peak_q,
+                args.condition_high_q,
+                args.condition_ramp_q,
+            )
+            joint_st_shift_metric_rows.extend(st_rows)
+            joint_st_time_shift_curve_rows.extend(st_curve_rows)
 
             if not args.alignment_only:
                 for method in decomposition_methods:
@@ -1575,6 +1764,8 @@ def main() -> None:
     write_csv(args.output_dir / "time_shift_curve.csv", time_shift_curve_rows)
     write_csv(args.output_dir / "conditional_shift_metrics.csv", conditional_shift_metric_rows)
     write_csv(args.output_dir / "conditional_time_shift_curve.csv", conditional_time_shift_curve_rows)
+    write_csv(args.output_dir / "joint_st_shift_metrics.csv", joint_st_shift_metric_rows)
+    write_csv(args.output_dir / "joint_st_time_shift_curve.csv", joint_st_time_shift_curve_rows)
     write_csv(args.output_dir / "component_metrics.csv", component_rows)
     write_csv(args.output_dir / "peak_window_metrics.csv", peak_metric_rows)
     write_csv(args.output_dir / "distribution_metrics.csv", distribution_rows)
@@ -1588,6 +1779,7 @@ def main() -> None:
             rank_summary_rows,
             alignment_metric_rows,
             conditional_shift_metric_rows,
+            joint_st_shift_metric_rows,
             component_rows,
             peak_metric_rows,
             residual_metric_rows,

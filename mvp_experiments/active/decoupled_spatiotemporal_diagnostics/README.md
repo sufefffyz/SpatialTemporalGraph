@@ -96,11 +96,14 @@ alignment_metrics.csv                ShiftGain / PeakLag / relaxed peak hit metr
 time_shift_curve.csv                 MAE under small prediction-time shifts
 conditional_shift_metrics.csv        ShiftGain by all / normal / high_volume / peak / ramp regimes
 conditional_time_shift_curve.csv      shifted-MAE curves for each traffic regime
+joint_st_shift_metrics.csv           STShiftGain with time shifts plus k-hop spatial substitution
+joint_st_time_shift_curve.csv         STShiftGain curves by traffic regime and spatial hop
 spatial_residual_metrics.csv         optional structural diagnostics, not performance ranking metrics
 diagnostic_summary.md                compact human-readable summary
 standard_average_summary.csv          standard metrics averaged across horizons
 alignment_average_summary.csv         alignment diagnostics averaged across horizons
 conditional_shift_average_summary.csv conditional ShiftGain averaged across horizons
+joint_st_shift_average_summary.csv    joint spatiotemporal ShiftGain averaged across horizons
 decomposition_average_summary.csv     decomposition-dependent low/high metrics averaged across horizons
 decoupled_method_comparison.csv       metric deltas between decomposition methods
 ```

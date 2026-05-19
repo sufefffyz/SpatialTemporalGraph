@@ -269,6 +269,44 @@ def build_conditional_shift_summary_rows(conditional_rows: list[dict], systems: 
     return rows
 
 
+def build_joint_st_shift_summary_rows(joint_rows: list[dict], systems: list[str]) -> list[dict]:
+    if not joint_rows:
+        return []
+    condition_order = {"all": 0, "normal": 1, "high_volume": 2, "peak": 3, "ramp": 4}
+    conditions = sorted({row.get("condition", "") for row in joint_rows}, key=lambda item: (condition_order.get(item, 99), item))
+    hop_ks = sorted({to_int(row, "alignment_hop_k") for row in joint_rows})
+    rows: list[dict] = []
+    for hop_k in hop_ks:
+        for condition in conditions:
+            for system in systems:
+                subset = [
+                    row
+                    for row in joint_rows
+                    if row.get("system") == system
+                    and row.get("condition") == condition
+                    and to_int(row, "alignment_hop_k") == hop_k
+                ]
+                if not subset:
+                    continue
+                best_deltas = [to_float(row, "best_time_shift_delta") for row in subset]
+                rows.append(
+                    {
+                        "system": system,
+                        "alignment_hop_k": hop_k,
+                        "condition": condition,
+                        "avg_st_shift_gain": average([to_float(row, "st_shift_gain") for row in subset]),
+                        "avg_spatial_gain_at_zero": average([to_float(row, "spatial_gain_at_zero") for row in subset]),
+                        "avg_best_time_shift_delta": average(best_deltas),
+                        "avg_abs_best_time_shift_delta": average([abs(value) for value in best_deltas]),
+                        "avg_exact_zero_MAE": average([to_float(row, "exact_zero_MAE") for row in subset]),
+                        "avg_zero_shift_ST_MAE": average([to_float(row, "zero_shift_ST_MAE") for row in subset]),
+                        "avg_best_ST_MAE": average([to_float(row, "best_ST_MAE") for row in subset]),
+                        "avg_condition_valid_count": average([to_float(row, "condition_valid_count") for row in subset]),
+                    }
+                )
+    return rows
+
+
 def save_fig(fig: plt.Figure, output_dir: Path, stem: str, plot_format: str) -> None:
     formats = ["png", "pdf"] if plot_format == "both" else [plot_format]
     for suffix in formats:
@@ -491,6 +529,29 @@ def plot_conditional_shift_bars(summary_rows: list[dict], output_dir: Path, plot
     plt.close(fig)
 
 
+def plot_joint_st_shift_bars(summary_rows: list[dict], output_dir: Path, plot_format: str) -> None:
+    if not summary_rows:
+        return
+    conditions = ["all", "normal", "high_volume", "peak", "ramp"]
+    hop_k = max(to_int(row, "alignment_hop_k") for row in summary_rows)
+    rows = [row for row in summary_rows if to_int(row, "alignment_hop_k") == hop_k]
+    systems = []
+    for row in rows:
+        if row["system"] not in systems:
+            systems.append(row["system"])
+    lookup = {(row["system"], row["condition"]): float(row.get("avg_st_shift_gain", float("nan"))) for row in rows}
+    matrix = np.asarray([[lookup.get((system, condition), float("nan")) for condition in conditions] for system in systems], dtype=float)
+    fig, ax = plt.subplots(figsize=(8.0, max(3.8, 0.25 * len(systems) + 1.2)))
+    im = ax.imshow(matrix, aspect="auto", cmap="magma")
+    ax.set_title(f"Joint STShiftGain, k={hop_k}")
+    ax.set_xticks(np.arange(len(conditions)), conditions, rotation=30, ha="right")
+    ax.set_yticks(np.arange(len(systems)), systems)
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+    fig.tight_layout()
+    save_fig(fig, output_dir, f"joint_st_shift_gain_heatmap_k{hop_k}", plot_format)
+    plt.close(fig)
+
+
 def build_method_comparison_rows(summary_rows: list[dict]) -> list[dict]:
     methods = ordered_methods(summary_rows)
     if len(methods) < 2:
@@ -562,6 +623,7 @@ def markdown_summary(
     standard_summary_rows: list[dict],
     alignment_summary_rows: list[dict],
     conditional_shift_summary_rows: list[dict],
+    joint_st_shift_summary_rows: list[dict],
     summary_rows: list[dict],
     report: dict,
 ) -> None:
@@ -657,6 +719,34 @@ def markdown_summary(
                 )
             )
 
+    if joint_st_shift_summary_rows:
+        lines.extend(
+            [
+                "",
+                "## Joint Spatiotemporal ShiftGain Diagnostics",
+                "",
+                "These metrics allow both prediction-time shifts and k-hop spatial substitution, using exact same-node/time MAE as the denominator.",
+                "",
+                "| System | Hop k | Condition | STShiftGain | Spatial Gain @0 | Avg Best Shift | Avg Abs Best Shift | Exact MAE | Best ST-MAE | Avg Count |",
+                "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for row in joint_st_shift_summary_rows:
+            lines.append(
+                "| {system} | {hop} | {condition} | {gain} | {spatial} | {best} | {absbest} | {exact} | {best_mae} | {count} |".format(
+                    system=row["system"],
+                    hop=row["alignment_hop_k"],
+                    condition=row["condition"],
+                    gain=fmt(row["avg_st_shift_gain"]),
+                    spatial=fmt(row["avg_spatial_gain_at_zero"]),
+                    best=fmt(row["avg_best_time_shift_delta"]),
+                    absbest=fmt(row["avg_abs_best_time_shift_delta"]),
+                    exact=fmt(row["avg_exact_zero_MAE"]),
+                    best_mae=fmt(row["avg_best_ST_MAE"]),
+                    count=fmt(row["avg_condition_valid_count"]),
+                )
+            )
+
     lines.extend(
         [
             "",
@@ -727,22 +817,25 @@ def main() -> None:
     rank_summary_rows = read_csv(input_dir / "standard_rank_summary.csv")
     alignment_rows = read_csv(input_dir / "alignment_metrics.csv")
     conditional_shift_rows = read_csv(input_dir / "conditional_shift_metrics.csv")
+    joint_st_shift_rows = read_csv(input_dir / "joint_st_shift_metrics.csv")
     component_rows = read_csv(input_dir / "component_metrics.csv")
     peak_rows = read_csv(input_dir / "peak_window_metrics.csv")
     residual_rows = read_csv(input_dir / "residual_structure_metrics.csv")
     spatial_rows = read_csv(input_dir / "spatial_residual_metrics.csv")
     systems = ordered_systems(component_rows, standard_rows)
     if not systems:
-        systems = sorted({row["system"] for row in alignment_rows + conditional_shift_rows})
+        systems = sorted({row["system"] for row in alignment_rows + conditional_shift_rows + joint_st_shift_rows})
     method_names = ordered_methods(component_rows) if component_rows else []
-    hs = horizons(component_rows) or horizons(standard_rows) or horizons(alignment_rows) or horizons(conditional_shift_rows)
+    hs = horizons(component_rows) or horizons(standard_rows) or horizons(alignment_rows) or horizons(conditional_shift_rows) or horizons(joint_st_shift_rows)
     standard_summary_rows = build_standard_summary_rows(standard_rows, rank_summary_rows)
     alignment_summary_rows = build_alignment_summary_rows(alignment_rows, systems)
     conditional_shift_summary_rows = build_conditional_shift_summary_rows(conditional_shift_rows, systems)
+    joint_st_shift_summary_rows = build_joint_st_shift_summary_rows(joint_st_shift_rows, systems)
     summary_rows = build_summary_rows(component_rows, residual_rows)
     write_csv(input_dir / "standard_average_summary.csv", standard_summary_rows)
     write_csv(input_dir / "alignment_average_summary.csv", alignment_summary_rows)
     write_csv(input_dir / "conditional_shift_average_summary.csv", conditional_shift_summary_rows)
+    write_csv(input_dir / "joint_st_shift_average_summary.csv", joint_st_shift_summary_rows)
     write_csv(input_dir / "decomposition_average_summary.csv", summary_rows)
     write_csv(input_dir / "decoupled_average_summary.csv", summary_rows)
     method_comparison_rows = build_method_comparison_rows(summary_rows)
@@ -763,6 +856,7 @@ def main() -> None:
         "horizons": hs,
         "alignment_rows": len(alignment_rows),
         "conditional_shift_rows": len(conditional_shift_rows),
+        "joint_st_shift_rows": len(joint_st_shift_rows),
     }
     (input_dir / "decoupled_plot_summary.json").write_text(json.dumps(report, indent=2, default=json_default), encoding="utf-8")
     markdown_summary(
@@ -770,6 +864,7 @@ def main() -> None:
         standard_summary_rows,
         alignment_summary_rows,
         conditional_shift_summary_rows,
+        joint_st_shift_summary_rows,
         summary_rows,
         report,
     )
@@ -798,6 +893,7 @@ def main() -> None:
     plot_standard_bars(standard_summary_rows, input_dir, args.plot_format)
     plot_alignment_bars(alignment_summary_rows, input_dir, args.plot_format)
     plot_conditional_shift_bars(conditional_shift_summary_rows, input_dir, args.plot_format)
+    plot_joint_st_shift_bars(joint_st_shift_summary_rows, input_dir, args.plot_format)
     print(json.dumps({"input_dir": str(input_dir), "num_systems": len(systems), "decomposition_methods": method_names}, indent=2))
 
 
