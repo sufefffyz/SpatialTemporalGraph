@@ -7,11 +7,6 @@ import torch
 from torch import nn
 
 
-def _softplus_inverse(value: float) -> float:
-    value = max(float(value), 1e-6)
-    return float(np.log(np.expm1(value)))
-
-
 def load_distance_matrix(path: str, num_nodes: int, normalize: str = "max") -> torch.Tensor:
     matrix_path = Path(path).expanduser()
     if not matrix_path.exists():
@@ -63,6 +58,7 @@ class DynamicThresholdSupport(nn.Module):
         temperature: float = 0.05,
         dist_norm: str = "max",
         gaussian_sigma: float | None = None,
+        weight_mode: str = "binary",
         normalization: str = "transition",
         self_loops: bool = True,
         straight_through: bool = True,
@@ -70,6 +66,8 @@ class DynamicThresholdSupport(nn.Module):
         super().__init__()
         if mode not in {"soft", "hard"}:
             raise ValueError(f"Unsupported dynamic threshold mode: {mode}")
+        if weight_mode not in {"binary", "gaussian"}:
+            raise ValueError(f"Unsupported dynamic threshold weight mode: {weight_mode}")
         if normalization not in {"transition", "sym"}:
             raise ValueError(f"Unsupported support normalization: {normalization}")
 
@@ -78,6 +76,7 @@ class DynamicThresholdSupport(nn.Module):
         self.mode = mode
         self.radius_scale = float(radius_scale)
         self.temperature = float(temperature)
+        self.weight_mode = weight_mode
         self.normalization = normalization
         self.self_loops = bool(self_loops)
         self.straight_through = bool(straight_through)
@@ -89,8 +88,11 @@ class DynamicThresholdSupport(nn.Module):
         if init_radius is None:
             init_radius = self._degree_to_radius(dist, target_avg_degree)
         self.init_radius = float(init_radius)
-        sigma = float(gaussian_sigma) if gaussian_sigma is not None else max(self.init_radius, 1e-3)
-        base_weight = torch.exp(-torch.square(dist / max(sigma, 1e-6)))
+        if self.weight_mode == "gaussian":
+            sigma = float(gaussian_sigma) if gaussian_sigma is not None else max(self.init_radius, 1e-3)
+            base_weight = torch.exp(-torch.square(dist / max(sigma, 1e-6)))
+        else:
+            base_weight = torch.ones_like(dist)
         base_weight = base_weight * (1.0 - self.eye) + self.eye
         self.register_buffer("base_weight", base_weight.float())
 
@@ -103,7 +105,7 @@ class DynamicThresholdSupport(nn.Module):
         nn.init.xavier_uniform_(self.history_proj.weight)
         nn.init.zeros_(self.history_proj.bias)
         nn.init.zeros_(self.radius_head.weight)
-        nn.init.constant_(self.radius_head.bias, _softplus_inverse(1.0))
+        nn.init.zeros_(self.radius_head.bias)
 
     @staticmethod
     def _degree_to_radius(distance: torch.Tensor, target_avg_degree: float) -> float:
@@ -131,8 +133,8 @@ class DynamicThresholdSupport(nn.Module):
         node_history = history.transpose(1, 2).contiguous()
         state = torch.tanh(self.history_proj(node_history))
         node_embed = self.node_embed.unsqueeze(0).expand(state.shape[0], -1, -1)
-        raw = torch.nn.functional.softplus(self.radius_head(torch.cat([state, node_embed], dim=-1))).squeeze(-1)
-        multiplier = torch.exp(self.radius_scale * torch.tanh(raw - 1.0))
+        delta = self.radius_scale * torch.tanh(self.radius_head(torch.cat([state, node_embed], dim=-1)).squeeze(-1))
+        multiplier = torch.exp(delta)
         return self.init_radius * multiplier
 
     def _masked_weights(self, history_data: torch.Tensor) -> torch.Tensor:

@@ -42,6 +42,7 @@ def _dynamic_graph_args(mode: str) -> dict:
         "radius_scale": _env_float("DYNAMIC_GRAPH_RADIUS_SCALE", 1.0),
         "temperature": _env_float("DYNAMIC_GRAPH_TEMPERATURE", 0.05),
         "dist_norm": os.environ.get("DYNAMIC_GRAPH_DIST_NORM", "max"),
+        "weight_mode": os.environ.get("DYNAMIC_GRAPH_WEIGHT_MODE", "binary"),
         "self_loops": os.environ.get("DYNAMIC_GRAPH_SELF_LOOPS", "1") != "0",
         "straight_through": os.environ.get("DYNAMIC_GRAPH_STRAIGHT_THROUGH", "1") != "0",
     }
@@ -71,6 +72,7 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
     num_nodes = int(desc["num_nodes"])
 
     dynamic_graph = _dynamic_graph_args(mode)
+    weight_mode = dynamic_graph["weight_mode"]
     if backbone == "gwnet":
         model_arch = DynamicThresholdGraphWaveNet
         model_param = {
@@ -142,7 +144,7 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
     run_tag = os.environ.get("BASICTS_RUN_TAG", "").strip()
 
     cfg = EasyDict()
-    cfg.DESCRIPTION = f"{model_arch.__name__} on {data_name} with {mode} dynamic OSRM threshold support"
+    cfg.DESCRIPTION = f"{model_arch.__name__} on {data_name} with {mode} dynamic OSRM threshold support and {weight_mode} weights"
     cfg.GPU_NUM = 1
     cfg.RUNNER = WandBTimeSeriesForecastingRunner
     cfg._ = random.randint(-1000000, 1000000)
@@ -235,7 +237,7 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
     cfg.WANDB = EasyDict()
     cfg.WANDB.PROJECT = os.environ.get("WANDB_PROJECT", "adaptive_threshold_dynamic_weight")
     cfg.WANDB.MODE = os.environ.get("WANDB_MODE", "online")
-    cfg.WANDB.RUN_NAME = os.environ.get("WANDB_NAME", f"{model_arch.__name__}_{data_name}_{mode}_{run_tag}".rstrip("_"))
-    cfg.WANDB.GROUP = os.environ.get("WANDB_RUN_GROUP", f"sd_dynamic_threshold_{mode}_{backbone}")
-    cfg.WANDB.TAGS = ["adaptive-threshold", "sd", "dynamic-threshold", mode, backbone]
+    cfg.WANDB.RUN_NAME = os.environ.get("WANDB_NAME", f"{model_arch.__name__}_{data_name}_{mode}_{weight_mode}_{run_tag}".rstrip("_"))
+    cfg.WANDB.GROUP = os.environ.get("WANDB_RUN_GROUP", f"sd_dynamic_threshold_{mode}_{weight_mode}_{backbone}")
+    cfg.WANDB.TAGS = ["adaptive-threshold", "sd", "dynamic-threshold", mode, weight_mode, backbone]
     return cfg
