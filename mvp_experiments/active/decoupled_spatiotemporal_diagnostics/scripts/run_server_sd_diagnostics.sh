@@ -22,6 +22,7 @@ ALIGNMENT_TIME_WINDOWS="${ALIGNMENT_TIME_WINDOWS:-0 1}"
 ALIGNMENT_HOP_KS="${ALIGNMENT_HOP_KS:-0 1}"
 ADJ_PATH="${ADJ_PATH:-}"
 ALIGNMENT_DIRECTED="${ALIGNMENT_DIRECTED:-0}"
+ALIGNMENT_ONLY="${ALIGNMENT_ONLY:-0}"
 
 SEARCH_ROOTS=()
 if [ "$#" -gt 0 ]; then
@@ -56,6 +57,9 @@ fi
 if [ "${ALIGNMENT_DIRECTED}" = "1" ] || [ "${ALIGNMENT_DIRECTED}" = "true" ]; then
   ADJ_ARGS+=(--alignment-directed)
 fi
+if [ "${ALIGNMENT_ONLY}" = "1" ] || [ "${ALIGNMENT_ONLY}" = "true" ]; then
+  ADJ_ARGS+=(--alignment-only)
+fi
 
 python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --dataset-name "${DATASET_NAME}" \
@@ -79,7 +83,7 @@ python "${SCRIPT_DIR}/plot_decoupled_diagnostics.py" \
   --input-dir "${OUTPUT_DIR}" \
   --plot-format png
 
-if [[ " ${DECOMP_METHODS} " == *" moving_average "* && " ${DECOMP_METHODS} " == *" fft_lowpass "* ]]; then
+if [[ "${ALIGNMENT_ONLY}" != "1" && "${ALIGNMENT_ONLY}" != "true" && " ${DECOMP_METHODS} " == *" moving_average "* && " ${DECOMP_METHODS} " == *" fft_lowpass "* ]]; then
   python "${SCRIPT_DIR}/summarize_decomposition_rankings.py" \
     --summary-csv "${OUTPUT_DIR}/decomposition_average_summary.csv" \
     --output-dir "${OUTPUT_DIR}" \

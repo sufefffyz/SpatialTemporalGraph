@@ -573,6 +573,7 @@ def markdown_summary(
         f"- Dataset dir: `{report.get('dataset_dir') or 'unknown'}`",
         f"- Adjacency path: `{report.get('adj_path') or 'none'}`",
         f"- Alignment directed adjacency: {report.get('alignment_directed')}",
+        f"- Alignment-only mode: {report.get('alignment_only')}",
         f"- Systems: {report['num_systems']}",
         f"- Decomposition methods: {', '.join(report['decomposition_methods'])}",
         f"- Horizons: {', '.join(f'H{h}' for h in report['horizons'])}",
@@ -730,12 +731,11 @@ def main() -> None:
     peak_rows = read_csv(input_dir / "peak_window_metrics.csv")
     residual_rows = read_csv(input_dir / "residual_structure_metrics.csv")
     spatial_rows = read_csv(input_dir / "spatial_residual_metrics.csv")
-    if not component_rows:
-        raise FileNotFoundError(f"Missing component metrics under {input_dir}")
-
     systems = ordered_systems(component_rows, standard_rows)
-    method_names = ordered_methods(component_rows)
-    hs = horizons(component_rows)
+    if not systems:
+        systems = sorted({row["system"] for row in alignment_rows + conditional_shift_rows})
+    method_names = ordered_methods(component_rows) if component_rows else []
+    hs = horizons(component_rows) or horizons(standard_rows) or horizons(alignment_rows) or horizons(conditional_shift_rows)
     standard_summary_rows = build_standard_summary_rows(standard_rows, rank_summary_rows)
     alignment_summary_rows = build_alignment_summary_rows(alignment_rows, systems)
     conditional_shift_summary_rows = build_conditional_shift_summary_rows(conditional_shift_rows, systems)
@@ -757,6 +757,7 @@ def main() -> None:
         "dataset_dir": source_summary.get("dataset_dir"),
         "adj_path": source_summary.get("adj_path"),
         "alignment_directed": source_summary.get("alignment_directed"),
+        "alignment_only": source_summary.get("alignment_only"),
         "num_systems": len(systems),
         "decomposition_methods": method_names,
         "horizons": hs,

@@ -118,6 +118,11 @@ def parse_args() -> argparse.Namespace:
         help="Use directed adjacency for relaxed spatial hit metrics. Defaults to symmetrized adjacency.",
     )
     parser.add_argument(
+        "--alignment-only",
+        action="store_true",
+        help="Only compute time/space alignment and conditional ShiftGain metrics; skip standard and decomposition metrics.",
+    )
+    parser.add_argument(
         "--condition-high-q",
         type=float,
         default=0.75,
@@ -1269,6 +1274,7 @@ def build_markdown(
         f"- Alignment max shift: {report['alignment_max_shift']}",
         f"- Alignment time windows: {', '.join(str(item) for item in report['alignment_time_windows'])}",
         f"- Alignment hop tolerances: {', '.join(str(item) for item in report['alignment_hop_ks'])}",
+        f"- Alignment-only mode: {report['alignment_only']}",
         f"- Conditional high-volume quantile: {report['condition_high_q']}",
         f"- Conditional ramp quantile: {report['condition_ramp_q']}",
         f"- Horizons: {', '.join(str(h) for h in report['horizons'])}",
@@ -1458,19 +1464,20 @@ def main() -> None:
             target_h = target[:, h_idx, :]
             target_mask = valid_target_mask(target_h, null_val)
 
-            standard_row = standard_performance_row(
-                run.name,
-                horizon,
-                pred_h,
-                target_h,
-                target_mask,
-                scale_abs,
-                scale_sq,
-                args.peak_q,
-                args.worst_pct,
-            )
-            standard_rows.append(standard_row)
-            peak_metric_rows.extend(peak_rows(run.name, horizon, pred_h, target_h, args.peak_q, target_mask))
+            if not args.alignment_only:
+                standard_row = standard_performance_row(
+                    run.name,
+                    horizon,
+                    pred_h,
+                    target_h,
+                    target_mask,
+                    scale_abs,
+                    scale_sq,
+                    args.peak_q,
+                    args.worst_pct,
+                )
+                standard_rows.append(standard_row)
+                peak_metric_rows.extend(peak_rows(run.name, horizon, pred_h, target_h, args.peak_q, target_mask))
             align_rows, shift_rows = alignment_rows(
                 run.name,
                 horizon,
@@ -1499,39 +1506,40 @@ def main() -> None:
             conditional_shift_metric_rows.extend(cond_rows)
             conditional_time_shift_curve_rows.extend(cond_curve_rows)
 
-            for method in decomposition_methods:
-                pred_low, pred_high = decompose_series(pred_h, method, args.moving_window, fft_cutoff_period)
-                target_low, target_high = decompose_series(target_h, method, args.moving_window, fft_cutoff_period)
+            if not args.alignment_only:
+                for method in decomposition_methods:
+                    pred_low, pred_high = decompose_series(pred_h, method, args.moving_window, fft_cutoff_period)
+                    target_low, target_high = decompose_series(target_h, method, args.moving_window, fft_cutoff_period)
 
-                components = {
-                    "full": (pred_h, target_h),
-                    "low": (pred_low, target_low),
-                    "high": (pred_high, target_high),
-                }
-                for component, (pred_component, target_component) in components.items():
-                    row = metric_row(run.name, horizon, method, component, pred_component, target_component)
-                    component_rows.append(row)
-                    distribution_rows.append(
-                        {
-                            "system": run.name,
-                            "horizon": horizon,
-                            "decomposition_method": method,
-                            "component": component,
-                            "W1": row["W1"],
-                        }
-                    )
-                    residual_metric_rows.append(
-                        residual_structure_row(run.name, horizon, method, component, target_component - pred_component)
-                    )
-
-                if adj is not None:
-                    residual_components = {
-                        "full": target_h - pred_h,
-                        "low": target_low - pred_low,
-                        "high": target_high - pred_high,
+                    components = {
+                        "full": (pred_h, target_h),
+                        "low": (pred_low, target_low),
+                        "high": (pred_high, target_high),
                     }
-                    for component, residual in residual_components.items():
-                        spatial_metric_rows.append(spatial_rows(run.name, horizon, method, component, residual, edges, adj))
+                    for component, (pred_component, target_component) in components.items():
+                        row = metric_row(run.name, horizon, method, component, pred_component, target_component)
+                        component_rows.append(row)
+                        distribution_rows.append(
+                            {
+                                "system": run.name,
+                                "horizon": horizon,
+                                "decomposition_method": method,
+                                "component": component,
+                                "W1": row["W1"],
+                            }
+                        )
+                        residual_metric_rows.append(
+                            residual_structure_row(run.name, horizon, method, component, target_component - pred_component)
+                        )
+
+                    if adj is not None:
+                        residual_components = {
+                            "full": target_h - pred_h,
+                            "low": target_low - pred_low,
+                            "high": target_high - pred_high,
+                        }
+                        for component, residual in residual_components.items():
+                            spatial_metric_rows.append(spatial_rows(run.name, horizon, method, component, residual, edges, adj))
 
     report = {
         "dataset_name": args.dataset_name,
@@ -1551,6 +1559,7 @@ def main() -> None:
         "alignment_time_windows": alignment_time_windows,
         "alignment_hop_ks": alignment_hop_ks,
         "alignment_directed": bool(args.alignment_directed),
+        "alignment_only": bool(args.alignment_only),
         "adj_path": str(args.adj_path.expanduser().resolve()) if args.adj_path is not None else None,
         "condition_high_q": args.condition_high_q,
         "condition_ramp_q": args.condition_ramp_q,
