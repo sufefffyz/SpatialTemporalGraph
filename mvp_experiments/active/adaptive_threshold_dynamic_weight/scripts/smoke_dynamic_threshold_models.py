@@ -44,6 +44,7 @@ def main() -> None:
         for mode in ("soft", "hard"):
             gwnet = DynamicThresholdGraphWaveNet(
                 num_nodes=nodes,
+                seq_len=seq_len,
                 dynamic_graph=dynamic_args(dist_path, mode),
                 in_dim=2,
                 out_dim=horizon,

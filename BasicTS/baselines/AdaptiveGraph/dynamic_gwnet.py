@@ -55,6 +55,7 @@ class DynamicThresholdGraphWaveNet(nn.Module):
     def __init__(
         self,
         num_nodes,
+        seq_len,
         dynamic_graph,
         dropout=0.3,
         gcn_bool=True,
@@ -76,7 +77,12 @@ class DynamicThresholdGraphWaveNet(nn.Module):
         self.layers = layers
         self.gcn_bool = gcn_bool
         self.addaptadj = addaptadj
-        self.dynamic_support = DynamicThresholdSupport(num_nodes=num_nodes, normalization="transition", **dynamic_graph)
+        self.dynamic_support = DynamicThresholdSupport(
+            num_nodes=num_nodes,
+            seq_len=seq_len,
+            normalization="transition",
+            **dynamic_graph,
+        )
 
         self.filter_convs = nn.ModuleList()
         self.gate_convs = nn.ModuleList()

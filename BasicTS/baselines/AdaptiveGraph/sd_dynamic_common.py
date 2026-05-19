@@ -75,6 +75,7 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
         model_arch = DynamicThresholdGraphWaveNet
         model_param = {
             "num_nodes": num_nodes,
+            "seq_len": input_len,
             "dynamic_graph": dynamic_graph,
             "dropout": 0.3,
             "gcn_bool": True,
