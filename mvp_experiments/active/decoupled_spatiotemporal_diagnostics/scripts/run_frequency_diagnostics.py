@@ -135,6 +135,13 @@ def parse_args() -> argparse.Namespace:
         help="Per-node/horizon quantile threshold for the ramp conditional ShiftGain bin.",
     )
     parser.add_argument(
+        "--joint-st-conditions",
+        nargs="+",
+        default=["high_volume", "peak", "ramp"],
+        choices=["all", "normal", "high_volume", "peak", "ramp"],
+        help="Traffic regimes for joint spatiotemporal STShiftGain. Defaults to the event-like regimes to keep the oracle-style spatial search interpretable.",
+    )
+    parser.add_argument(
         "--seasonal-period",
         type=int,
         default=None,
@@ -788,6 +795,41 @@ def spatial_min_abs_error(
     return err
 
 
+def spatial_min_abs_error_sparse(
+    pred: np.ndarray,
+    target: np.ndarray,
+    valid: np.ndarray,
+    reach_indices: list[np.ndarray] | tuple[np.ndarray, np.ndarray] | None,
+) -> np.ndarray:
+    pred = np.asarray(pred, dtype=np.float32)
+    target = np.asarray(target, dtype=np.float32)
+    valid = np.asarray(valid, dtype=bool) & np.isfinite(target)
+    if reach_indices is None:
+        pair_valid = valid & np.isfinite(pred)
+        return np.where(pair_valid, np.abs(pred - target), np.nan).astype(np.float32)
+    if isinstance(reach_indices, tuple):
+        padded, index_valid = reach_indices
+        reach_list = [padded[node, index_valid[node]] for node in range(padded.shape[0])]
+    else:
+        reach_list = reach_indices
+
+    err = np.full(target.shape, np.nan, dtype=np.float32)
+    pred_finite = np.isfinite(pred)
+    for node, indices in enumerate(reach_list):
+        rows = np.flatnonzero(valid[:, node])
+        if rows.size == 0 or indices.size == 0:
+            continue
+        candidate_pred = pred[np.ix_(rows, indices)]
+        candidate_finite = pred_finite[np.ix_(rows, indices)]
+        candidate_err = np.abs(candidate_pred - target[rows, node : node + 1])
+        candidate_err = np.where(candidate_finite, candidate_err, np.inf)
+        best = np.min(candidate_err, axis=1)
+        keep = np.isfinite(best)
+        if np.any(keep):
+            err[rows[keep], node] = best[keep]
+    return err
+
+
 def finite_mean_and_count(values: np.ndarray) -> tuple[float, int]:
     finite = np.isfinite(values)
     count = int(np.sum(finite))
@@ -835,8 +877,10 @@ def joint_st_shift_rows(
     peak_q: float,
     high_q: float,
     ramp_q: float,
+    joint_conditions: list[str],
 ) -> tuple[list[dict], list[dict]]:
-    conditions = conditional_shift_masks(target, mask, peak_q, high_q, ramp_q)
+    all_conditions = conditional_shift_masks(target, mask, peak_q, high_q, ramp_q)
+    conditions = {condition: all_conditions[condition] for condition in joint_conditions if condition in all_conditions}
     exact_error = spatial_min_abs_error(pred, target, mask, None)
     exact_zero_by_condition = {
         condition: finite_mean_and_count(np.where(condition_mask, exact_error, np.nan))
@@ -854,10 +898,9 @@ def joint_st_shift_rows(
             if reach_indices is None:
                 continue
         for delta in range(-int(max_shift), int(max_shift) + 1):
-            pred_slice, target_slice, base_slice = shifted_slices(pred, target, mask, mask, delta)
-            st_error = spatial_min_abs_error(pred_slice, target_slice, base_slice, reach_indices)
             for condition, condition_mask in conditions.items():
-                _, _, condition_slice = shifted_slices(pred, target, mask, condition_mask, delta)
+                pred_slice, target_slice, condition_slice = shifted_slices(pred, target, mask, condition_mask, delta)
+                st_error = spatial_min_abs_error_sparse(pred_slice, target_slice, condition_slice, reach_indices)
                 mae, count = finite_mean_and_count(np.where(condition_slice, st_error, np.nan))
                 row = {
                     "time_shift_delta": delta,
@@ -1730,6 +1773,7 @@ def main() -> None:
                 args.peak_q,
                 args.condition_high_q,
                 args.condition_ramp_q,
+                args.joint_st_conditions,
             )
             joint_st_shift_metric_rows.extend(st_rows)
             joint_st_time_shift_curve_rows.extend(st_curve_rows)
@@ -1791,6 +1835,7 @@ def main() -> None:
         "adj_path": str(args.adj_path.expanduser().resolve()) if args.adj_path is not None else None,
         "condition_high_q": args.condition_high_q,
         "condition_ramp_q": args.condition_ramp_q,
+        "joint_st_conditions": args.joint_st_conditions,
         "num_runs": len(run_reports),
         "runs": run_reports,
     }

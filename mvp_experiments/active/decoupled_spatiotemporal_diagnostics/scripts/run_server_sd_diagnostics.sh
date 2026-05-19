@@ -15,6 +15,7 @@ DECOMP_METHODS="${DECOMP_METHODS:-moving_average fft_lowpass}"
 PEAK_Q="${PEAK_Q:-0.90}"
 CONDITION_HIGH_Q="${CONDITION_HIGH_Q:-0.75}"
 CONDITION_RAMP_Q="${CONDITION_RAMP_Q:-0.90}"
+JOINT_ST_CONDITIONS="${JOINT_ST_CONDITIONS:-high_volume peak ramp}"
 HORIZONS="${HORIZONS:-1 2 3 4 5 6 7 8 9 10 11 12}"
 INCLUDE_TOKENS="${INCLUDE_TOKENS:-${DATASET_NAME}_}"
 ALIGNMENT_MAX_SHIFT="${ALIGNMENT_MAX_SHIFT:-3}"
@@ -44,6 +45,7 @@ read -r -a HORIZON_ARGS <<< "${HORIZONS}"
 read -r -a INCLUDE_TOKEN_ARGS <<< "${INCLUDE_TOKENS}"
 read -r -a ALIGNMENT_TIME_WINDOW_ARGS <<< "${ALIGNMENT_TIME_WINDOWS}"
 read -r -a ALIGNMENT_HOP_K_ARGS <<< "${ALIGNMENT_HOP_KS}"
+read -r -a JOINT_ST_CONDITION_ARGS <<< "${JOINT_ST_CONDITIONS}"
 
 INCLUDE_ARGS=()
 for TOKEN in "${INCLUDE_TOKEN_ARGS[@]}"; do
@@ -70,6 +72,7 @@ python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --peak-q "${PEAK_Q}" \
   --condition-high-q "${CONDITION_HIGH_Q}" \
   --condition-ramp-q "${CONDITION_RAMP_Q}" \
+  --joint-st-conditions "${JOINT_ST_CONDITION_ARGS[@]}" \
   --horizons "${HORIZON_ARGS[@]}" \
   --alignment-max-shift "${ALIGNMENT_MAX_SHIFT}" \
   --alignment-time-windows "${ALIGNMENT_TIME_WINDOW_ARGS[@]}" \
