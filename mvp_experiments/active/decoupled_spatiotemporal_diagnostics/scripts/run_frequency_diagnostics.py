@@ -118,6 +118,18 @@ def parse_args() -> argparse.Namespace:
         help="Use directed adjacency for relaxed spatial hit metrics. Defaults to symmetrized adjacency.",
     )
     parser.add_argument(
+        "--condition-high-q",
+        type=float,
+        default=0.75,
+        help="Per-node/horizon quantile threshold for the high-volume conditional ShiftGain bin.",
+    )
+    parser.add_argument(
+        "--condition-ramp-q",
+        type=float,
+        default=0.90,
+        help="Per-node/horizon quantile threshold for the ramp conditional ShiftGain bin.",
+    )
+    parser.add_argument(
         "--seasonal-period",
         type=int,
         default=None,
@@ -559,6 +571,86 @@ def best_shift_summary(curve_rows: list[dict[str, float | int]]) -> dict[str, fl
         "zero_shift_MAE": zero_mae,
         "shift_gain": (zero_mae - best_mae) / zero_mae if zero_mae and np.isfinite(zero_mae) else float("nan"),
     }
+
+
+def quantile_condition_mask(target: np.ndarray, base_mask: np.ndarray, q: float) -> np.ndarray:
+    with np.errstate(invalid="ignore"):
+        thresholds = np.nanquantile(np.where(base_mask, target, np.nan), q, axis=0).astype(np.float32)
+    threshold_grid = thresholds.reshape(1, -1)
+    return base_mask & np.isfinite(threshold_grid) & (target >= threshold_grid)
+
+
+def ramp_condition_mask(target: np.ndarray, base_mask: np.ndarray, q: float) -> np.ndarray:
+    target = np.asarray(target, dtype=np.float32)
+    ramp = np.full_like(target, np.nan, dtype=np.float32)
+    ramp_valid = np.zeros_like(base_mask, dtype=bool)
+    if target.shape[0] <= 1:
+        return ramp_valid
+    ramp[1:] = np.abs(target[1:] - target[:-1])
+    ramp_valid[1:] = base_mask[1:] & base_mask[:-1] & np.isfinite(ramp[1:])
+    with np.errstate(invalid="ignore"):
+        thresholds = np.nanquantile(np.where(ramp_valid, ramp, np.nan), q, axis=0).astype(np.float32)
+    threshold_grid = thresholds.reshape(1, -1)
+    return ramp_valid & np.isfinite(threshold_grid) & (ramp >= threshold_grid)
+
+
+def conditional_shift_masks(
+    target: np.ndarray,
+    base_mask: np.ndarray,
+    peak_q: float,
+    high_q: float,
+    ramp_q: float,
+) -> dict[str, np.ndarray]:
+    all_mask = np.asarray(base_mask, dtype=bool)
+    peak = quantile_condition_mask(target, all_mask, peak_q)
+    high_volume = quantile_condition_mask(target, all_mask, high_q)
+    ramp = ramp_condition_mask(target, all_mask, ramp_q)
+    normal = all_mask & ~peak & ~ramp
+    return {
+        "all": all_mask,
+        "peak": peak,
+        "high_volume": high_volume,
+        "ramp": ramp,
+        "normal": normal,
+    }
+
+
+def conditional_shift_rows(
+    system: str,
+    horizon: int,
+    pred: np.ndarray,
+    target: np.ndarray,
+    mask: np.ndarray,
+    max_shift: int,
+    peak_q: float,
+    high_q: float,
+    ramp_q: float,
+) -> tuple[list[dict], list[dict]]:
+    metric_rows: list[dict] = []
+    curve_rows: list[dict] = []
+    for condition, condition_mask in conditional_shift_masks(target, mask, peak_q, high_q, ramp_q).items():
+        curve = shifted_mae_curve(pred, target, condition_mask, max_shift)
+        summary = best_shift_summary(curve)
+        zero_count = next((int(row["valid_count"]) for row in curve if int(row["time_shift_delta"]) == 0), 0)
+        metric_rows.append(
+            {
+                "system": system,
+                "horizon": horizon,
+                "condition": condition,
+                "condition_valid_count": zero_count,
+                **summary,
+            }
+        )
+        for row in curve:
+            curve_rows.append(
+                {
+                    "system": system,
+                    "horizon": horizon,
+                    "condition": condition,
+                    **row,
+                }
+            )
+    return metric_rows, curve_rows
 
 
 def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: bool) -> dict[int, object]:
@@ -1148,6 +1240,7 @@ def build_markdown(
     standard_rows: list[dict],
     rank_summary_rows: list[dict],
     alignment_metric_rows: list[dict],
+    conditional_shift_metric_rows: list[dict],
     component_rows: list[dict],
     peak_metric_rows: list[dict],
     residual_metric_rows: list[dict],
@@ -1166,6 +1259,8 @@ def build_markdown(
         f"- Alignment max shift: {report['alignment_max_shift']}",
         f"- Alignment time windows: {', '.join(str(item) for item in report['alignment_time_windows'])}",
         f"- Alignment hop tolerances: {', '.join(str(item) for item in report['alignment_hop_ks'])}",
+        f"- Conditional high-volume quantile: {report['condition_high_q']}",
+        f"- Conditional ramp quantile: {report['condition_ramp_q']}",
         f"- Horizons: {', '.join(str(h) for h in report['horizons'])}",
         "",
         "## Runs",
@@ -1207,6 +1302,20 @@ def build_markdown(
             )
     else:
         lines.append("No alignment diagnostics were generated.")
+
+    lines.extend(["", "## Conditional ShiftGain Diagnostics", ""])
+    if conditional_shift_metric_rows:
+        lines.append("These metrics compute shifted-MAE improvement inside ground-truth-defined traffic regimes.")
+        lines.append("| System | Horizon | Condition | Shift Gain | Best Shift | Zero MAE | Best MAE | Count |")
+        lines.append("|---|---:|---|---:|---:|---:|---:|---:|")
+        for row in conditional_shift_metric_rows[:100]:
+            lines.append(
+                f"| {row['system']} | {row['horizon']} | {row['condition']} | "
+                f"{row['shift_gain']:.4g} | {row['best_time_shift_delta']} | {row['zero_shift_MAE']:.4g} | "
+                f"{row['best_shift_MAE']:.4g} | {row['condition_valid_count']} |"
+            )
+    else:
+        lines.append("No conditional ShiftGain diagnostics were generated.")
 
     lines.extend(["", "## Decomposition-Dependent Low/High Metrics", ""])
     if component_rows:
@@ -1277,6 +1386,10 @@ def main() -> None:
         raise ValueError(f"--worst-pct must be in (0, 1], got {args.worst_pct}")
     if args.alignment_max_shift < 0:
         raise ValueError(f"--alignment-max-shift must be >= 0, got {args.alignment_max_shift}")
+    if not (0 < args.condition_high_q < 1):
+        raise ValueError(f"--condition-high-q must be in (0, 1), got {args.condition_high_q}")
+    if not (0 < args.condition_ramp_q < 1):
+        raise ValueError(f"--condition-ramp-q must be in (0, 1), got {args.condition_ramp_q}")
     alignment_time_windows = sorted({int(item) for item in args.alignment_time_windows if int(item) >= 0})
     alignment_hop_ks = sorted({int(item) for item in args.alignment_hop_ks if int(item) >= 0})
     if not alignment_time_windows:
@@ -1305,6 +1418,8 @@ def main() -> None:
     standard_rows: list[dict] = []
     alignment_metric_rows: list[dict] = []
     time_shift_curve_rows: list[dict] = []
+    conditional_shift_metric_rows: list[dict] = []
+    conditional_time_shift_curve_rows: list[dict] = []
     component_rows: list[dict] = []
     peak_metric_rows: list[dict] = []
     distribution_rows: list[dict] = []
@@ -1360,6 +1475,19 @@ def main() -> None:
             )
             alignment_metric_rows.extend(align_rows)
             time_shift_curve_rows.extend(shift_rows)
+            cond_rows, cond_curve_rows = conditional_shift_rows(
+                run.name,
+                horizon,
+                pred_h,
+                target_h,
+                target_mask,
+                args.alignment_max_shift,
+                args.peak_q,
+                args.condition_high_q,
+                args.condition_ramp_q,
+            )
+            conditional_shift_metric_rows.extend(cond_rows)
+            conditional_time_shift_curve_rows.extend(cond_curve_rows)
 
             for method in decomposition_methods:
                 pred_low, pred_high = decompose_series(pred_h, method, args.moving_window, fft_cutoff_period)
@@ -1413,6 +1541,8 @@ def main() -> None:
         "alignment_time_windows": alignment_time_windows,
         "alignment_hop_ks": alignment_hop_ks,
         "alignment_directed": bool(args.alignment_directed),
+        "condition_high_q": args.condition_high_q,
+        "condition_ramp_q": args.condition_ramp_q,
         "num_runs": len(run_reports),
         "runs": run_reports,
     }
@@ -1423,6 +1553,8 @@ def main() -> None:
     write_csv(args.output_dir / "standard_rank_summary.csv", rank_summary_rows)
     write_csv(args.output_dir / "alignment_metrics.csv", alignment_metric_rows)
     write_csv(args.output_dir / "time_shift_curve.csv", time_shift_curve_rows)
+    write_csv(args.output_dir / "conditional_shift_metrics.csv", conditional_shift_metric_rows)
+    write_csv(args.output_dir / "conditional_time_shift_curve.csv", conditional_time_shift_curve_rows)
     write_csv(args.output_dir / "component_metrics.csv", component_rows)
     write_csv(args.output_dir / "peak_window_metrics.csv", peak_metric_rows)
     write_csv(args.output_dir / "distribution_metrics.csv", distribution_rows)
@@ -1435,6 +1567,7 @@ def main() -> None:
             standard_rows,
             rank_summary_rows,
             alignment_metric_rows,
+            conditional_shift_metric_rows,
             component_rows,
             peak_metric_rows,
             residual_metric_rows,

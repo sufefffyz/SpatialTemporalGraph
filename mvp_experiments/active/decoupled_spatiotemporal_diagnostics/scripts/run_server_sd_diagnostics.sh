@@ -13,6 +13,8 @@ MOVING_WINDOW="${MOVING_WINDOW:-12}"
 FFT_CUTOFF_PERIOD="${FFT_CUTOFF_PERIOD:-${MOVING_WINDOW}}"
 DECOMP_METHODS="${DECOMP_METHODS:-moving_average fft_lowpass}"
 PEAK_Q="${PEAK_Q:-0.90}"
+CONDITION_HIGH_Q="${CONDITION_HIGH_Q:-0.75}"
+CONDITION_RAMP_Q="${CONDITION_RAMP_Q:-0.90}"
 HORIZONS="${HORIZONS:-1 2 3 4 5 6 7 8 9 10 11 12}"
 INCLUDE_TOKENS="${INCLUDE_TOKENS:-${DATASET_NAME}_}"
 ALIGNMENT_MAX_SHIFT="${ALIGNMENT_MAX_SHIFT:-3}"
@@ -62,6 +64,8 @@ python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --fft-cutoff-period "${FFT_CUTOFF_PERIOD}" \
   --decomp-methods "${DECOMP_METHOD_ARGS[@]}" \
   --peak-q "${PEAK_Q}" \
+  --condition-high-q "${CONDITION_HIGH_Q}" \
+  --condition-ramp-q "${CONDITION_RAMP_Q}" \
   --horizons "${HORIZON_ARGS[@]}" \
   --alignment-max-shift "${ALIGNMENT_MAX_SHIFT}" \
   --alignment-time-windows "${ALIGNMENT_TIME_WINDOW_ARGS[@]}" \
