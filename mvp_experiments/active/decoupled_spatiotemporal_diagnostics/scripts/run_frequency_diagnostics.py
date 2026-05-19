@@ -710,6 +710,23 @@ def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: boo
     return {k: reach_by_k[k] for k in sorted(set(hop_ks)) if k in reach_by_k}
 
 
+def pad_reach_lists(reach_by_k: dict[int, list[np.ndarray]]) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+    padded_by_k: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for hop_k, indices_by_node in reach_by_k.items():
+        max_degree = max((len(indices) for indices in indices_by_node), default=0)
+        if max_degree == 0:
+            continue
+        padded = np.zeros((len(indices_by_node), max_degree), dtype=np.int64)
+        valid = np.zeros((len(indices_by_node), max_degree), dtype=bool)
+        for node, indices in enumerate(indices_by_node):
+            count = len(indices)
+            if count:
+                padded[node, :count] = indices
+                valid[node, :count] = True
+        padded_by_k[hop_k] = (padded, valid)
+    return padded_by_k
+
+
 def shifted_slices(
     pred: np.ndarray,
     target: np.ndarray,
@@ -729,7 +746,7 @@ def spatial_min_abs_error(
     pred: np.ndarray,
     target: np.ndarray,
     valid: np.ndarray,
-    reach_indices: list[np.ndarray] | None,
+    reach_indices: list[np.ndarray] | tuple[np.ndarray, np.ndarray] | None,
 ) -> np.ndarray:
     pred = np.asarray(pred, dtype=np.float32)
     target = np.asarray(target, dtype=np.float32)
@@ -737,6 +754,23 @@ def spatial_min_abs_error(
     if reach_indices is None:
         pair_valid = valid & np.isfinite(pred)
         return np.where(pair_valid, np.abs(pred - target), np.nan).astype(np.float32)
+
+    if isinstance(reach_indices, tuple):
+        padded, index_valid = reach_indices
+        err = np.full(target.shape, np.nan, dtype=np.float32)
+        chunk_size = 32
+        for start in range(0, target.shape[1], chunk_size):
+            end = min(start + chunk_size, target.shape[1])
+            node_indices = padded[start:end]
+            node_index_valid = index_valid[start:end]
+            candidate_pred = pred[:, node_indices]
+            candidate_finite = np.isfinite(candidate_pred) & node_index_valid.reshape(1, end - start, -1)
+            candidate_err = np.abs(candidate_pred - target[:, start:end, None])
+            candidate_err = np.where(candidate_finite, candidate_err, np.inf)
+            best = np.min(candidate_err, axis=2)
+            keep = valid[:, start:end] & np.isfinite(best)
+            err[:, start:end] = np.where(keep, best, np.nan)
+        return err
 
     pred_finite = np.isfinite(pred)
     err = np.full(target.shape, np.nan, dtype=np.float32)
@@ -797,7 +831,7 @@ def joint_st_shift_rows(
     mask: np.ndarray,
     max_shift: int,
     hop_ks: list[int],
-    reach_lists_by_k: dict[int, list[np.ndarray]],
+    reach_lists_by_k: dict[int, list[np.ndarray] | tuple[np.ndarray, np.ndarray]],
     peak_q: float,
     high_q: float,
     ramp_q: float,
@@ -1616,6 +1650,11 @@ def main() -> None:
     spatial_metric_rows: list[dict] = []
     run_reports: list[dict] = []
     reach_lists_by_k = build_reach_lists(adj, alignment_hop_ks, directed=args.alignment_directed)
+    reach_padded_by_k = pad_reach_lists(reach_lists_by_k)
+    reach_value_by_k: dict[int, list[np.ndarray] | tuple[np.ndarray, np.ndarray]] = {
+        hop_k: reach_padded_by_k.get(hop_k, reach_lists)
+        for hop_k, reach_lists in reach_lists_by_k.items()
+    }
 
     for run in runs:
         pred_path = run.result_dir / "predictions.npy"
@@ -1687,7 +1726,7 @@ def main() -> None:
                 target_mask,
                 args.alignment_max_shift,
                 alignment_hop_ks,
-                reach_lists_by_k,
+                reach_value_by_k,
                 args.peak_q,
                 args.condition_high_q,
                 args.condition_ramp_q,
