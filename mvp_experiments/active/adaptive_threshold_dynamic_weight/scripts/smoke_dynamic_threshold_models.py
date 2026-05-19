@@ -52,8 +52,8 @@ def main() -> None:
                 dilation_channels=4,
                 skip_channels=8,
                 end_channels=16,
-                blocks=1,
-                layers=1,
+                blocks=4,
+                layers=2,
             )
             y = gwnet(history_2c, future_2c, batch_seen=0, epoch=1, train=True)
             assert tuple(y.shape) == (batch, horizon, nodes, 1), (mode, "gwnet", tuple(y.shape))
