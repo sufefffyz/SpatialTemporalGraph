@@ -838,6 +838,54 @@ def finite_mean_and_count(values: np.ndarray) -> tuple[float, int]:
     return float(np.mean(values[finite])), count
 
 
+def spatial_condition_min_abs_error_stats(
+    pred: np.ndarray,
+    target: np.ndarray,
+    condition_valid: np.ndarray,
+    reach_indices: list[np.ndarray] | tuple[np.ndarray, np.ndarray] | None,
+) -> tuple[float, int]:
+    pred = np.asarray(pred, dtype=np.float32)
+    target = np.asarray(target, dtype=np.float32)
+    valid = np.asarray(condition_valid, dtype=bool) & np.isfinite(target)
+    if reach_indices is None:
+        pair_valid = valid & np.isfinite(pred)
+        if not np.any(pair_valid):
+            return float("nan"), 0
+        err = np.abs(pred[pair_valid] - target[pair_valid])
+        return float(np.mean(err)), int(err.size)
+
+    if not isinstance(reach_indices, tuple):
+        st_error = spatial_min_abs_error_sparse(pred, target, valid, reach_indices)
+        return finite_mean_and_count(np.where(valid, st_error, np.nan))
+
+    time_idx, node_idx = np.nonzero(valid)
+    if time_idx.size == 0:
+        return float("nan"), 0
+
+    padded, index_valid = reach_indices
+    total = 0.0
+    count = 0
+    chunk_size = 65536
+    for start in range(0, time_idx.size, chunk_size):
+        end = min(start + chunk_size, time_idx.size)
+        rows = time_idx[start:end]
+        nodes = node_idx[start:end]
+        neighbor_idx = padded[nodes]
+        neighbor_valid = index_valid[nodes]
+        candidate_pred = pred[rows[:, None], neighbor_idx]
+        candidate_finite = np.isfinite(candidate_pred) & neighbor_valid
+        candidate_err = np.abs(candidate_pred - target[rows, nodes][:, None])
+        candidate_err = np.where(candidate_finite, candidate_err, np.inf)
+        best = np.min(candidate_err, axis=1)
+        keep = np.isfinite(best)
+        if np.any(keep):
+            total += float(np.sum(best[keep], dtype=np.float64))
+            count += int(np.sum(keep))
+    if count == 0:
+        return float("nan"), 0
+    return total / float(count), count
+
+
 def best_st_shift_summary(
     curve_rows: list[dict[str, float | int]],
     exact_zero_mae: float,
@@ -881,9 +929,8 @@ def joint_st_shift_rows(
 ) -> tuple[list[dict], list[dict]]:
     all_conditions = conditional_shift_masks(target, mask, peak_q, high_q, ramp_q)
     conditions = {condition: all_conditions[condition] for condition in joint_conditions if condition in all_conditions}
-    exact_error = spatial_min_abs_error(pred, target, mask, None)
     exact_zero_by_condition = {
-        condition: finite_mean_and_count(np.where(condition_mask, exact_error, np.nan))
+        condition: spatial_condition_min_abs_error_stats(pred, target, mask & condition_mask, None)
         for condition, condition_mask in conditions.items()
     }
     curves_by_key: dict[tuple[int, str], list[dict[str, float | int]]] = {}
@@ -900,8 +947,7 @@ def joint_st_shift_rows(
         for delta in range(-int(max_shift), int(max_shift) + 1):
             for condition, condition_mask in conditions.items():
                 pred_slice, target_slice, condition_slice = shifted_slices(pred, target, mask, condition_mask, delta)
-                st_error = spatial_min_abs_error_sparse(pred_slice, target_slice, condition_slice, reach_indices)
-                mae, count = finite_mean_and_count(np.where(condition_slice, st_error, np.nan))
+                mae, count = spatial_condition_min_abs_error_stats(pred_slice, target_slice, condition_slice, reach_indices)
                 row = {
                     "time_shift_delta": delta,
                     "st_shift_MAE": mae,
