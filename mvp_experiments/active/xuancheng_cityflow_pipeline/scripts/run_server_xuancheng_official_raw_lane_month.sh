@@ -12,11 +12,22 @@ WRITE_CSV="${WRITE_CSV:-0}"
 DOWNLOAD_FIRST="${DOWNLOAD_FIRST:-1}"
 SKIP_EXISTING="${SKIP_EXISTING:-1}"
 DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-5}"
+WORKER_COUNT="${WORKER_COUNT:-1}"
+WORKER_INDEX="${WORKER_INDEX:-0}"
 DEFAULT_CITYFLOW_PYTHON="/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow/bin/python"
 if [[ -z "${PYTHON_BIN:-}" && -x "${DEFAULT_CITYFLOW_PYTHON}" ]]; then
   PYTHON_BIN="${DEFAULT_CITYFLOW_PYTHON}"
 else
   PYTHON_BIN="${PYTHON_BIN:-python3}"
+fi
+
+if (( WORKER_COUNT < 1 )); then
+  echo "[error] WORKER_COUNT must be >= 1, got ${WORKER_COUNT}" >&2
+  exit 2
+fi
+if (( WORKER_INDEX < 0 || WORKER_INDEX >= WORKER_COUNT )); then
+  echo "[error] WORKER_INDEX must be in [0, WORKER_COUNT), got ${WORKER_INDEX}/${WORKER_COUNT}" >&2
+  exit 2
 fi
 
 DATES=(
@@ -62,6 +73,7 @@ echo "[info] output_dir=${OUTPUT_DIR}"
 echo "[info] log_dir=${LOG_DIR}"
 echo "[info] duration=${DURATION} bucket=${BUCKET_SECONDS} tl_mode=${TL_MODE}"
 echo "[info] thread_num=${THREAD_NUM} write_csv=${WRITE_CSV}"
+echo "[info] worker_index=${WORKER_INDEX} worker_count=${WORKER_COUNT}"
 echo "[info] python=${PYTHON_BIN}"
 
 if [[ "${DOWNLOAD_FIRST}" == "1" ]]; then
@@ -71,7 +83,14 @@ if [[ "${DOWNLOAD_FIRST}" == "1" ]]; then
     --retries "${DOWNLOAD_RETRIES}"
 fi
 
+DATE_ORD=0
 for DATE in "${DATES[@]}"; do
+  CURRENT_ORD="${DATE_ORD}"
+  DATE_ORD=$((DATE_ORD + 1))
+  if (( CURRENT_ORD % WORKER_COUNT != WORKER_INDEX )); then
+    continue
+  fi
+
   NPZ_PATH="${OUTPUT_DIR}/xuancheng_${DATE}_lane_agg_${BUCKET_SECONDS}s.npz"
   CSV_PATH="${OUTPUT_DIR}/xuancheng_${DATE}_lane_agg_${BUCKET_SECONDS}s.csv.gz"
   LOG_PATH="${LOG_DIR}/${DATE}.log"
