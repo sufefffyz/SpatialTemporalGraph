@@ -6,8 +6,8 @@ GPU="${2:-1}"
 RUN_TAG="${3:-osrm_gaussian_global_20260513}"
 PROJECT="${WANDB_PROJECT:-adaptive_threshold_dynamic_weight}"
 
-if [[ "${MODEL}" != "gwnet" && "${MODEL}" != "dcrnn" ]]; then
-  echo "Usage: $0 {gwnet|dcrnn} [gpu_id] [run_tag]" >&2
+if [[ "${MODEL}" != "gwnet" && "${MODEL}" != "dcrnn" && "${MODEL}" != "stgcn" ]]; then
+  echo "Usage: $0 {gwnet|dcrnn|stgcn} [gpu_id] [run_tag]" >&2
   exit 2
 fi
 
@@ -24,6 +24,10 @@ case "${MODEL}" in
   dcrnn)
     CFG="baselines/DCRNN/SD_osrm_gaussian_global.py"
     MODEL_NAME="DCRNN"
+    ;;
+  stgcn)
+    CFG="baselines/STGCN/SD_osrm_gaussian_global.py"
+    MODEL_NAME="STGCNChebGraphConv"
     ;;
 esac
 

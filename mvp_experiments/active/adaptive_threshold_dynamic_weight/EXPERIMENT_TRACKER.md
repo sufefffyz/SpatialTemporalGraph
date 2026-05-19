@@ -16,3 +16,4 @@
 | R012 | M5 | Stability | top 2 methods, 3 seeds | LargeST-SD + one larger LargeST subset | mean/std metrics | MUST | TODO | Paper-grade evidence. |
 | R013 | M5 | Qualitative diagnosis | learned degree/edge weights by region/time | LargeST-SD | degree distribution, peak/off-peak patterns | NICE | TODO | After positive quantitative signal. |
 | R014 | M5 | PEMS replication | best method | coordinate-validated PEMS | MAE/RMSE/MAPE/WAPE | MUST | TODO | Main-table replication only if coordinates validated. |
+| R015 | M1 | Backbone check | STGCN on OSRM Gaussian global threshold beta sweep | LargeST-SD | MAE/RMSE/MAPE/WAPE, degree sensitivity | SHOULD | TODO | Added to test whether the current adaptive graph signal holds beyond GWNet/DCRNN. |

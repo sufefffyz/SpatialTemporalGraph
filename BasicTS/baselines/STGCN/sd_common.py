@@ -36,6 +36,10 @@ def _load_desc(data_name: str) -> dict:
 def _build_gso(data_name: str, graph_variant: str) -> torch.Tensor:
     adj_path = Path("datasets") / data_name / "adj_mx.pkl"
 
+    if graph_variant == "osrm_gaussian_global":
+        raw_adj = _unwrap_adj_payload(load_pkl(str(adj_path)))
+        gso = calculate_symmetric_normalized_laplacian(raw_adj).astype(np.float32).todense()
+        return torch.tensor(gso, dtype=torch.float32)
     if graph_variant == "distthre":
         adj_mx, _ = load_adj(str(adj_path), "normlap")
         return torch.tensor(adj_mx[0], dtype=torch.float32)
@@ -55,7 +59,13 @@ def _build_gso(data_name: str, graph_variant: str) -> torch.Tensor:
 
 
 def build_sd_cfg(graph_variant: str) -> EasyDict:
-    if graph_variant == "distthre":
+    graph_tag = None
+    if graph_variant == "osrm_gaussian_global":
+        data_name = os.environ.get("BASICTS_DATA_NAME", "SD_OSRMGG_B100")
+        graph_tag = os.environ.get("BASICTS_GRAPH_TAG", data_name.replace("SD_OSRMGG_", "beta").lower())
+        description = f"STGCN on {data_name} OSRM Gaussian global-threshold graph ({graph_tag})"
+        ckpt_tag = "osrm_gaussian_global_fixed"
+    elif graph_variant == "distthre":
         data_name = "SD"
         description = "STGCN on SD with LargeST distance-threshold graph"
         ckpt_tag = "original"
@@ -97,7 +107,7 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
         "bias": True,
         "droprate": 0.5,
     }
-    num_epochs = 100
+    num_epochs = int(os.environ.get("BASICTS_NUM_EPOCHS", "100"))
 
     cfg = EasyDict()
     cfg.DESCRIPTION = description
@@ -196,5 +206,13 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
     cfg.EVAL = EasyDict()
     cfg.EVAL.HORIZONS = [3, 6, 12]
     cfg.EVAL.USE_GPU = True
+
+    if graph_variant == "osrm_gaussian_global":
+        cfg.WANDB = EasyDict()
+        cfg.WANDB.PROJECT = os.environ.get("WANDB_PROJECT", "adaptive_threshold_dynamic_weight")
+        cfg.WANDB.MODE = os.environ.get("WANDB_MODE", "online")
+        cfg.WANDB.RUN_NAME = os.environ.get("WANDB_NAME", f"{model_arch.__name__}_{data_name}_{graph_tag}")
+        cfg.WANDB.GROUP = os.environ.get("WANDB_RUN_GROUP", "sd_osrm_gaussian_global_stgcn")
+        cfg.WANDB.TAGS = ["adaptive-threshold", "sd", "osrm-gaussian-global", "stgcn", graph_tag]
 
     return cfg
