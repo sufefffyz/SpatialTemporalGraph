@@ -13,6 +13,7 @@ MOVING_WINDOW="${MOVING_WINDOW:-12}"
 FFT_CUTOFF_PERIOD="${FFT_CUTOFF_PERIOD:-${MOVING_WINDOW}}"
 DECOMP_METHODS="${DECOMP_METHODS:-moving_average fft_lowpass}"
 PEAK_Q="${PEAK_Q:-0.90}"
+HORIZONS="${HORIZONS:-1 2 3 4 5 6 7 8 9 10 11 12}"
 
 SEARCH_ROOTS=()
 if [ "$#" -gt 0 ]; then
@@ -30,6 +31,7 @@ for ROOT in "${SEARCH_ROOTS[@]}"; do
   SEARCH_ARGS+=(--search-root "${ROOT}")
 done
 read -r -a DECOMP_METHOD_ARGS <<< "${DECOMP_METHODS}"
+read -r -a HORIZON_ARGS <<< "${HORIZONS}"
 
 python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --dataset-name "${DATASET_NAME}" \
@@ -38,7 +40,7 @@ python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --fft-cutoff-period "${FFT_CUTOFF_PERIOD}" \
   --decomp-methods "${DECOMP_METHOD_ARGS[@]}" \
   --peak-q "${PEAK_Q}" \
-  --horizons 1 3 6 12 \
+  --horizons "${HORIZON_ARGS[@]}" \
   --max-runs "${MAX_RUNS}" \
   --include "${DATASET_NAME}" \
   "${SEARCH_ARGS[@]}"

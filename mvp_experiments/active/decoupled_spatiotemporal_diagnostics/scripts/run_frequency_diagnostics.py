@@ -95,7 +95,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Target null value for standard metrics. Defaults to desc.json regular_settings.NULL_VAL; use 'none' to disable.",
     )
-    parser.add_argument("--horizons", nargs="+", type=int, default=[1, 3, 6, 12], help="1-based horizons.")
+    parser.add_argument("--horizons", nargs="+", type=int, default=list(range(1, 13)), help="1-based horizons.")
     parser.add_argument("--adj-path", type=Path, default=None, help="Optional adjacency pickle/npy for spatial residual diagnostics.")
     parser.add_argument("--max-edge-pairs", type=int, default=20000)
     return parser.parse_args()
