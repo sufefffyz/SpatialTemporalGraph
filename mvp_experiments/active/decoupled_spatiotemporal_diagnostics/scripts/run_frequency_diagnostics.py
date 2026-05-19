@@ -12,6 +12,14 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from scipy import sparse
+
+    HAS_SCIPY = True
+except ModuleNotFoundError:
+    sparse = None
+    HAS_SCIPY = False
+
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 BASICTS_ROOT = REPO_ROOT / "BasicTS"
@@ -553,7 +561,7 @@ def best_shift_summary(curve_rows: list[dict[str, float | int]]) -> dict[str, fl
     }
 
 
-def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: bool) -> dict[int, list[np.ndarray]]:
+def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: bool) -> dict[int, object]:
     if adj is None:
         return {}
     max_k = max([0, *hop_ks])
@@ -583,12 +591,26 @@ def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: boo
             next_frontiers.append(next_nodes)
         frontier_sets = next_frontiers
         reach_by_k[hop] = [np.asarray(sorted(items), dtype=np.int64) for items in reach_sets]
+    if HAS_SCIPY:
+        reach_sparse: dict[int, object] = {}
+        for hop, indices_by_node in reach_by_k.items():
+            rows = []
+            cols = []
+            for node, indices in enumerate(indices_by_node):
+                rows.extend([node] * len(indices))
+                cols.extend(indices.tolist())
+            data = np.ones(len(rows), dtype=np.uint8)
+            reach_sparse[hop] = sparse.csr_matrix((data, (rows, cols)), shape=(num_nodes, num_nodes))
+        return {k: reach_sparse[k] for k in sorted(set(hop_ks)) if k in reach_sparse}
     return {k: reach_by_k[k] for k in sorted(set(hop_ks)) if k in reach_by_k}
 
 
-def spatial_dilate(mask: np.ndarray, reach_indices: list[np.ndarray] | None) -> np.ndarray:
+def spatial_dilate(mask: np.ndarray, reach_indices: object | None) -> np.ndarray:
     if reach_indices is None:
         return mask
+    if HAS_SCIPY and sparse.issparse(reach_indices):
+        counts = reach_indices.dot(mask.T.astype(np.uint8)).T
+        return np.asarray(counts > 0)
     out = np.zeros_like(mask, dtype=bool)
     for node, indices in enumerate(reach_indices):
         if indices.size == 1 and indices[0] == node:
@@ -600,7 +622,7 @@ def spatial_dilate(mask: np.ndarray, reach_indices: list[np.ndarray] | None) -> 
 
 def temporal_spatial_dilate(
     mask: np.ndarray,
-    reach_indices: list[np.ndarray] | None,
+    reach_indices: object | None,
     time_window: int,
 ) -> np.ndarray:
     time_window = int(max(0, time_window))
@@ -651,7 +673,7 @@ def relaxed_peak_hit_metrics(
     pred_peak: np.ndarray,
     hop_k: int,
     time_window: int,
-    reach_indices: list[np.ndarray] | None,
+    reach_indices: object | None,
 ) -> dict[str, float | int]:
     true_near = temporal_spatial_dilate(true_peak, reach_indices, time_window)
     pred_near = temporal_spatial_dilate(pred_peak, reach_indices, time_window)
@@ -689,7 +711,7 @@ def alignment_rows(
     max_shift: int,
     time_windows: list[int],
     hop_ks: list[int],
-    reach_by_k: dict[int, list[np.ndarray]],
+    reach_by_k: dict[int, object],
 ) -> tuple[list[dict], list[dict]]:
     shift_curve = shifted_mae_curve(pred, target, mask, max_shift)
     shift_summary = best_shift_summary(shift_curve)
