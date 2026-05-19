@@ -627,18 +627,19 @@ def temporal_spatial_dilate(
 ) -> np.ndarray:
     time_window = int(max(0, time_window))
     num_steps = mask.shape[0]
+    spatial_mask = spatial_dilate(mask, reach_indices)
     out = np.zeros_like(mask, dtype=bool)
     for delta in range(-time_window, time_window + 1):
         if delta < 0:
-            source = mask[: num_steps + delta]
+            source = spatial_mask[: num_steps + delta]
             target_slice = slice(-delta, None)
         elif delta > 0:
-            source = mask[delta:]
+            source = spatial_mask[delta:]
             target_slice = slice(0, num_steps - delta)
         else:
-            source = mask
+            source = spatial_mask
             target_slice = slice(None)
-        out[target_slice] |= spatial_dilate(source, reach_indices)
+        out[target_slice] |= source
     return out
 
 
