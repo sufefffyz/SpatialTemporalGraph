@@ -16,6 +16,7 @@ PEAK_Q="${PEAK_Q:-0.90}"
 CONDITION_HIGH_Q="${CONDITION_HIGH_Q:-0.75}"
 CONDITION_RAMP_Q="${CONDITION_RAMP_Q:-0.90}"
 JOINT_ST_CONDITIONS="${JOINT_ST_CONDITIONS:-high_volume peak ramp}"
+JOINT_ST_WORKERS="${JOINT_ST_WORKERS:-1}"
 HORIZONS="${HORIZONS:-1 2 3 4 5 6 7 8 9 10 11 12}"
 INCLUDE_TOKENS="${INCLUDE_TOKENS:-${DATASET_NAME}_}"
 ALIGNMENT_MAX_SHIFT="${ALIGNMENT_MAX_SHIFT:-3}"
@@ -73,6 +74,7 @@ python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --condition-high-q "${CONDITION_HIGH_Q}" \
   --condition-ramp-q "${CONDITION_RAMP_Q}" \
   --joint-st-conditions "${JOINT_ST_CONDITION_ARGS[@]}" \
+  --joint-st-workers "${JOINT_ST_WORKERS}" \
   --horizons "${HORIZON_ARGS[@]}" \
   --alignment-max-shift "${ALIGNMENT_MAX_SHIFT}" \
   --alignment-time-windows "${ALIGNMENT_TIME_WINDOW_ARGS[@]}" \

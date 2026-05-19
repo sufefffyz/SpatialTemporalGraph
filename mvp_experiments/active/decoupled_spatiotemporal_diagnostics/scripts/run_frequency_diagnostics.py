@@ -7,6 +7,7 @@ import json
 import math
 import os
 import pickle
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -140,6 +141,12 @@ def parse_args() -> argparse.Namespace:
         default=["high_volume", "peak", "ramp"],
         choices=["all", "normal", "high_volume", "peak", "ramp"],
         help="Traffic regimes for joint spatiotemporal STShiftGain. Defaults to the event-like regimes to keep the oracle-style spatial search interpretable.",
+    )
+    parser.add_argument(
+        "--joint-st-workers",
+        type=int,
+        default=1,
+        help="Number of worker threads for joint spatiotemporal STShiftGain over hop/time-shift tasks.",
     )
     parser.add_argument(
         "--seasonal-period",
@@ -926,6 +933,7 @@ def joint_st_shift_rows(
     high_q: float,
     ramp_q: float,
     joint_conditions: list[str],
+    joint_st_workers: int,
 ) -> tuple[list[dict], list[dict]]:
     all_conditions = conditional_shift_masks(target, mask, peak_q, high_q, ramp_q)
     conditions = {condition: all_conditions[condition] for condition in joint_conditions if condition in all_conditions}
@@ -937,32 +945,53 @@ def joint_st_shift_rows(
     curve_rows: list[dict] = []
     metric_rows: list[dict] = []
 
-    for hop_k in sorted(set(hop_ks)):
+    def compute_hop_delta(hop_k: int, delta: int) -> list[tuple[int, str, dict[str, float | int]]]:
         if hop_k == 0:
             reach_indices = None
         else:
             reach_indices = reach_lists_by_k.get(hop_k)
             if reach_indices is None:
-                continue
-        for delta in range(-int(max_shift), int(max_shift) + 1):
-            for condition, condition_mask in conditions.items():
-                pred_slice, target_slice, condition_slice = shifted_slices(pred, target, mask, condition_mask, delta)
-                mae, count = spatial_condition_min_abs_error_stats(pred_slice, target_slice, condition_slice, reach_indices)
-                row = {
-                    "time_shift_delta": delta,
-                    "st_shift_MAE": mae,
-                    "valid_count": count,
-                }
-                curves_by_key.setdefault((hop_k, condition), []).append(row)
-                curve_rows.append(
+                return []
+        rows: list[tuple[int, str, dict[str, float | int]]] = []
+        for condition, condition_mask in conditions.items():
+            pred_slice, target_slice, condition_slice = shifted_slices(pred, target, mask, condition_mask, delta)
+            mae, count = spatial_condition_min_abs_error_stats(pred_slice, target_slice, condition_slice, reach_indices)
+            rows.append(
+                (
+                    hop_k,
+                    condition,
                     {
-                        "system": system,
-                        "horizon": horizon,
-                        "alignment_hop_k": hop_k,
-                        "condition": condition,
-                        **row,
-                    }
+                        "time_shift_delta": delta,
+                        "st_shift_MAE": mae,
+                        "valid_count": count,
+                    },
                 )
+            )
+        return rows
+
+    tasks = [
+        (hop_k, delta)
+        for hop_k in sorted(set(hop_ks))
+        for delta in range(-int(max_shift), int(max_shift) + 1)
+    ]
+    workers = int(max(1, joint_st_workers))
+    if workers > 1 and len(tasks) > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            all_task_rows = [row for rows in pool.map(lambda item: compute_hop_delta(*item), tasks) for row in rows]
+    else:
+        all_task_rows = [row for task in tasks for row in compute_hop_delta(*task)]
+
+    for hop_k, condition, row in all_task_rows:
+        curves_by_key.setdefault((hop_k, condition), []).append(row)
+        curve_rows.append(
+            {
+                "system": system,
+                "horizon": horizon,
+                "alignment_hop_k": hop_k,
+                "condition": condition,
+                **row,
+            }
+        )
 
     for (hop_k, condition), curve in curves_by_key.items():
         exact_zero_mae, exact_count = exact_zero_by_condition[condition]
@@ -1820,6 +1849,7 @@ def main() -> None:
                 args.condition_high_q,
                 args.condition_ramp_q,
                 args.joint_st_conditions,
+                args.joint_st_workers,
             )
             joint_st_shift_metric_rows.extend(st_rows)
             joint_st_time_shift_curve_rows.extend(st_curve_rows)
@@ -1882,6 +1912,7 @@ def main() -> None:
         "condition_high_q": args.condition_high_q,
         "condition_ramp_q": args.condition_ramp_q,
         "joint_st_conditions": args.joint_st_conditions,
+        "joint_st_workers": int(max(1, args.joint_st_workers)),
         "num_runs": len(run_reports),
         "runs": run_reports,
     }
