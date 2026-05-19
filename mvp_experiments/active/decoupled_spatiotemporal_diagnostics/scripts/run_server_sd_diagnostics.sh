@@ -42,3 +42,15 @@ python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --max-runs "${MAX_RUNS}" \
   --include "${DATASET_NAME}" \
   "${SEARCH_ARGS[@]}"
+
+python "${SCRIPT_DIR}/plot_decoupled_diagnostics.py" \
+  --input-dir "${OUTPUT_DIR}" \
+  --plot-format png
+
+if [[ " ${DECOMP_METHODS} " == *" moving_average "* && " ${DECOMP_METHODS} " == *" fft_lowpass "* ]]; then
+  python "${SCRIPT_DIR}/summarize_decomposition_rankings.py" \
+    --summary-csv "${OUTPUT_DIR}/decomposition_average_summary.csv" \
+    --output-dir "${OUTPUT_DIR}" \
+    --baseline-method moving_average \
+    --comparison-method fft_lowpass
+fi

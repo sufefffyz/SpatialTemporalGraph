@@ -66,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-nodes", type=int, default=None)
     parser.add_argument("--output-len", type=int, default=None)
     parser.add_argument("--target-dim", type=int, default=1)
+    parser.add_argument("--target-channel", type=int, default=0, help="Target channel in dataset data.dat for seasonal scaling.")
     parser.add_argument("--dtype", default="float32")
     parser.add_argument("--moving-window", type=int, default=12)
     parser.add_argument(
@@ -82,6 +83,18 @@ def parse_args() -> argparse.Namespace:
         help="FFT low-pass cutoff in time steps. Low frequency keeps periods >= this value. Defaults to --moving-window.",
     )
     parser.add_argument("--peak-q", type=float, default=0.90)
+    parser.add_argument("--worst-pct", type=float, default=0.10, help="Top fraction of test windows for worst-window MAE.")
+    parser.add_argument(
+        "--seasonal-period",
+        type=int,
+        default=None,
+        help="Seasonal period for MASE/RMSSE scaling. Defaults to one day inferred from dataset frequency.",
+    )
+    parser.add_argument(
+        "--null-val",
+        default=None,
+        help="Target null value for standard metrics. Defaults to desc.json regular_settings.NULL_VAL; use 'none' to disable.",
+    )
     parser.add_argument("--horizons", nargs="+", type=int, default=[1, 3, 6, 12], help="1-based horizons.")
     parser.add_argument("--adj-path", type=Path, default=None, help="Optional adjacency pickle/npy for spatial residual diagnostics.")
     parser.add_argument("--max-edge-pairs", type=int, default=20000)
@@ -105,20 +118,26 @@ def dataset_dir(args: argparse.Namespace) -> Path:
     return (BASICTS_ROOT / "datasets" / args.dataset_name).resolve()
 
 
+def load_dataset_desc(args: argparse.Namespace) -> dict | None:
+    desc_path = dataset_dir(args) / "desc.json"
+    if not desc_path.exists():
+        return None
+    return load_json(desc_path)
+
+
 def load_dataset_shape(args: argparse.Namespace) -> tuple[int, int]:
     if args.num_nodes is not None and args.output_len is not None:
         return int(args.num_nodes), int(args.output_len)
-    desc_path = dataset_dir(args) / "desc.json"
-    if not desc_path.exists():
+    desc = load_dataset_desc(args)
+    if desc is None:
         missing = []
         if args.num_nodes is None:
             missing.append("--num-nodes")
         if args.output_len is None:
             missing.append("--output-len")
         raise FileNotFoundError(
-            f"Dataset desc not found at {desc_path}; provide {' and '.join(missing)}."
+            f"Dataset desc not found at {dataset_dir(args) / 'desc.json'}; provide {' and '.join(missing)}."
         )
-    desc = load_json(desc_path)
     num_nodes = int(args.num_nodes or desc["num_nodes"])
     output_len = int(args.output_len or desc["regular_settings"]["OUTPUT_LEN"])
     return num_nodes, output_len
@@ -259,6 +278,223 @@ def masked_wape(pred: np.ndarray, target: np.ndarray, mask: np.ndarray | None = 
     return float(np.sum(np.abs(pred[valid] - target[valid])) / denom)
 
 
+def parse_null_value(value: str | int | float | None, desc: dict | None) -> float | None:
+    if value is None:
+        if desc is None:
+            return None
+        value = desc.get("regular_settings", {}).get("NULL_VAL")
+    if value is None:
+        return None
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"none", "null", "off", "disable", "disabled"}:
+            return None
+        if lowered in {"nan", "np.nan"}:
+            return float("nan")
+    return float(value)
+
+
+def valid_target_mask(target: np.ndarray, null_val: float | None) -> np.ndarray:
+    valid = np.isfinite(target)
+    if null_val is None:
+        return valid
+    if isinstance(null_val, float) and math.isnan(null_val):
+        return valid
+    return valid & ~np.isclose(target, null_val, atol=5e-5, rtol=0.0)
+
+
+def infer_seasonal_period(desc: dict | None, explicit_period: int | None) -> int:
+    if explicit_period is not None:
+        return int(explicit_period)
+    if desc is None:
+        return 0
+    frequency = desc.get("frequency (minutes)")
+    try:
+        frequency = float(frequency)
+    except (TypeError, ValueError):
+        return 0
+    if frequency <= 0:
+        return 0
+    return max(1, int(round(1440.0 / frequency)))
+
+
+def load_seasonal_scales(
+    args: argparse.Namespace,
+    desc: dict | None,
+    num_nodes: int,
+    seasonal_period: int,
+    null_val: float | None,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if desc is None or seasonal_period <= 0:
+        return None, None
+    data_path = dataset_dir(args) / "data.dat"
+    if not data_path.exists():
+        log(f"[warn] data.dat missing, MASE/RMSSE disabled: {data_path}")
+        return None, None
+    shape = tuple(int(dim) for dim in desc["shape"])
+    if len(shape) != 3 or shape[1] != num_nodes:
+        log(f"[warn] dataset shape {shape} does not match num_nodes={num_nodes}; MASE/RMSSE disabled")
+        return None, None
+    if not (0 <= args.target_channel < shape[2]):
+        raise ValueError(f"--target-channel {args.target_channel} outside dataset feature dimension {shape[2]}")
+
+    ratios = desc.get("regular_settings", {}).get("TRAIN_VAL_TEST_RATIO", [0.6, 0.2, 0.2])
+    total_len = shape[0]
+    valid_len = int(total_len * float(ratios[1]))
+    test_len = int(total_len * float(ratios[2]))
+    train_len = total_len - valid_len - test_len
+    if train_len <= seasonal_period:
+        log(f"[warn] train_len={train_len} <= seasonal_period={seasonal_period}; MASE/RMSSE disabled")
+        return None, None
+
+    data = np.memmap(data_path, dtype="float32", mode="r", shape=shape)
+    series = np.asarray(data[:train_len, :, args.target_channel], dtype=np.float32)
+    current = series[seasonal_period:]
+    previous = series[:-seasonal_period]
+    valid = np.isfinite(current) & np.isfinite(previous)
+    if null_val is not None and not (isinstance(null_val, float) and math.isnan(null_val)):
+        valid &= ~np.isclose(current, null_val, atol=5e-5, rtol=0.0)
+        valid &= ~np.isclose(previous, null_val, atol=5e-5, rtol=0.0)
+    diff = current - previous
+    with np.errstate(invalid="ignore"):
+        scale_abs = np.nanmean(np.where(valid, np.abs(diff), np.nan), axis=0)
+        scale_sq = np.nanmean(np.where(valid, diff * diff, np.nan), axis=0)
+    scale_abs = np.where((scale_abs > 1e-8) & np.isfinite(scale_abs), scale_abs, np.nan).astype(np.float32)
+    scale_sq = np.where((scale_sq > 1e-8) & np.isfinite(scale_sq), scale_sq, np.nan).astype(np.float32)
+    return scale_abs, scale_sq
+
+
+def masked_mase(
+    pred: np.ndarray,
+    target: np.ndarray,
+    scale_abs: np.ndarray | None,
+    mask: np.ndarray | None = None,
+) -> float:
+    if scale_abs is None:
+        return float("nan")
+    pred, target, valid = finite_pair(pred, target)
+    if mask is not None:
+        valid &= mask
+    scale = np.asarray(scale_abs, dtype=np.float32).reshape(1, -1)
+    valid &= np.isfinite(scale) & (scale > 0)
+    if not np.any(valid):
+        return float("nan")
+    return float(np.mean(np.abs(pred - target)[valid] / np.broadcast_to(scale, pred.shape)[valid]))
+
+
+def masked_rmsse(
+    pred: np.ndarray,
+    target: np.ndarray,
+    scale_sq: np.ndarray | None,
+    mask: np.ndarray | None = None,
+) -> float:
+    if scale_sq is None:
+        return float("nan")
+    pred, target, valid = finite_pair(pred, target)
+    if mask is not None:
+        valid &= mask
+    scale = np.asarray(scale_sq, dtype=np.float32).reshape(1, -1)
+    valid &= np.isfinite(scale) & (scale > 0)
+    if not np.any(valid):
+        return float("nan")
+    return float(np.sqrt(np.mean(((pred - target) * (pred - target))[valid] / np.broadcast_to(scale, pred.shape)[valid])))
+
+
+def per_window_mae(pred: np.ndarray, target: np.ndarray, mask: np.ndarray | None = None) -> np.ndarray:
+    pred, target, valid = finite_pair(pred, target)
+    if mask is not None:
+        valid &= mask
+    abs_err = np.where(valid, np.abs(pred - target), np.nan)
+    with np.errstate(invalid="ignore"):
+        return np.nanmean(abs_err, axis=1)
+
+
+def worst_pct_mae(pred: np.ndarray, target: np.ndarray, pct: float, mask: np.ndarray | None = None) -> float:
+    losses = per_window_mae(pred, target, mask)
+    losses = losses[np.isfinite(losses)]
+    if losses.size == 0:
+        return float("nan")
+    pct = min(max(float(pct), 0.0), 1.0)
+    if pct <= 0:
+        return float(np.max(losses))
+    k = max(1, int(math.ceil(losses.size * pct)))
+    return float(np.mean(np.sort(losses)[-k:]))
+
+
+def peak_detection_metrics(
+    pred: np.ndarray,
+    target: np.ndarray,
+    q: float,
+    mask: np.ndarray | None = None,
+) -> dict[str, float | int]:
+    pred, target, valid = finite_pair(pred, target)
+    if mask is not None:
+        valid &= mask
+    with np.errstate(invalid="ignore"):
+        thresholds = np.nanquantile(np.where(valid, target, np.nan), q, axis=0).astype(np.float32)
+    threshold_grid = thresholds.reshape(1, -1)
+    threshold_valid = np.isfinite(threshold_grid)
+    true_peak = valid & threshold_valid & (target >= threshold_grid)
+    pred_peak = valid & threshold_valid & (pred >= threshold_grid)
+    tp = int(np.sum(true_peak & pred_peak))
+    pred_count = int(np.sum(pred_peak))
+    true_count = int(np.sum(true_peak))
+    precision = tp / pred_count if pred_count else float("nan")
+    recall = tp / true_count if true_count else float("nan")
+    f1 = (
+        2.0 * precision * recall / (precision + recall)
+        if np.isfinite(precision) and np.isfinite(recall) and precision + recall > 0
+        else float("nan")
+    )
+    return {
+        "peak_precision": float(precision),
+        "peak_recall": float(recall),
+        "peak_F1": float(f1),
+        "peak_true_count": true_count,
+        "peak_pred_count": pred_count,
+        "peak_tp_count": tp,
+    }
+
+
+def standard_performance_row(
+    system: str,
+    horizon: int,
+    pred: np.ndarray,
+    target: np.ndarray,
+    mask: np.ndarray,
+    scale_abs: np.ndarray | None,
+    scale_sq: np.ndarray | None,
+    peak_q: float,
+    worst_pct: float,
+) -> dict[str, float | int | str]:
+    peak_metrics = peak_detection_metrics(pred, target, peak_q, mask)
+    peak = quantile_peak_mask(np.where(mask, target, np.nan), peak_q)
+    normal = mask & ~peak
+    normal_mae = masked_mae(pred, target, normal)
+    peak_mae = masked_mae(pred, target, peak & mask)
+    return {
+        "system": system,
+        "horizon": horizon,
+        "MAE": masked_mae(pred, target, mask),
+        "RMSE": masked_rmse(pred, target, mask),
+        "WAPE": masked_wape(pred, target, mask),
+        "W1": wasserstein_1d(pred, target, mask),
+        "MASE": masked_mase(pred, target, scale_abs, mask),
+        "RMSSE": masked_rmsse(pred, target, scale_sq, mask),
+        "worst_pct": worst_pct,
+        "worst_pct_MAE": worst_pct_mae(pred, target, worst_pct, mask),
+        "normal_MAE": normal_mae,
+        "peak_MAE": peak_mae,
+        "peak_over_normal_MAE": (
+            peak_mae / normal_mae
+            if normal_mae and np.isfinite(normal_mae)
+            else float("nan")
+        ),
+        "valid_count": int(np.sum(np.isfinite(pred) & np.isfinite(target) & mask)),
+        **peak_metrics,
+    }
+
+
 def wasserstein_1d(pred: np.ndarray, target: np.ndarray, mask: np.ndarray | None = None) -> float:
     pred, target, valid = finite_pair(pred, target)
     if mask is not None:
@@ -352,26 +588,28 @@ def quantile_peak_mask(target: np.ndarray, q: float) -> np.ndarray:
 def peak_rows(
     system: str,
     horizon: int,
-    decomposition_method: str,
     pred: np.ndarray,
     target: np.ndarray,
     q: float,
+    base_mask: np.ndarray | None = None,
 ) -> list[dict[str, float | int | str]]:
-    peak = quantile_peak_mask(target, q)
+    threshold_target = np.where(base_mask, target, np.nan) if base_mask is not None else target
+    peak = quantile_peak_mask(threshold_target, q)
     normal = ~peak
     rows = []
-    for split_name, mask in [("normal", normal), (f"peak_q{q:.2f}", peak)]:
+    for split_name, split_mask in [("normal", normal), (f"peak_q{q:.2f}", peak)]:
+        combined_mask = split_mask if base_mask is None else (split_mask & base_mask)
         rows.append(
             {
                 "system": system,
                 "horizon": horizon,
-                "decomposition_method": decomposition_method,
+                "metric_scope": "standard",
                 "window_type": split_name,
-                "MAE": masked_mae(pred, target, mask),
-                "RMSE": masked_rmse(pred, target, mask),
-                "WAPE": masked_wape(pred, target, mask),
-                "W1": wasserstein_1d(pred, target, mask),
-                "valid_count": int(np.sum(np.isfinite(pred) & np.isfinite(target) & mask)),
+                "MAE": masked_mae(pred, target, combined_mask),
+                "RMSE": masked_rmse(pred, target, combined_mask),
+                "WAPE": masked_wape(pred, target, combined_mask),
+                "W1": wasserstein_1d(pred, target, combined_mask),
+                "valid_count": int(np.sum(np.isfinite(pred) & np.isfinite(target) & combined_mask)),
             }
         )
     return rows
@@ -391,6 +629,80 @@ def write_csv(path: Path, rows: list[dict]) -> None:
         writer = csv.DictWriter(fp, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+STANDARD_RANK_METRICS = [
+    ("MAE", "lower"),
+    ("WAPE", "lower"),
+    ("MASE", "lower"),
+    ("worst_pct_MAE", "lower"),
+    ("peak_F1", "higher"),
+]
+
+
+def rank_values(values: dict[str, float], direction: str) -> dict[str, float]:
+    finite = [(system, value) for system, value in values.items() if np.isfinite(value)]
+    finite.sort(key=lambda item: item[1], reverse=direction == "higher")
+    ranks: dict[str, float] = {}
+    idx = 0
+    while idx < len(finite):
+        j = idx + 1
+        while j < len(finite) and finite[j][1] == finite[idx][1]:
+            j += 1
+        avg_rank = (idx + 1 + j) / 2.0
+        for k in range(idx, j):
+            ranks[finite[k][0]] = avg_rank
+        idx = j
+    for system in values:
+        ranks.setdefault(system, float("nan"))
+    return ranks
+
+
+def standard_rank_tables(standard_rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    systems = sorted({row["system"] for row in standard_rows})
+    horizons = sorted({int(row["horizon"]) for row in standard_rows})
+    by_key = {(row["system"], int(row["horizon"])): row for row in standard_rows}
+    detail_rows: list[dict] = []
+    rank_values_by_system: dict[str, list[float]] = {system: [] for system in systems}
+
+    for horizon in horizons:
+        for metric, direction in STANDARD_RANK_METRICS:
+            values = {}
+            for system in systems:
+                row = by_key.get((system, horizon), {})
+                try:
+                    values[system] = float(row.get(metric, float("nan")))
+                except (TypeError, ValueError):
+                    values[system] = float("nan")
+            ranks = rank_values(values, direction)
+            for system in systems:
+                rank = ranks[system]
+                if np.isfinite(rank):
+                    rank_values_by_system[system].append(rank)
+                detail_rows.append(
+                    {
+                        "system": system,
+                        "horizon": horizon,
+                        "metric": metric,
+                        "direction": direction,
+                        "value": values[system],
+                        "rank": rank,
+                    }
+                )
+
+    summary_rows = []
+    for system in systems:
+        ranks = np.asarray(rank_values_by_system[system], dtype=np.float64)
+        finite = ranks[np.isfinite(ranks)]
+        summary_rows.append(
+            {
+                "system": system,
+                "avg_standard_rank": float(np.mean(finite)) if finite.size else float("nan"),
+                "rank_count": int(finite.size),
+            }
+        )
+    summary_rows.sort(key=lambda row: (float(row["avg_standard_rank"]) if np.isfinite(float(row["avg_standard_rank"])) else float("inf"), row["system"]))
+    return detail_rows, summary_rows
 
 
 def unwrap_adj(payload) -> np.ndarray:
@@ -538,6 +850,8 @@ def json_default(value):
 
 def build_markdown(
     report: dict,
+    standard_rows: list[dict],
+    rank_summary_rows: list[dict],
     component_rows: list[dict],
     peak_metric_rows: list[dict],
     residual_metric_rows: list[dict],
@@ -551,6 +865,8 @@ def build_markdown(
         f"- Decomposition methods: {', '.join(report['decomposition_methods'])}",
         f"- Moving-average window: {report['moving_window']}",
         f"- FFT cutoff period: {report['fft_cutoff_period']}",
+        f"- Seasonal period for MASE/RMSSE: {report['seasonal_period'] or 'disabled'}",
+        f"- Worst-window fraction: {report['worst_pct']}",
         f"- Horizons: {', '.join(str(h) for h in report['horizons'])}",
         "",
         "## Runs",
@@ -559,11 +875,32 @@ def build_markdown(
     for run in report["runs"]:
         lines.append(f"- `{run['name']}`: `{run['result_dir']}` shape={run.get('shape', 'unknown')}")
 
-    lines.extend(["", "## Component Metrics", ""])
+    lines.extend(["", "## Standard Performance Metrics", ""])
+    if standard_rows:
+        lines.append("| System | Horizon | MAE | RMSE | WAPE | MASE | RMSSE | Worst MAE | Peak F1 | Full W1 |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for row in standard_rows[:80]:
+            lines.append(
+                f"| {row['system']} | {row['horizon']} | {row['MAE']:.4g} | {row['RMSE']:.4g} | "
+                f"{row['WAPE']:.4g} | {row['MASE']:.4g} | {row['RMSSE']:.4g} | "
+                f"{row['worst_pct_MAE']:.4g} | {row['peak_F1']:.4g} | {row['W1']:.4g} |"
+            )
+    else:
+        lines.append("No standard performance metrics were generated.")
+
+    if rank_summary_rows:
+        lines.extend(["", "## GIFT-Style Average Rank", ""])
+        lines.append("| Rank | System | Avg Rank | Rank Count |")
+        lines.append("|---:|---|---:|---:|")
+        for idx, row in enumerate(rank_summary_rows, start=1):
+            lines.append(f"| {idx} | {row['system']} | {row['avg_standard_rank']:.4g} | {row['rank_count']} |")
+
+    lines.extend(["", "## Decomposition-Dependent Low/High Metrics", ""])
     if component_rows:
         lines.append("| System | Method | Horizon | Component | MAE | RMSE | WAPE | W1 |")
         lines.append("|---|---|---:|---|---:|---:|---:|---:|")
-        for row in component_rows[:80]:
+        shown = [row for row in component_rows if row.get("component") in {"low", "high"}]
+        for row in shown[:80]:
             lines.append(
                 f"| {row['system']} | {row['decomposition_method']} | {row['horizon']} | {row['component']} | "
                 f"{row['MAE']:.4g} | {row['RMSE']:.4g} | {row['WAPE']:.4g} | {row['W1']:.4g} |"
@@ -573,11 +910,11 @@ def build_markdown(
 
     lines.extend(["", "## Peak Metrics", ""])
     if peak_metric_rows:
-        lines.append("| System | Method | Horizon | Window | MAE | WAPE | W1 |")
-        lines.append("|---|---|---:|---|---:|---:|---:|")
+        lines.append("| System | Horizon | Window | MAE | WAPE | W1 |")
+        lines.append("|---|---:|---|---:|---:|---:|")
         for row in peak_metric_rows[:80]:
             lines.append(
-                f"| {row['system']} | {row['decomposition_method']} | {row['horizon']} | {row['window_type']} | "
+                f"| {row['system']} | {row['horizon']} | {row['window_type']} | "
                 f"{row['MAE']:.4g} | {row['WAPE']:.4g} | {row['W1']:.4g} |"
             )
 
@@ -593,7 +930,8 @@ def build_markdown(
             )
 
     if spatial_metric_rows:
-        lines.extend(["", "## Spatial Residual Metrics", ""])
+        lines.extend(["", "## Spatial Structure Metrics", ""])
+        lines.append("These are structural diagnostics, not direct forecast-performance ranking metrics.")
         lines.append("| System | Method | Horizon | Component | Edge Corr | Dirichlet | Edges |")
         lines.append("|---|---|---:|---|---:|---:|---:|")
         for row in spatial_metric_rows[:80]:
@@ -611,6 +949,7 @@ def build_markdown(
 def main() -> None:
     args = parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    desc = load_dataset_desc(args)
     num_nodes, output_len = load_dataset_shape(args)
     horizons = sorted({h for h in args.horizons if 1 <= h <= output_len})
     if not horizons:
@@ -619,6 +958,13 @@ def main() -> None:
     fft_cutoff_period = float(args.fft_cutoff_period or args.moving_window)
     if fft_cutoff_period <= 0:
         raise ValueError(f"--fft-cutoff-period must be positive, got {fft_cutoff_period}")
+    if not (0 < args.peak_q < 1):
+        raise ValueError(f"--peak-q must be in (0, 1), got {args.peak_q}")
+    if not (0 < args.worst_pct <= 1):
+        raise ValueError(f"--worst-pct must be in (0, 1], got {args.worst_pct}")
+    null_val = parse_null_value(args.null_val, desc)
+    seasonal_period = infer_seasonal_period(desc, args.seasonal_period)
+    scale_abs, scale_sq = load_seasonal_scales(args, desc, num_nodes, seasonal_period, null_val)
 
     runs = discover_runs(args)
     if not runs:
@@ -632,6 +978,7 @@ def main() -> None:
             raise ValueError(f"Adjacency shape {adj.shape} does not match num_nodes={num_nodes}")
         edges = sample_edges(adj, args.max_edge_pairs)
 
+    standard_rows: list[dict] = []
     component_rows: list[dict] = []
     peak_metric_rows: list[dict] = []
     distribution_rows: list[dict] = []
@@ -658,6 +1005,21 @@ def main() -> None:
             h_idx = horizon - 1
             pred_h = pred[:, h_idx, :]
             target_h = target[:, h_idx, :]
+            target_mask = valid_target_mask(target_h, null_val)
+
+            standard_row = standard_performance_row(
+                run.name,
+                horizon,
+                pred_h,
+                target_h,
+                target_mask,
+                scale_abs,
+                scale_sq,
+                args.peak_q,
+                args.worst_pct,
+            )
+            standard_rows.append(standard_row)
+            peak_metric_rows.extend(peak_rows(run.name, horizon, pred_h, target_h, args.peak_q, target_mask))
 
             for method in decomposition_methods:
                 pred_low, pred_high = decompose_series(pred_h, method, args.moving_window, fft_cutoff_period)
@@ -684,8 +1046,6 @@ def main() -> None:
                         residual_structure_row(run.name, horizon, method, component, target_component - pred_component)
                     )
 
-                peak_metric_rows.extend(peak_rows(run.name, horizon, method, pred_h, target_h, args.peak_q))
-
                 if adj is not None:
                     residual_components = {
                         "full": target_h - pred_h,
@@ -704,11 +1064,19 @@ def main() -> None:
         "decomposition_methods": decomposition_methods,
         "moving_window": args.moving_window,
         "fft_cutoff_period": fft_cutoff_period,
+        "seasonal_period": seasonal_period,
+        "target_channel": args.target_channel,
+        "null_val": null_val,
         "peak_q": args.peak_q,
+        "worst_pct": args.worst_pct,
         "num_runs": len(run_reports),
         "runs": run_reports,
     }
+    rank_detail_rows, rank_summary_rows = standard_rank_tables(standard_rows)
 
+    write_csv(args.output_dir / "standard_performance_metrics.csv", standard_rows)
+    write_csv(args.output_dir / "standard_rank_details.csv", rank_detail_rows)
+    write_csv(args.output_dir / "standard_rank_summary.csv", rank_summary_rows)
     write_csv(args.output_dir / "component_metrics.csv", component_rows)
     write_csv(args.output_dir / "peak_window_metrics.csv", peak_metric_rows)
     write_csv(args.output_dir / "distribution_metrics.csv", distribution_rows)
@@ -716,7 +1084,15 @@ def main() -> None:
     write_csv(args.output_dir / "spatial_residual_metrics.csv", spatial_metric_rows)
     (args.output_dir / "summary.json").write_text(json.dumps(report, indent=2, default=json_default), encoding="utf-8")
     (args.output_dir / "diagnostic_summary.md").write_text(
-        build_markdown(report, component_rows, peak_metric_rows, residual_metric_rows, spatial_metric_rows),
+        build_markdown(
+            report,
+            standard_rows,
+            rank_summary_rows,
+            component_rows,
+            peak_metric_rows,
+            residual_metric_rows,
+            spatial_metric_rows,
+        ),
         encoding="utf-8",
     )
 

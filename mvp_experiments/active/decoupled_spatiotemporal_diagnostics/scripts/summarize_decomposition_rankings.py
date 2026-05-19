@@ -10,11 +10,10 @@ from pathlib import Path
 METRICS = [
     ("avg_low_MAE", "Low MAE", "lower"),
     ("avg_high_MAE", "High MAE", "lower"),
-    ("avg_high_over_full_MAE", "High/Full MAE", "lower"),
+    ("avg_high_over_low_MAE", "High/Low MAE", "lower"),
+    ("avg_low_W1", "Low W1", "lower"),
     ("avg_high_W1", "High W1", "lower"),
     ("abs_avg_high_temporal_lag1_corr", "Abs High Lag1", "lower"),
-    ("avg_high_edge_corr", "High Edge Corr", "lower"),
-    ("avg_high_dirichlet", "High Dirichlet", "lower"),
 ]
 
 

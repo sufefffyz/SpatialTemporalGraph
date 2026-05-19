@@ -7,11 +7,18 @@ import json
 import math
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    HAS_MATPLOTLIB = True
+except ModuleNotFoundError:
+    plt = None
+    HAS_MATPLOTLIB = False
 
 
 COMPONENTS = ["full", "low", "high"]
@@ -87,7 +94,13 @@ def fmt(value: float) -> str:
     return f"{value:.4f}"
 
 
-def ordered_systems(component_rows: list[dict]) -> list[str]:
+def ordered_systems(component_rows: list[dict], standard_rows: list[dict] | None = None) -> list[str]:
+    if standard_rows:
+        values = {}
+        for row in standard_rows:
+            system = row["system"]
+            values.setdefault(system, []).append(to_float(row, "MAE"))
+        return [system for system, _ in sorted(values.items(), key=lambda item: float(np.nanmean(item[1])))]
     full_rows = [row for row in component_rows if row.get("component") == "full"]
     values = {}
     for row in full_rows:
@@ -121,53 +134,74 @@ def residual_lookup(rows: list[dict], metric: str) -> dict[tuple[str, str, int, 
     }
 
 
+def standard_lookup(rows: list[dict], metric: str) -> dict[tuple[str, int], float]:
+    return {(row["system"], to_int(row, "horizon")): to_float(row, metric) for row in rows}
+
+
 def average(values: list[float]) -> float:
     arr = np.asarray([value for value in values if np.isfinite(value)], dtype=np.float64)
     return float(np.mean(arr)) if arr.size else float("nan")
 
 
-def build_summary_rows(component_rows: list[dict], peak_rows: list[dict], residual_rows: list[dict], spatial_rows: list[dict]) -> list[dict]:
+def build_standard_summary_rows(standard_rows: list[dict], rank_summary_rows: list[dict]) -> list[dict]:
+    if not standard_rows:
+        return []
+    systems = ordered_systems([], standard_rows)
+    hs = horizons(standard_rows)
+    rank_lookup = {row["system"]: row for row in rank_summary_rows}
+    metric_names = [
+        "MAE",
+        "RMSE",
+        "WAPE",
+        "W1",
+        "MASE",
+        "RMSSE",
+        "worst_pct_MAE",
+        "normal_MAE",
+        "peak_MAE",
+        "peak_over_normal_MAE",
+        "peak_precision",
+        "peak_recall",
+        "peak_F1",
+    ]
+    lookups = {metric: standard_lookup(standard_rows, metric) for metric in metric_names}
+    rows = []
+    for system in systems:
+        row = {"system": system}
+        for metric in metric_names:
+            row[f"avg_{metric}"] = average([lookups[metric].get((system, h), float("nan")) for h in hs])
+        rank_row = rank_lookup.get(system, {})
+        row["avg_standard_rank"] = to_float(rank_row, "avg_standard_rank")
+        row["rank_count"] = to_int(rank_row, "rank_count")
+        rows.append(row)
+    return rows
+
+
+def build_summary_rows(component_rows: list[dict], residual_rows: list[dict]) -> list[dict]:
     systems = ordered_systems(component_rows)
     hs = horizons(component_rows)
     method_names = ordered_methods(component_rows)
     comp_mae = component_lookup(component_rows, "MAE")
     comp_w1 = component_lookup(component_rows, "W1")
-    peak_mae = peak_lookup(peak_rows, "MAE")
-    peak_w1 = peak_lookup(peak_rows, "W1")
     resid_lag = residual_lookup(residual_rows, "temporal_lag1_corr")
     resid_under = residual_lookup(residual_rows, "under_prediction_rate")
-    spatial_corr = residual_lookup(spatial_rows, "edge_residual_corr")
-    spatial_dir = residual_lookup(spatial_rows, "residual_dirichlet")
 
     rows = []
     for method in method_names:
         for system in systems:
-            full_mae = average([comp_mae.get((method, system, h, "full"), float("nan")) for h in hs])
             low_mae = average([comp_mae.get((method, system, h, "low"), float("nan")) for h in hs])
             high_mae = average([comp_mae.get((method, system, h, "high"), float("nan")) for h in hs])
-            normal_mae = average([peak_mae.get((method, system, h, "normal"), float("nan")) for h in hs])
-            peak_key = [key for key in {row["window_type"] for row in peak_rows} if key.startswith("peak_q")]
-            peak_name = peak_key[0] if peak_key else "peak_q0.90"
-            peak_mae_avg = average([peak_mae.get((method, system, h, peak_name), float("nan")) for h in hs])
             rows.append(
                 {
                     "decomposition_method": method,
                     "system": system,
-                    "avg_full_MAE": full_mae,
                     "avg_low_MAE": low_mae,
                     "avg_high_MAE": high_mae,
-                    "avg_high_over_full_MAE": high_mae / full_mae if full_mae and np.isfinite(full_mae) else float("nan"),
-                    "avg_full_W1": average([comp_w1.get((method, system, h, "full"), float("nan")) for h in hs]),
+                    "avg_high_over_low_MAE": high_mae / low_mae if low_mae and np.isfinite(low_mae) else float("nan"),
                     "avg_low_W1": average([comp_w1.get((method, system, h, "low"), float("nan")) for h in hs]),
                     "avg_high_W1": average([comp_w1.get((method, system, h, "high"), float("nan")) for h in hs]),
-                    "avg_normal_MAE": normal_mae,
-                    "avg_peak_MAE": peak_mae_avg,
-                    "avg_peak_over_normal_MAE": peak_mae_avg / normal_mae if normal_mae and np.isfinite(normal_mae) else float("nan"),
-                    "avg_peak_W1": average([peak_w1.get((method, system, h, peak_name), float("nan")) for h in hs]),
                     "avg_high_temporal_lag1_corr": average([resid_lag.get((method, system, h, "high"), float("nan")) for h in hs]),
                     "avg_high_under_prediction_rate": average([resid_under.get((method, system, h, "high"), float("nan")) for h in hs]),
-                    "avg_high_edge_corr": average([spatial_corr.get((method, system, h, "high"), float("nan")) for h in hs]),
-                    "avg_high_dirichlet": average([spatial_dir.get((method, system, h, "high"), float("nan")) for h in hs]),
                 }
             )
     return rows
@@ -210,53 +244,51 @@ def plot_component_ratio(rows: list[dict], methods: list[str], systems: list[str
             values = []
             for h in hs:
                 high = lookup.get((method, system, h, "high"), float("nan"))
-                full = lookup.get((method, system, h, "full"), float("nan"))
-                values.append(high / full if full and np.isfinite(full) else float("nan"))
+                low = lookup.get((method, system, h, "low"), float("nan"))
+                values.append(high / low if low and np.isfinite(low) else float("nan"))
             ax.plot(hs, values, marker="o", linewidth=1.8, markersize=3.5, label=system, color=colors[idx % len(colors)])
         ax.set_title(method)
         ax.set_xlabel("Forecast horizon")
-        ax.set_ylabel("High-component MAE / full MAE")
+        ax.set_ylabel("High-component MAE / low-component MAE")
         ax.set_xticks(hs)
         ax.grid(True, axis="y", alpha=0.25)
         ax.legend(ncol=2, fontsize=7, frameon=False)
         fig.tight_layout()
         suffix = "" if len(methods) == 1 else f"_{safe_stem(method)}"
-        save_fig(fig, output_dir, f"high_over_full_mae_by_horizon{suffix}", plot_format)
+        save_fig(fig, output_dir, f"high_over_low_mae_by_horizon{suffix}", plot_format)
         plt.close(fig)
 
 
-def plot_peak(rows: list[dict], methods: list[str], systems: list[str], hs: list[int], output_dir: Path, plot_format: str) -> None:
-    lookup_mae = peak_lookup(rows, "MAE")
-    lookup_w1 = peak_lookup(rows, "W1")
+def plot_peak(rows: list[dict], systems: list[str], hs: list[int], output_dir: Path, plot_format: str) -> None:
+    lookup_mae = {(row["system"], to_int(row, "horizon"), row["window_type"]): to_float(row, "MAE") for row in rows}
+    lookup_w1 = {(row["system"], to_int(row, "horizon"), row["window_type"]): to_float(row, "W1") for row in rows}
     peak_names = [key for key in {row["window_type"] for row in rows} if key.startswith("peak_q")]
     peak_name = peak_names[0] if peak_names else "peak_q0.90"
     colors = plt.cm.tab10.colors
-    for method in methods:
-        for metric_name, lookup, ylabel, stem in [
-            ("ratio", lookup_mae, "Peak MAE / normal MAE", "peak_over_normal_mae_by_horizon"),
-            ("w1", lookup_w1, "Peak W1", "peak_w1_by_horizon"),
-        ]:
-            fig, ax = plt.subplots(figsize=(8.2, 4.2))
-            for idx, system in enumerate(systems):
-                values = []
-                for h in hs:
-                    peak = lookup.get((method, system, h, peak_name), float("nan"))
-                    if metric_name == "ratio":
-                        normal = lookup.get((method, system, h, "normal"), float("nan"))
-                        values.append(peak / normal if normal and np.isfinite(normal) else float("nan"))
-                    else:
-                        values.append(peak)
-                ax.plot(hs, values, marker="o", linewidth=1.8, markersize=3.5, label=system, color=colors[idx % len(colors)])
-            ax.set_title(method)
-            ax.set_xlabel("Forecast horizon")
-            ax.set_ylabel(ylabel)
-            ax.set_xticks(hs)
-            ax.grid(True, axis="y", alpha=0.25)
-            ax.legend(ncol=2, fontsize=7, frameon=False)
-            fig.tight_layout()
-            suffix = "" if len(methods) == 1 else f"_{safe_stem(method)}"
-            save_fig(fig, output_dir, f"{stem}{suffix}", plot_format)
-            plt.close(fig)
+    for metric_name, lookup, ylabel, stem in [
+        ("ratio", lookup_mae, "Peak MAE / normal MAE", "peak_over_normal_mae_by_horizon"),
+        ("w1", lookup_w1, "Peak W1", "peak_w1_by_horizon"),
+    ]:
+        fig, ax = plt.subplots(figsize=(8.2, 4.2))
+        for idx, system in enumerate(systems):
+            values = []
+            for h in hs:
+                peak = lookup.get((system, h, peak_name), float("nan"))
+                if metric_name == "ratio":
+                    normal = lookup.get((system, h, "normal"), float("nan"))
+                    values.append(peak / normal if normal and np.isfinite(normal) else float("nan"))
+                else:
+                    values.append(peak)
+            ax.plot(hs, values, marker="o", linewidth=1.8, markersize=3.5, label=system, color=colors[idx % len(colors)])
+        ax.set_title("Standard peak windows")
+        ax.set_xlabel("Forecast horizon")
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(hs)
+        ax.grid(True, axis="y", alpha=0.25)
+        ax.legend(ncol=2, fontsize=7, frameon=False)
+        fig.tight_layout()
+        save_fig(fig, output_dir, stem, plot_format)
+        plt.close(fig)
 
 
 def plot_residual_heatmaps(
@@ -295,14 +327,14 @@ def plot_residual_heatmaps(
 
 def plot_summary_bars(summary_rows: list[dict], output_dir: Path, plot_format: str) -> None:
     metrics = [
+        ("avg_low_MAE", "Low MAE"),
         ("avg_high_MAE", "High MAE"),
-        ("avg_peak_MAE", "Peak MAE"),
-        ("avg_full_W1", "Full W1"),
-        ("avg_high_temporal_lag1_corr", "High residual lag1 corr"),
+        ("avg_low_W1", "Low W1"),
+        ("avg_high_W1", "High W1"),
     ]
     labels = [f"{row.get('decomposition_method', DEFAULT_METHOD)}:{row['system']}" for row in summary_rows]
     fig_height = max(3.8, 0.22 * len(labels) + 1.2)
-    fig, axes = plt.subplots(1, 4, figsize=(13.2, fig_height), sharey=True)
+    fig, axes = plt.subplots(1, len(metrics), figsize=(12.0, fig_height), sharey=True)
     colors = plt.cm.Set2(np.linspace(0, 1, len(labels)))
     for ax, (key, title) in zip(axes, metrics):
         values = [to_float(row, key) if isinstance(row[key], str) else row[key] for row in summary_rows]
@@ -317,6 +349,33 @@ def plot_summary_bars(summary_rows: list[dict], output_dir: Path, plot_format: s
     plt.close(fig)
 
 
+def plot_standard_bars(summary_rows: list[dict], output_dir: Path, plot_format: str) -> None:
+    if not summary_rows:
+        return
+    metrics = [
+        ("avg_MAE", "MAE"),
+        ("avg_MASE", "MASE"),
+        ("avg_worst_pct_MAE", "Worst-window MAE"),
+        ("avg_peak_F1", "Peak F1"),
+        ("avg_standard_rank", "Avg rank"),
+    ]
+    labels = [row["system"] for row in summary_rows]
+    fig_height = max(3.8, 0.24 * len(labels) + 1.2)
+    fig, axes = plt.subplots(1, len(metrics), figsize=(14.0, fig_height), sharey=True)
+    colors = plt.cm.Set2(np.linspace(0, 1, len(labels)))
+    for ax, (key, title) in zip(axes, metrics):
+        values = [float(row.get(key, float("nan"))) for row in summary_rows]
+        ax.barh(labels, values, color=colors)
+        ax.invert_yaxis()
+        ax.set_title(title)
+        ax.grid(True, axis="x", alpha=0.25)
+        if ax is not axes[0]:
+            ax.tick_params(axis="y", labelleft=False)
+    fig.tight_layout()
+    save_fig(fig, output_dir, "standard_performance_summary_bars", plot_format)
+    plt.close(fig)
+
+
 def build_method_comparison_rows(summary_rows: list[dict]) -> list[dict]:
     methods = ordered_methods(summary_rows)
     if len(methods) < 2:
@@ -327,10 +386,9 @@ def build_method_comparison_rows(summary_rows: list[dict]) -> list[dict]:
     metric_keys = [
         "avg_low_MAE",
         "avg_high_MAE",
+        "avg_low_W1",
         "avg_high_W1",
         "avg_high_temporal_lag1_corr",
-        "avg_high_edge_corr",
-        "avg_high_dirichlet",
     ]
     rows: list[dict] = []
     for method in methods[1:]:
@@ -361,9 +419,10 @@ def plot_method_comparison(summary_rows: list[dict], output_dir: Path, plot_form
     systems = sorted({row["system"] for row in summary_rows})
     lookup = {(row["decomposition_method"], row["system"]): row for row in summary_rows}
     panels = [
+        ("avg_low_MAE", "Average low MAE"),
         ("avg_high_MAE", "Average high MAE"),
+        ("avg_low_W1", "Average low W1"),
         ("avg_high_W1", "Average high W1"),
-        ("avg_high_temporal_lag1_corr", "High residual lag1 corr"),
     ]
     fig, axes = plt.subplots(1, len(panels), figsize=(13.0, max(3.8, 0.22 * len(systems) + 1.3)), sharey=True)
     if len(panels) == 1:
@@ -383,7 +442,7 @@ def plot_method_comparison(summary_rows: list[dict], output_dir: Path, plot_form
     plt.close(fig)
 
 
-def markdown_summary(path: Path, summary_rows: list[dict], report: dict) -> None:
+def markdown_summary(path: Path, standard_summary_rows: list[dict], summary_rows: list[dict], report: dict) -> None:
     lines = [
         "# Decoupled SD Baseline Diagnostic Report",
         "",
@@ -392,28 +451,53 @@ def markdown_summary(path: Path, summary_rows: list[dict], report: dict) -> None
         f"- Decomposition methods: {', '.join(report['decomposition_methods'])}",
         f"- Horizons: {', '.join(f'H{h}' for h in report['horizons'])}",
         "",
-        "## Average Diagnostics Across Horizons",
+        "## Standard Performance Metrics",
         "",
-        "| Method | System | Full MAE | Low MAE | High MAE | High/Full | Full W1 | High W1 | Peak MAE | Peak/Normal | Peak W1 | High Lag1 | High Edge Corr | High Dirichlet |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "These metrics do not depend on a low/high-frequency decomposition.",
+        "",
+        "| System | MAE | RMSE | WAPE | MASE | RMSSE | Worst MAE | Peak MAE | Peak F1 | Full W1 | Avg Rank |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
+    for row in standard_summary_rows:
+        lines.append(
+            "| {system} | {mae} | {rmse} | {wape} | {mase} | {rmsse} | {worst} | {peak} | {f1} | {w1} | {rank} |".format(
+                system=row["system"],
+                mae=fmt(row["avg_MAE"]),
+                rmse=fmt(row["avg_RMSE"]),
+                wape=fmt(row["avg_WAPE"]),
+                mase=fmt(row["avg_MASE"]),
+                rmsse=fmt(row["avg_RMSSE"]),
+                worst=fmt(row["avg_worst_pct_MAE"]),
+                peak=fmt(row["avg_peak_MAE"]),
+                f1=fmt(row["avg_peak_F1"]),
+                w1=fmt(row["avg_W1"]),
+                rank=fmt(row["avg_standard_rank"]),
+            )
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Decomposition-Dependent Low/High Metrics",
+            "",
+            "These metrics should be interpreted within each decomposition method.",
+            "",
+            "| Method | System | Low MAE | High MAE | High/Low | Low W1 | High W1 | High Lag1 | High Under Rate |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
     for row in summary_rows:
         lines.append(
-            "| {method} | {system} | {full} | {low} | {high} | {ratio} | {full_w1} | {high_w1} | {peak} | {peak_ratio} | {peak_w1} | {lag} | {edge} | {dirichlet} |".format(
+            "| {method} | {system} | {low} | {high} | {ratio} | {low_w1} | {high_w1} | {lag} | {under} |".format(
                 method=row.get("decomposition_method", DEFAULT_METHOD),
                 system=row["system"],
-                full=fmt(row["avg_full_MAE"]),
                 low=fmt(row["avg_low_MAE"]),
                 high=fmt(row["avg_high_MAE"]),
-                ratio=fmt(row["avg_high_over_full_MAE"]),
-                full_w1=fmt(row["avg_full_W1"]),
+                ratio=fmt(row["avg_high_over_low_MAE"]),
+                low_w1=fmt(row["avg_low_W1"]),
                 high_w1=fmt(row["avg_high_W1"]),
-                peak=fmt(row["avg_peak_MAE"]),
-                peak_ratio=fmt(row["avg_peak_over_normal_MAE"]),
-                peak_w1=fmt(row["avg_peak_W1"]),
                 lag=fmt(row["avg_high_temporal_lag1_corr"]),
-                edge=fmt(row["avg_high_edge_corr"]),
-                dirichlet=fmt(row["avg_high_dirichlet"]),
+                under=fmt(row["avg_high_under_prediction_rate"]),
             )
         )
     method_comparison_rows = build_method_comparison_rows(summary_rows)
@@ -423,23 +507,23 @@ def markdown_summary(path: Path, summary_rows: list[dict], report: dict) -> None
                 "",
                 "## Method Comparison",
                 "",
-                "Positive deltas mean the comparison method is larger than the baseline method.",
+                "Positive deltas mean the comparison decomposition is larger than the baseline decomposition.",
                 "",
-                "| Baseline | Comparison | System | Delta High MAE | Delta High W1 | Delta High Lag1 | Delta High Edge Corr | Delta High Dirichlet |",
+                "| Baseline | Comparison | System | Delta Low MAE | Delta High MAE | Delta Low W1 | Delta High W1 | Delta High Lag1 |",
                 "|---|---|---|---:|---:|---:|---:|---:|",
             ]
         )
         for row in method_comparison_rows:
             lines.append(
-                "| {base} | {comp} | {system} | {high_mae} | {high_w1} | {lag} | {edge} | {dirichlet} |".format(
+                "| {base} | {comp} | {system} | {low_mae} | {high_mae} | {low_w1} | {high_w1} | {lag} |".format(
                     base=row["baseline_method"],
                     comp=row["comparison_method"],
                     system=row["system"],
+                    low_mae=fmt(float(row["delta_avg_low_MAE"])),
                     high_mae=fmt(float(row["delta_avg_high_MAE"])),
+                    low_w1=fmt(float(row["delta_avg_low_W1"])),
                     high_w1=fmt(float(row["delta_avg_high_W1"])),
                     lag=fmt(float(row["delta_avg_high_temporal_lag1_corr"])),
-                    edge=fmt(float(row["delta_avg_high_edge_corr"])),
-                    dirichlet=fmt(float(row["delta_avg_high_dirichlet"])),
                 )
             )
     lines.append("")
@@ -457,6 +541,8 @@ def json_default(value):
 def main() -> None:
     args = parse_args()
     input_dir = args.input_dir.expanduser().resolve()
+    standard_rows = read_csv(input_dir / "standard_performance_metrics.csv")
+    rank_summary_rows = read_csv(input_dir / "standard_rank_summary.csv")
     component_rows = read_csv(input_dir / "component_metrics.csv")
     peak_rows = read_csv(input_dir / "peak_window_metrics.csv")
     residual_rows = read_csv(input_dir / "residual_structure_metrics.csv")
@@ -464,10 +550,13 @@ def main() -> None:
     if not component_rows:
         raise FileNotFoundError(f"Missing component metrics under {input_dir}")
 
-    systems = ordered_systems(component_rows)
+    systems = ordered_systems(component_rows, standard_rows)
     method_names = ordered_methods(component_rows)
     hs = horizons(component_rows)
-    summary_rows = build_summary_rows(component_rows, peak_rows, residual_rows, spatial_rows)
+    standard_summary_rows = build_standard_summary_rows(standard_rows, rank_summary_rows)
+    summary_rows = build_summary_rows(component_rows, residual_rows)
+    write_csv(input_dir / "standard_average_summary.csv", standard_summary_rows)
+    write_csv(input_dir / "decomposition_average_summary.csv", summary_rows)
     write_csv(input_dir / "decoupled_average_summary.csv", summary_rows)
     method_comparison_rows = build_method_comparison_rows(summary_rows)
     write_csv(input_dir / "decoupled_method_comparison.csv", method_comparison_rows)
@@ -478,15 +567,30 @@ def main() -> None:
         "horizons": hs,
     }
     (input_dir / "decoupled_plot_summary.json").write_text(json.dumps(report, indent=2, default=json_default), encoding="utf-8")
-    markdown_summary(input_dir / "decoupled_diagnostic_report.md", summary_rows, report)
+    markdown_summary(input_dir / "decoupled_diagnostic_report.md", standard_summary_rows, summary_rows, report)
+
+    if not HAS_MATPLOTLIB:
+        print(
+            json.dumps(
+                {
+                    "input_dir": str(input_dir),
+                    "num_systems": len(systems),
+                    "decomposition_methods": method_names,
+                    "plots": "skipped_missing_matplotlib",
+                },
+                indent=2,
+            )
+        )
+        return
 
     plot_component_heatmaps(component_rows, method_names, systems, hs, input_dir, args.plot_format)
     plot_component_ratio(component_rows, method_names, systems, hs, input_dir, args.plot_format)
-    plot_peak(peak_rows, method_names, systems, hs, input_dir, args.plot_format)
+    plot_peak(peak_rows, systems, hs, input_dir, args.plot_format)
     if residual_rows and spatial_rows:
         plot_residual_heatmaps(residual_rows, spatial_rows, method_names, systems, hs, input_dir, args.plot_format)
     plot_method_comparison(summary_rows, input_dir, args.plot_format)
     plot_summary_bars(summary_rows, input_dir, args.plot_format)
+    plot_standard_bars(standard_summary_rows, input_dir, args.plot_format)
     print(json.dumps({"input_dir": str(input_dir), "num_systems": len(systems), "decomposition_methods": method_names}, indent=2))
 
 
