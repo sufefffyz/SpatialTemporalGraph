@@ -97,7 +97,7 @@ class PackedSparseSupport(nn.Module):
 
 
 class sparse_gcn(nn.Module):
-    """Graph WaveNet GCN block using packed sparse supports."""
+    """Graph WaveNet GCN block using sparse physical and optional dense supports."""
 
     def __init__(self, c_in, c_out, dropout, support_len=2, order=2):
         super().__init__()
@@ -109,10 +109,10 @@ class sparse_gcn(nn.Module):
     def forward(self, x, supports):
         out = [x]
         for support in supports:
-            x1 = support(x)
+            x1 = self._apply_support(x, support)
             out.append(x1)
             for _ in range(2, self.order + 1):
-                x2 = support(x1)
+                x2 = self._apply_support(x1, support)
                 out.append(x2)
                 x1 = x2
 
@@ -121,14 +121,21 @@ class sparse_gcn(nn.Module):
         h = F.dropout(h, self.dropout, training=self.training)
         return h
 
+    @staticmethod
+    def _apply_support(x, support):
+        if isinstance(support, torch.Tensor):
+            return torch.einsum("ncvl,vw->ncwl", (x, support.to(x.device))).contiguous()
+        return support(x)
+
 
 class SparseGraphWaveNet(nn.Module):
     """
-    Graph WaveNet with fixed sparse supports implemented by gather-sum.
+    Graph WaveNet with sparse fixed supports and optional dense adaptive support.
 
-    This MVP intentionally supports fixed physical graphs only.  Learned dense
-    adaptive adjacency would reintroduce an N x N support and erase the sparse
-    speedup signal we want to measure.
+    Fixed physical supports are applied with CSR sparse matmul.  When
+    ``addaptadj=True``, the learned adaptive adjacency follows the original
+    Graph WaveNet dense formulation so the model remains semantically aligned
+    with the adaptive baseline.
     """
 
     def __init__(
@@ -150,18 +157,12 @@ class SparseGraphWaveNet(nn.Module):
         layers=2,
     ):
         super().__init__()
-        _ = aptinit
-        if addaptadj:
-            raise ValueError(
-                "SparseGraphWaveNet only supports addaptadj=False; dense adaptive "
-                "adjacency would defeat sparse graph acceleration."
-            )
-
         self.dropout = dropout
         self.blocks = blocks
         self.layers = layers
         self.gcn_bool = gcn_bool
         self.addaptadj = addaptadj
+        self.num_nodes = num_nodes
 
         self.filter_convs = nn.ModuleList()
         self.gate_convs = nn.ModuleList()
@@ -182,6 +183,23 @@ class SparseGraphWaveNet(nn.Module):
         else:
             self.supports = nn.ModuleList([PackedSparseSupport(s, backend="csr") for s in supports])
             self.supports_len = len(self.supports)
+
+        if gcn_bool and addaptadj:
+            if aptinit is None:
+                self.nodevec1 = nn.Parameter(
+                    torch.randn(num_nodes, 10), requires_grad=True
+                )
+                self.nodevec2 = nn.Parameter(
+                    torch.randn(10, num_nodes), requires_grad=True
+                )
+            else:
+                aptinit = torch.as_tensor(aptinit, dtype=torch.float32)
+                m, p, n = torch.svd(aptinit)
+                initemb1 = torch.mm(m[:, :10], torch.diag(p[:10] ** 0.5))
+                initemb2 = torch.mm(torch.diag(p[:10] ** 0.5), n[:, :10].t())
+                self.nodevec1 = nn.Parameter(initemb1, requires_grad=True)
+                self.nodevec2 = nn.Parameter(initemb2, requires_grad=True)
+            self.supports_len += 1
 
         receptive_field = 1
         for _b in range(blocks):
@@ -222,7 +240,7 @@ class SparseGraphWaveNet(nn.Module):
                 new_dilation *= 2
                 receptive_field += additional_scope
                 additional_scope *= 2
-                if self.gcn_bool and self.supports is not None:
+                if self.gcn_bool and self.supports_len > 0:
                     self.gconv.append(
                         sparse_gcn(
                             dilation_channels,
@@ -248,15 +266,26 @@ class SparseGraphWaveNet(nn.Module):
 
     def sparse_stats(self):
         if self.supports is None:
-            return []
-        return [
-            {
-                "num_nodes": support.num_nodes,
-                "num_edges": support.num_edges,
-                "max_degree": support.max_degree,
-            }
-            for support in self.supports
-        ]
+            stats = []
+        else:
+            stats = [
+                {
+                    "num_nodes": support.num_nodes,
+                    "num_edges": support.num_edges,
+                    "max_degree": support.max_degree,
+                }
+                for support in self.supports
+            ]
+        if self.addaptadj:
+            stats.append(
+                {
+                    "num_nodes": self.num_nodes,
+                    "num_edges": self.num_nodes * self.num_nodes,
+                    "max_degree": self.num_nodes,
+                    "adaptive_dense": True,
+                }
+            )
+        return stats
 
     def forward(self, history_data, future_data, batch_seen, epoch, train, **kwargs):
         _ = future_data, batch_seen, epoch, train, kwargs
@@ -268,6 +297,15 @@ class SparseGraphWaveNet(nn.Module):
             x = input_data
         x = self.start_conv(x)
         skip = 0
+
+        active_supports = None
+        if self.gcn_bool and self.supports_len > 0:
+            active_supports = list(self.supports) if self.supports is not None else []
+            if self.addaptadj:
+                adp = F.softmax(
+                    F.relu(torch.mm(self.nodevec1, self.nodevec2)), dim=1
+                )
+                active_supports.append(adp)
 
         for i in range(self.blocks * self.layers):
             residual = x
@@ -282,8 +320,8 @@ class SparseGraphWaveNet(nn.Module):
                 skip = 0
             skip = s + skip
 
-            if self.gcn_bool and self.supports is not None:
-                x = self.gconv[i](x, self.supports)
+            if self.gcn_bool and active_supports is not None:
+                x = self.gconv[i](x, active_supports)
             else:
                 x = self.residual_convs[i](x)
 
