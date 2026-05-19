@@ -7,7 +7,7 @@ from .SD import CFG, DATA_NAME, INPUT_LEN, MODEL_ARCH, MODEL_PARAM, NUM_EPOCHS, 
 
 DEFAULT_OSRM_DISTANCE = (
     "/home/yuzhang_fei/stg_artifacts_archive/adaptive_threshold_dynamic_weight/"
-    "distance_matrices/SD/SD_osrm_distance_m.npy"
+    "distance_matrices/SD/SD_osrm_shortest_distance_m.npy"
 )
 
 MODEL_PARAM["dist_mtx_path"] = os.environ.get("FLOWNET_DIST_MTX", DEFAULT_OSRM_DISTANCE)

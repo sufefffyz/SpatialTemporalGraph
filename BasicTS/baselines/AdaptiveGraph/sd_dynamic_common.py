@@ -18,7 +18,7 @@ from baselines.AdaptiveGraph import DynamicThresholdDCRNN, DynamicThresholdGraph
 
 DEFAULT_OSRM_DISTANCE = (
     "/home/yuzhang_fei/stg_artifacts_archive/adaptive_threshold_dynamic_weight/"
-    "distance_matrices/SD/SD_osrm_distance_m.npy"
+    "distance_matrices/SD/SD_osrm_shortest_distance_m.npy"
 )
 REFERENCE_SD_AVG_DEGREE = 17319 / 716
 
