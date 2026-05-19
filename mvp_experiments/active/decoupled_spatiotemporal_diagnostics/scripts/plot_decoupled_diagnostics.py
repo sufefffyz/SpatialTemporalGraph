@@ -207,6 +207,41 @@ def build_summary_rows(component_rows: list[dict], residual_rows: list[dict]) ->
     return rows
 
 
+def build_alignment_summary_rows(alignment_rows: list[dict], systems: list[str]) -> list[dict]:
+    if not alignment_rows:
+        return []
+    keys = sorted({(to_int(row, "alignment_hop_k"), to_int(row, "alignment_time_window")) for row in alignment_rows})
+    rows: list[dict] = []
+    for hop_k, time_window in keys:
+        for system in systems:
+            subset = [
+                row
+                for row in alignment_rows
+                if row.get("system") == system
+                and to_int(row, "alignment_hop_k") == hop_k
+                and to_int(row, "alignment_time_window") == time_window
+            ]
+            if not subset:
+                continue
+            best_deltas = [to_float(row, "best_time_shift_delta") for row in subset]
+            rows.append(
+                {
+                    "system": system,
+                    "alignment_hop_k": hop_k,
+                    "alignment_time_window": time_window,
+                    "avg_shift_gain": average([to_float(row, "shift_gain") for row in subset]),
+                    "avg_best_time_shift_delta": average(best_deltas),
+                    "avg_abs_best_time_shift_delta": average([abs(value) for value in best_deltas]),
+                    "avg_peak_lag_true_to_pred": average([to_float(row, "avg_peak_lag_true_to_pred") for row in subset]),
+                    "avg_peak_lag_match_rate": average([to_float(row, "peak_lag_match_rate") for row in subset]),
+                    "avg_relaxed_peak_precision": average([to_float(row, "relaxed_peak_precision") for row in subset]),
+                    "avg_relaxed_peak_recall": average([to_float(row, "relaxed_peak_recall") for row in subset]),
+                    "avg_relaxed_peak_F1": average([to_float(row, "relaxed_peak_F1") for row in subset]),
+                }
+            )
+    return rows
+
+
 def save_fig(fig: plt.Figure, output_dir: Path, stem: str, plot_format: str) -> None:
     formats = ["png", "pdf"] if plot_format == "both" else [plot_format]
     for suffix in formats:
@@ -376,6 +411,38 @@ def plot_standard_bars(summary_rows: list[dict], output_dir: Path, plot_format: 
     plt.close(fig)
 
 
+def plot_alignment_bars(summary_rows: list[dict], output_dir: Path, plot_format: str) -> None:
+    if not summary_rows:
+        return
+    preferred = [row for row in summary_rows if to_int(row, "alignment_hop_k") == 0 and to_int(row, "alignment_time_window") == 1]
+    if not preferred:
+        preferred = [row for row in summary_rows if to_int(row, "alignment_hop_k") == 0 and to_int(row, "alignment_time_window") == 0]
+    if not preferred:
+        return
+    metrics = [
+        ("avg_shift_gain", "Shift gain"),
+        ("avg_abs_best_time_shift_delta", "|best shift|"),
+        ("avg_peak_lag_true_to_pred", "Peak lag"),
+        ("avg_relaxed_peak_F1", "Relaxed peak F1"),
+    ]
+    labels = [row["system"] for row in preferred]
+    fig_height = max(3.8, 0.24 * len(labels) + 1.2)
+    fig, axes = plt.subplots(1, len(metrics), figsize=(12.0, fig_height), sharey=True)
+    colors = plt.cm.Set2(np.linspace(0, 1, len(labels)))
+    for ax, (key, title) in zip(axes, metrics):
+        values = [float(row.get(key, float("nan"))) for row in preferred]
+        ax.barh(labels, values, color=colors)
+        ax.invert_yaxis()
+        ax.set_title(title)
+        ax.grid(True, axis="x", alpha=0.25)
+        if ax is not axes[0]:
+            ax.tick_params(axis="y", labelleft=False)
+    fig.tight_layout()
+    suffix = f"k{to_int(preferred[0], 'alignment_hop_k')}_dt{to_int(preferred[0], 'alignment_time_window')}"
+    save_fig(fig, output_dir, f"alignment_summary_bars_{suffix}", plot_format)
+    plt.close(fig)
+
+
 def build_method_comparison_rows(summary_rows: list[dict]) -> list[dict]:
     methods = ordered_methods(summary_rows)
     if len(methods) < 2:
@@ -442,7 +509,13 @@ def plot_method_comparison(summary_rows: list[dict], output_dir: Path, plot_form
     plt.close(fig)
 
 
-def markdown_summary(path: Path, standard_summary_rows: list[dict], summary_rows: list[dict], report: dict) -> None:
+def markdown_summary(
+    path: Path,
+    standard_summary_rows: list[dict],
+    alignment_summary_rows: list[dict],
+    summary_rows: list[dict],
+    report: dict,
+) -> None:
     lines = [
         "# Decoupled SD Baseline Diagnostic Report",
         "",
@@ -474,6 +547,35 @@ def markdown_summary(path: Path, standard_summary_rows: list[dict], summary_rows
                 rank=fmt(row["avg_standard_rank"]),
             )
         )
+
+    if alignment_summary_rows:
+        lines.extend(
+            [
+                "",
+                "## Alignment Diagnostics",
+                "",
+                "These metrics diagnose time/node misalignment. Hop k=0 uses the same node; larger k allows k-hop spatial tolerance when adjacency is available.",
+                "",
+                "| System | Hop k | Time Window | Shift Gain | Avg Best Shift | Avg Abs Best Shift | Peak Lag | Peak Lag Match | Relaxed Precision | Relaxed Recall | Relaxed F1 |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for row in alignment_summary_rows:
+            lines.append(
+                "| {system} | {hop} | {tw} | {gain} | {best} | {absbest} | {lag} | {match} | {precision} | {recall} | {f1} |".format(
+                    system=row["system"],
+                    hop=row["alignment_hop_k"],
+                    tw=row["alignment_time_window"],
+                    gain=fmt(row["avg_shift_gain"]),
+                    best=fmt(row["avg_best_time_shift_delta"]),
+                    absbest=fmt(row["avg_abs_best_time_shift_delta"]),
+                    lag=fmt(row["avg_peak_lag_true_to_pred"]),
+                    match=fmt(row["avg_peak_lag_match_rate"]),
+                    precision=fmt(row["avg_relaxed_peak_precision"]),
+                    recall=fmt(row["avg_relaxed_peak_recall"]),
+                    f1=fmt(row["avg_relaxed_peak_F1"]),
+                )
+            )
 
     lines.extend(
         [
@@ -543,6 +645,7 @@ def main() -> None:
     input_dir = args.input_dir.expanduser().resolve()
     standard_rows = read_csv(input_dir / "standard_performance_metrics.csv")
     rank_summary_rows = read_csv(input_dir / "standard_rank_summary.csv")
+    alignment_rows = read_csv(input_dir / "alignment_metrics.csv")
     component_rows = read_csv(input_dir / "component_metrics.csv")
     peak_rows = read_csv(input_dir / "peak_window_metrics.csv")
     residual_rows = read_csv(input_dir / "residual_structure_metrics.csv")
@@ -554,8 +657,10 @@ def main() -> None:
     method_names = ordered_methods(component_rows)
     hs = horizons(component_rows)
     standard_summary_rows = build_standard_summary_rows(standard_rows, rank_summary_rows)
+    alignment_summary_rows = build_alignment_summary_rows(alignment_rows, systems)
     summary_rows = build_summary_rows(component_rows, residual_rows)
     write_csv(input_dir / "standard_average_summary.csv", standard_summary_rows)
+    write_csv(input_dir / "alignment_average_summary.csv", alignment_summary_rows)
     write_csv(input_dir / "decomposition_average_summary.csv", summary_rows)
     write_csv(input_dir / "decoupled_average_summary.csv", summary_rows)
     method_comparison_rows = build_method_comparison_rows(summary_rows)
@@ -565,9 +670,10 @@ def main() -> None:
         "num_systems": len(systems),
         "decomposition_methods": method_names,
         "horizons": hs,
+        "alignment_rows": len(alignment_rows),
     }
     (input_dir / "decoupled_plot_summary.json").write_text(json.dumps(report, indent=2, default=json_default), encoding="utf-8")
-    markdown_summary(input_dir / "decoupled_diagnostic_report.md", standard_summary_rows, summary_rows, report)
+    markdown_summary(input_dir / "decoupled_diagnostic_report.md", standard_summary_rows, alignment_summary_rows, summary_rows, report)
 
     if not HAS_MATPLOTLIB:
         print(
@@ -591,6 +697,7 @@ def main() -> None:
     plot_method_comparison(summary_rows, input_dir, args.plot_format)
     plot_summary_bars(summary_rows, input_dir, args.plot_format)
     plot_standard_bars(standard_summary_rows, input_dir, args.plot_format)
+    plot_alignment_bars(alignment_summary_rows, input_dir, args.plot_format)
     print(json.dumps({"input_dir": str(input_dir), "num_systems": len(systems), "decomposition_methods": method_names}, indent=2))
 
 

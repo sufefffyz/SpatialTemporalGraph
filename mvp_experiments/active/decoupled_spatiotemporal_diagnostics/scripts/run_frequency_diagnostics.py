@@ -85,6 +85,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--peak-q", type=float, default=0.90)
     parser.add_argument("--worst-pct", type=float, default=0.10, help="Top fraction of test windows for worst-window MAE.")
     parser.add_argument(
+        "--alignment-max-shift",
+        type=int,
+        default=3,
+        help="Maximum sample shift for time-alignment diagnostics. 0 disables shifted-MAE curves.",
+    )
+    parser.add_argument(
+        "--alignment-time-windows",
+        nargs="+",
+        type=int,
+        default=[0, 1],
+        help="Temporal tolerance windows for relaxed peak hit metrics.",
+    )
+    parser.add_argument(
+        "--alignment-hop-ks",
+        nargs="+",
+        type=int,
+        default=[0, 1],
+        help="Spatial hop tolerances for relaxed peak hit metrics. k>0 requires --adj-path.",
+    )
+    parser.add_argument(
+        "--alignment-directed",
+        action="store_true",
+        help="Use directed adjacency for relaxed spatial hit metrics. Defaults to symmetrized adjacency.",
+    )
+    parser.add_argument(
         "--seasonal-period",
         type=int,
         default=None,
@@ -454,6 +479,253 @@ def peak_detection_metrics(
         "peak_pred_count": pred_count,
         "peak_tp_count": tp,
     }
+
+
+def peak_masks(
+    pred: np.ndarray,
+    target: np.ndarray,
+    q: float,
+    mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    pred, target, valid = finite_pair(pred, target)
+    if mask is not None:
+        valid &= mask
+    with np.errstate(invalid="ignore"):
+        thresholds = np.nanquantile(np.where(valid, target, np.nan), q, axis=0).astype(np.float32)
+    threshold_grid = thresholds.reshape(1, -1)
+    threshold_valid = np.isfinite(threshold_grid)
+    true_peak = valid & threshold_valid & (target >= threshold_grid)
+    pred_peak = valid & threshold_valid & (pred >= threshold_grid)
+    return true_peak, pred_peak, valid & threshold_valid
+
+
+def shifted_mae_curve(
+    pred: np.ndarray,
+    target: np.ndarray,
+    mask: np.ndarray,
+    max_shift: int,
+) -> list[dict[str, float | int]]:
+    max_shift = int(max(0, max_shift))
+    rows: list[dict[str, float | int]] = []
+    pred, target, valid = finite_pair(pred, target)
+    valid &= mask
+    num_steps = pred.shape[0]
+    for delta in range(-max_shift, max_shift + 1):
+        if delta < 0:
+            pred_slice = pred[: num_steps + delta]
+            target_slice = target[-delta:]
+            valid_slice = valid[-delta:] & np.isfinite(pred_slice)
+        elif delta > 0:
+            pred_slice = pred[delta:]
+            target_slice = target[: num_steps - delta]
+            valid_slice = valid[: num_steps - delta] & np.isfinite(pred_slice)
+        else:
+            pred_slice = pred
+            target_slice = target
+            valid_slice = valid
+        if not np.any(valid_slice):
+            mae = float("nan")
+            count = 0
+        else:
+            mae = float(np.mean(np.abs(pred_slice[valid_slice] - target_slice[valid_slice])))
+            count = int(np.sum(valid_slice))
+        rows.append({"time_shift_delta": delta, "shift_MAE": mae, "valid_count": count})
+    return rows
+
+
+def best_shift_summary(curve_rows: list[dict[str, float | int]]) -> dict[str, float | int]:
+    zero_mae = next((float(row["shift_MAE"]) for row in curve_rows if int(row["time_shift_delta"]) == 0), float("nan"))
+    finite = [row for row in curve_rows if np.isfinite(float(row["shift_MAE"]))]
+    if not finite:
+        return {
+            "best_time_shift_delta": 0,
+            "best_shift_MAE": float("nan"),
+            "zero_shift_MAE": zero_mae,
+            "shift_gain": float("nan"),
+        }
+    best = min(finite, key=lambda row: (float(row["shift_MAE"]), abs(int(row["time_shift_delta"]))))
+    best_mae = float(best["shift_MAE"])
+    return {
+        "best_time_shift_delta": int(best["time_shift_delta"]),
+        "best_shift_MAE": best_mae,
+        "zero_shift_MAE": zero_mae,
+        "shift_gain": (zero_mae - best_mae) / zero_mae if zero_mae and np.isfinite(zero_mae) else float("nan"),
+    }
+
+
+def build_reach_indices(adj: np.ndarray | None, hop_ks: list[int], directed: bool) -> dict[int, list[np.ndarray]]:
+    if adj is None:
+        return {}
+    max_k = max([0, *hop_ks])
+    if max_k <= 0:
+        return {0: [np.asarray([idx], dtype=np.int64) for idx in range(adj.shape[0])]}
+    work = np.asarray(adj)
+    if work.ndim != 2 or work.shape[0] != work.shape[1]:
+        raise ValueError(f"Adjacency must be square, got {work.shape}")
+    base = work > 0
+    if not directed:
+        base = base | base.T
+    num_nodes = base.shape[0]
+    neighbors = [set(np.flatnonzero(base[idx]).tolist()) | {idx} for idx in range(num_nodes)]
+    reach_sets = [{idx} for idx in range(num_nodes)]
+    frontier_sets = [{idx} for idx in range(num_nodes)]
+    reach_by_k: dict[int, list[np.ndarray]] = {
+        0: [np.asarray([idx], dtype=np.int64) for idx in range(num_nodes)]
+    }
+    for hop in range(1, max_k + 1):
+        next_frontiers: list[set[int]] = []
+        for idx in range(num_nodes):
+            next_nodes: set[int] = set()
+            for node in frontier_sets[idx]:
+                next_nodes.update(neighbors[node])
+            next_nodes.difference_update(reach_sets[idx])
+            reach_sets[idx].update(next_nodes)
+            next_frontiers.append(next_nodes)
+        frontier_sets = next_frontiers
+        reach_by_k[hop] = [np.asarray(sorted(items), dtype=np.int64) for items in reach_sets]
+    return {k: reach_by_k[k] for k in sorted(set(hop_ks)) if k in reach_by_k}
+
+
+def spatial_dilate(mask: np.ndarray, reach_indices: list[np.ndarray] | None) -> np.ndarray:
+    if reach_indices is None:
+        return mask
+    out = np.zeros_like(mask, dtype=bool)
+    for node, indices in enumerate(reach_indices):
+        if indices.size == 1 and indices[0] == node:
+            out[:, node] = mask[:, node]
+        else:
+            out[:, node] = np.any(mask[:, indices], axis=1)
+    return out
+
+
+def temporal_spatial_dilate(
+    mask: np.ndarray,
+    reach_indices: list[np.ndarray] | None,
+    time_window: int,
+) -> np.ndarray:
+    time_window = int(max(0, time_window))
+    num_steps = mask.shape[0]
+    out = np.zeros_like(mask, dtype=bool)
+    for delta in range(-time_window, time_window + 1):
+        if delta < 0:
+            source = mask[: num_steps + delta]
+            target_slice = slice(-delta, None)
+        elif delta > 0:
+            source = mask[delta:]
+            target_slice = slice(0, num_steps - delta)
+        else:
+            source = mask
+            target_slice = slice(None)
+        out[target_slice] |= spatial_dilate(source, reach_indices)
+    return out
+
+
+def nearest_peak_lag(
+    source_peak: np.ndarray,
+    target_peak: np.ndarray,
+    time_window: int,
+) -> tuple[float, float, int]:
+    time_window = int(max(0, time_window))
+    num_steps = source_peak.shape[0]
+    best_lag = np.full(source_peak.shape, time_window + 1, dtype=np.int16)
+    for delta in range(-time_window, time_window + 1):
+        if delta < 0:
+            candidate = source_peak[-delta:] & target_peak[: num_steps + delta]
+            best_lag[-delta:] = np.where(candidate, np.minimum(best_lag[-delta:], abs(delta)), best_lag[-delta:])
+        elif delta > 0:
+            candidate = source_peak[: num_steps - delta] & target_peak[delta:]
+            best_lag[: num_steps - delta] = np.where(candidate, np.minimum(best_lag[: num_steps - delta], delta), best_lag[: num_steps - delta])
+        else:
+            candidate = source_peak & target_peak
+            best_lag = np.where(candidate, 0, best_lag)
+    source_count = int(np.sum(source_peak))
+    matched = source_peak & (best_lag <= time_window)
+    matched_count = int(np.sum(matched))
+    if matched_count == 0:
+        return float("nan"), float("nan"), source_count
+    return float(np.mean(best_lag[matched])), float(matched_count / source_count) if source_count else float("nan"), source_count
+
+
+def relaxed_peak_hit_metrics(
+    true_peak: np.ndarray,
+    pred_peak: np.ndarray,
+    hop_k: int,
+    time_window: int,
+    reach_indices: list[np.ndarray] | None,
+) -> dict[str, float | int]:
+    true_near = temporal_spatial_dilate(true_peak, reach_indices, time_window)
+    pred_near = temporal_spatial_dilate(pred_peak, reach_indices, time_window)
+    pred_count = int(np.sum(pred_peak))
+    true_count = int(np.sum(true_peak))
+    pred_hit_count = int(np.sum(pred_peak & true_near))
+    true_hit_count = int(np.sum(true_peak & pred_near))
+    precision = pred_hit_count / pred_count if pred_count else float("nan")
+    recall = true_hit_count / true_count if true_count else float("nan")
+    f1 = (
+        2.0 * precision * recall / (precision + recall)
+        if np.isfinite(precision) and np.isfinite(recall) and precision + recall > 0
+        else float("nan")
+    )
+    return {
+        "alignment_hop_k": hop_k,
+        "alignment_time_window": time_window,
+        "relaxed_peak_precision": float(precision),
+        "relaxed_peak_recall": float(recall),
+        "relaxed_peak_F1": float(f1),
+        "relaxed_pred_hit_count": pred_hit_count,
+        "relaxed_true_hit_count": true_hit_count,
+        "peak_pred_count": pred_count,
+        "peak_true_count": true_count,
+    }
+
+
+def alignment_rows(
+    system: str,
+    horizon: int,
+    pred: np.ndarray,
+    target: np.ndarray,
+    mask: np.ndarray,
+    q: float,
+    max_shift: int,
+    time_windows: list[int],
+    hop_ks: list[int],
+    reach_by_k: dict[int, list[np.ndarray]],
+) -> tuple[list[dict], list[dict]]:
+    shift_curve = shifted_mae_curve(pred, target, mask, max_shift)
+    shift_summary = best_shift_summary(shift_curve)
+    true_peak, pred_peak, _ = peak_masks(pred, target, q, mask)
+    lag_window = int(max(time_windows)) if time_windows else int(max_shift)
+    avg_lag, lag_match_rate, lag_source_count = nearest_peak_lag(true_peak, pred_peak, lag_window)
+    curve_rows = [
+        {
+            "system": system,
+            "horizon": horizon,
+            **row,
+        }
+        for row in shift_curve
+    ]
+
+    rows: list[dict] = []
+    for hop_k in sorted(set(hop_ks)):
+        if hop_k > 0 and hop_k not in reach_by_k:
+            continue
+        reach_indices = reach_by_k.get(hop_k)
+        if hop_k == 0:
+            reach_indices = None
+        for time_window in sorted(set(time_windows)):
+            rows.append(
+                {
+                    "system": system,
+                    "horizon": horizon,
+                    "peak_lag_window": lag_window,
+                    "avg_peak_lag_true_to_pred": avg_lag,
+                    "peak_lag_match_rate": lag_match_rate,
+                    "peak_lag_true_count": lag_source_count,
+                    **shift_summary,
+                    **relaxed_peak_hit_metrics(true_peak, pred_peak, hop_k, time_window, reach_indices),
+                }
+            )
+    return rows, curve_rows
 
 
 def standard_performance_row(
@@ -852,6 +1124,7 @@ def build_markdown(
     report: dict,
     standard_rows: list[dict],
     rank_summary_rows: list[dict],
+    alignment_metric_rows: list[dict],
     component_rows: list[dict],
     peak_metric_rows: list[dict],
     residual_metric_rows: list[dict],
@@ -867,6 +1140,9 @@ def build_markdown(
         f"- FFT cutoff period: {report['fft_cutoff_period']}",
         f"- Seasonal period for MASE/RMSSE: {report['seasonal_period'] or 'disabled'}",
         f"- Worst-window fraction: {report['worst_pct']}",
+        f"- Alignment max shift: {report['alignment_max_shift']}",
+        f"- Alignment time windows: {', '.join(str(item) for item in report['alignment_time_windows'])}",
+        f"- Alignment hop tolerances: {', '.join(str(item) for item in report['alignment_hop_ks'])}",
         f"- Horizons: {', '.join(str(h) for h in report['horizons'])}",
         "",
         "## Runs",
@@ -894,6 +1170,20 @@ def build_markdown(
         lines.append("|---:|---|---:|---:|")
         for idx, row in enumerate(rank_summary_rows, start=1):
             lines.append(f"| {idx} | {row['system']} | {row['avg_standard_rank']:.4g} | {row['rank_count']} |")
+
+    lines.extend(["", "## Alignment Diagnostics", ""])
+    if alignment_metric_rows:
+        lines.append("Relaxed peak-hit metrics detect small time/node misalignment. Hop tolerances above 0 require adjacency.")
+        lines.append("| System | Horizon | Hop k | Time Window | Shift Gain | Best Shift | Peak Lag | Relaxed Precision | Relaxed Recall | Relaxed F1 |")
+        lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for row in alignment_metric_rows[:80]:
+            lines.append(
+                f"| {row['system']} | {row['horizon']} | {row['alignment_hop_k']} | {row['alignment_time_window']} | "
+                f"{row['shift_gain']:.4g} | {row['best_time_shift_delta']} | {row['avg_peak_lag_true_to_pred']:.4g} | "
+                f"{row['relaxed_peak_precision']:.4g} | {row['relaxed_peak_recall']:.4g} | {row['relaxed_peak_F1']:.4g} |"
+            )
+    else:
+        lines.append("No alignment diagnostics were generated.")
 
     lines.extend(["", "## Decomposition-Dependent Low/High Metrics", ""])
     if component_rows:
@@ -962,6 +1252,14 @@ def main() -> None:
         raise ValueError(f"--peak-q must be in (0, 1), got {args.peak_q}")
     if not (0 < args.worst_pct <= 1):
         raise ValueError(f"--worst-pct must be in (0, 1], got {args.worst_pct}")
+    if args.alignment_max_shift < 0:
+        raise ValueError(f"--alignment-max-shift must be >= 0, got {args.alignment_max_shift}")
+    alignment_time_windows = sorted({int(item) for item in args.alignment_time_windows if int(item) >= 0})
+    alignment_hop_ks = sorted({int(item) for item in args.alignment_hop_ks if int(item) >= 0})
+    if not alignment_time_windows:
+        alignment_time_windows = [0]
+    if not alignment_hop_ks:
+        alignment_hop_ks = [0]
     null_val = parse_null_value(args.null_val, desc)
     seasonal_period = infer_seasonal_period(desc, args.seasonal_period)
     scale_abs, scale_sq = load_seasonal_scales(args, desc, num_nodes, seasonal_period, null_val)
@@ -977,8 +1275,13 @@ def main() -> None:
         if adj.shape != (num_nodes, num_nodes):
             raise ValueError(f"Adjacency shape {adj.shape} does not match num_nodes={num_nodes}")
         edges = sample_edges(adj, args.max_edge_pairs)
+    reach_by_k = build_reach_indices(adj, alignment_hop_ks, directed=args.alignment_directed)
+    if adj is None and any(k > 0 for k in alignment_hop_ks):
+        log("[warn] --alignment-hop-ks includes k>0 but no --adj-path was provided; spatial relaxed-hit rows will be skipped.")
 
     standard_rows: list[dict] = []
+    alignment_metric_rows: list[dict] = []
+    time_shift_curve_rows: list[dict] = []
     component_rows: list[dict] = []
     peak_metric_rows: list[dict] = []
     distribution_rows: list[dict] = []
@@ -1020,6 +1323,20 @@ def main() -> None:
             )
             standard_rows.append(standard_row)
             peak_metric_rows.extend(peak_rows(run.name, horizon, pred_h, target_h, args.peak_q, target_mask))
+            align_rows, shift_rows = alignment_rows(
+                run.name,
+                horizon,
+                pred_h,
+                target_h,
+                target_mask,
+                args.peak_q,
+                args.alignment_max_shift,
+                alignment_time_windows,
+                alignment_hop_ks,
+                reach_by_k,
+            )
+            alignment_metric_rows.extend(align_rows)
+            time_shift_curve_rows.extend(shift_rows)
 
             for method in decomposition_methods:
                 pred_low, pred_high = decompose_series(pred_h, method, args.moving_window, fft_cutoff_period)
@@ -1069,6 +1386,10 @@ def main() -> None:
         "null_val": null_val,
         "peak_q": args.peak_q,
         "worst_pct": args.worst_pct,
+        "alignment_max_shift": args.alignment_max_shift,
+        "alignment_time_windows": alignment_time_windows,
+        "alignment_hop_ks": alignment_hop_ks,
+        "alignment_directed": bool(args.alignment_directed),
         "num_runs": len(run_reports),
         "runs": run_reports,
     }
@@ -1077,6 +1398,8 @@ def main() -> None:
     write_csv(args.output_dir / "standard_performance_metrics.csv", standard_rows)
     write_csv(args.output_dir / "standard_rank_details.csv", rank_detail_rows)
     write_csv(args.output_dir / "standard_rank_summary.csv", rank_summary_rows)
+    write_csv(args.output_dir / "alignment_metrics.csv", alignment_metric_rows)
+    write_csv(args.output_dir / "time_shift_curve.csv", time_shift_curve_rows)
     write_csv(args.output_dir / "component_metrics.csv", component_rows)
     write_csv(args.output_dir / "peak_window_metrics.csv", peak_metric_rows)
     write_csv(args.output_dir / "distribution_metrics.csv", distribution_rows)
@@ -1088,6 +1411,7 @@ def main() -> None:
             report,
             standard_rows,
             rank_summary_rows,
+            alignment_metric_rows,
             component_rows,
             peak_metric_rows,
             residual_metric_rows,
