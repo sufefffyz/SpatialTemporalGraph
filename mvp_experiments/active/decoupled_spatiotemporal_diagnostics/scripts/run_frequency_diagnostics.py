@@ -717,19 +717,23 @@ def temporal_spatial_dilate(
     reach_indices: object | None,
     time_window: int,
 ) -> np.ndarray:
+    spatial_mask = spatial_dilate(mask, reach_indices)
+    return temporal_dilate(spatial_mask, time_window)
+
+
+def temporal_dilate(mask: np.ndarray, time_window: int) -> np.ndarray:
     time_window = int(max(0, time_window))
     num_steps = mask.shape[0]
-    spatial_mask = spatial_dilate(mask, reach_indices)
     out = np.zeros_like(mask, dtype=bool)
     for delta in range(-time_window, time_window + 1):
         if delta < 0:
-            source = spatial_mask[: num_steps + delta]
+            source = mask[: num_steps + delta]
             target_slice = slice(-delta, None)
         elif delta > 0:
-            source = spatial_mask[delta:]
+            source = mask[delta:]
             target_slice = slice(0, num_steps - delta)
         else:
-            source = spatial_mask
+            source = mask
             target_slice = slice(None)
         out[target_slice] |= source
     return out
@@ -766,10 +770,9 @@ def relaxed_peak_hit_metrics(
     pred_peak: np.ndarray,
     hop_k: int,
     time_window: int,
-    reach_indices: object | None,
+    true_near: np.ndarray,
+    pred_near: np.ndarray,
 ) -> dict[str, float | int]:
-    true_near = temporal_spatial_dilate(true_peak, reach_indices, time_window)
-    pred_near = temporal_spatial_dilate(pred_peak, reach_indices, time_window)
     pred_count = int(np.sum(pred_peak))
     true_count = int(np.sum(true_peak))
     pred_hit_count = int(np.sum(pred_peak & true_near))
@@ -827,7 +830,11 @@ def alignment_rows(
         reach_indices = reach_by_k.get(hop_k)
         if hop_k == 0:
             reach_indices = None
+        true_spatial = spatial_dilate(true_peak, reach_indices)
+        pred_spatial = spatial_dilate(pred_peak, reach_indices)
         for time_window in sorted(set(time_windows)):
+            true_near = temporal_dilate(true_spatial, time_window)
+            pred_near = temporal_dilate(pred_spatial, time_window)
             rows.append(
                 {
                     "system": system,
@@ -837,7 +844,7 @@ def alignment_rows(
                     "peak_lag_match_rate": lag_match_rate,
                     "peak_lag_true_count": lag_source_count,
                     **shift_summary,
-                    **relaxed_peak_hit_metrics(true_peak, pred_peak, hop_k, time_window, reach_indices),
+                    **relaxed_peak_hit_metrics(true_peak, pred_peak, hop_k, time_window, true_near, pred_near),
                 }
             )
     return rows, curve_rows
