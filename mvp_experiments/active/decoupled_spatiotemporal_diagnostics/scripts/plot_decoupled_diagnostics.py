@@ -569,6 +569,10 @@ def markdown_summary(
         "# Decoupled SD Baseline Diagnostic Report",
         "",
         f"- Input directory: `{report['input_dir']}`",
+        f"- Dataset: `{report.get('dataset_name') or 'unknown'}`",
+        f"- Dataset dir: `{report.get('dataset_dir') or 'unknown'}`",
+        f"- Adjacency path: `{report.get('adj_path') or 'none'}`",
+        f"- Alignment directed adjacency: {report.get('alignment_directed')}",
         f"- Systems: {report['num_systems']}",
         f"- Decomposition methods: {', '.join(report['decomposition_methods'])}",
         f"- Horizons: {', '.join(f'H{h}' for h in report['horizons'])}",
@@ -743,8 +747,16 @@ def main() -> None:
     write_csv(input_dir / "decoupled_average_summary.csv", summary_rows)
     method_comparison_rows = build_method_comparison_rows(summary_rows)
     write_csv(input_dir / "decoupled_method_comparison.csv", method_comparison_rows)
+    source_summary_path = input_dir / "summary.json"
+    source_summary = {}
+    if source_summary_path.exists():
+        source_summary = json.loads(source_summary_path.read_text(encoding="utf-8"))
     report = {
         "input_dir": str(input_dir),
+        "dataset_name": source_summary.get("dataset_name"),
+        "dataset_dir": source_summary.get("dataset_dir"),
+        "adj_path": source_summary.get("adj_path"),
+        "alignment_directed": source_summary.get("alignment_directed"),
         "num_systems": len(systems),
         "decomposition_methods": method_names,
         "horizons": hs,
