@@ -17,3 +17,5 @@
 | R013 | M5 | Qualitative diagnosis | learned degree/edge weights by region/time | LargeST-SD | degree distribution, peak/off-peak patterns | NICE | TODO | After positive quantitative signal. |
 | R014 | M5 | PEMS replication | best method | coordinate-validated PEMS | MAE/RMSE/MAPE/WAPE | MUST | TODO | Main-table replication only if coordinates validated. |
 | R015 | M1 | Backbone check | STGCN on OSRM Gaussian global threshold beta sweep | LargeST-SD | MAE/RMSE/MAPE/WAPE, degree sensitivity | SHOULD | TODO | Added to test whether the current adaptive graph signal holds beyond GWNet/DCRNN. |
+| R016 | M2 | FlowNet-soft dense control | FlowNet-style dynamic radius soft mask with OSRM distance | LargeST-SD | MAE/RMSE/MAPE/WAPE, runtime/memory | MUST | TODO | Dynamic-aware dense control; no sparse-operator efficiency claim. |
+| R017 | M4 | Hard dynamic threshold candidate | batch-conditioned hard radius support on GWNet/DCRNN/STGCN | LargeST-SD | MAE/RMSE/MAPE/WAPE, runtime/memory, active degree | MUST | TODO | True method candidate before static hard/top-k/dynamic-weight controls. |
