@@ -121,6 +121,9 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
         forward_features = [0, 1]
         setup_graph = True
     elif backbone == "stgcn":
+        dynamic_graph = dict(dynamic_graph)
+        if "DYNAMIC_GRAPH_SELF_LOOPS" not in os.environ:
+            dynamic_graph["self_loops"] = False
         model_arch = DynamicThresholdSTGCN
         model_param = {
             "Ks": 3,

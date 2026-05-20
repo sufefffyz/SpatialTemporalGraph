@@ -176,7 +176,7 @@ class DynamicThresholdSTGCN(nn.Module):
         train: bool,
         **kwargs,
     ) -> torch.Tensor:
-        gso = self.dynamic_support.symmetric_support(history_data)
+        gso = self.dynamic_support.symmetric_laplacian(history_data)
         x = history_data.permute(0, 3, 1, 2).contiguous()
         for block in self.st_blocks:
             x = block(x, gso)

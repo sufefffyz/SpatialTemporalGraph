@@ -189,6 +189,10 @@ class DynamicThresholdSupport(nn.Module):
         inv_sqrt = torch.rsqrt(degree)
         return weights * inv_sqrt.unsqueeze(-1) * inv_sqrt.unsqueeze(-2)
 
+    def symmetric_laplacian(self, history_data: torch.Tensor) -> torch.Tensor:
+        sym_adj = self.symmetric_support(history_data)
+        return self.eye.unsqueeze(0).to(sym_adj.device) - sym_adj
+
     def forward(self, history_data: torch.Tensor) -> list[torch.Tensor] | torch.Tensor:
         if self.normalization == "sym":
             return self.symmetric_support(history_data)
