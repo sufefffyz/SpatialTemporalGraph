@@ -20,6 +20,7 @@ JOINT_ST_WORKERS="${JOINT_ST_WORKERS:-1}"
 JOINT_ST_PATCH_LEN="${JOINT_ST_PATCH_LEN:-0}"
 JOINT_ST_PATCH_CONDITIONS="${JOINT_ST_PATCH_CONDITIONS:-high_volume peak ramp}"
 JOINT_ST_PATCH_CHUNK_SIZE="${JOINT_ST_PATCH_CHUNK_SIZE:-32768}"
+JOINT_ST_PATCH_TOPK="${JOINT_ST_PATCH_TOPK:-0}"
 HORIZONS="${HORIZONS:-1 2 3 4 5 6 7 8 9 10 11 12}"
 INCLUDE_TOKENS="${INCLUDE_TOKENS:-${DATASET_NAME}_}"
 ALIGNMENT_MAX_SHIFT="${ALIGNMENT_MAX_SHIFT:-3}"
@@ -86,6 +87,7 @@ python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --joint-st-patch-len "${JOINT_ST_PATCH_LEN}" \
   --joint-st-patch-conditions "${JOINT_ST_PATCH_CONDITION_ARGS[@]}" \
   --joint-st-patch-chunk-size "${JOINT_ST_PATCH_CHUNK_SIZE}" \
+  --joint-st-patch-topk "${JOINT_ST_PATCH_TOPK}" \
   --horizons "${HORIZON_ARGS[@]}" \
   --alignment-max-shift "${ALIGNMENT_MAX_SHIFT}" \
   --alignment-time-windows "${ALIGNMENT_TIME_WINDOW_ARGS[@]}" \

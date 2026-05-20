@@ -173,6 +173,12 @@ def parse_args() -> argparse.Namespace:
         help="Chunk size for patch-level joint ST shift metric computation.",
     )
     parser.add_argument(
+        "--joint-st-patch-topk",
+        type=int,
+        default=0,
+        help="If positive, keep only the top-k strongest non-self graph neighbors for patch-level joint ST shift metrics.",
+    )
+    parser.add_argument(
         "--seasonal-period",
         type=int,
         default=None,
@@ -765,6 +771,36 @@ def pad_reach_lists(reach_by_k: dict[int, list[np.ndarray]]) -> dict[int, tuple[
     return padded_by_k
 
 
+def limit_reach_lists_by_topk(
+    adj: np.ndarray | None,
+    reach_by_k: dict[int, list[np.ndarray]],
+    topk: int,
+    directed: bool,
+) -> dict[int, list[np.ndarray]]:
+    topk = int(topk)
+    if adj is None or topk <= 0:
+        return reach_by_k
+    weights = np.asarray(adj, dtype=np.float32)
+    if not directed:
+        weights = np.maximum(weights, weights.T)
+    limited: dict[int, list[np.ndarray]] = {}
+    for hop_k, reach_lists in reach_by_k.items():
+        if hop_k <= 0:
+            limited[hop_k] = reach_lists
+            continue
+        limited_lists: list[np.ndarray] = []
+        for node, indices in enumerate(reach_lists):
+            indices = np.asarray(indices, dtype=np.int64)
+            non_self = indices[indices != node]
+            if non_self.size:
+                scores = weights[node, non_self]
+                order = np.lexsort((non_self, -scores))
+                non_self = non_self[order[:topk]]
+            limited_lists.append(np.asarray([node, *non_self.tolist()], dtype=np.int64))
+        limited[hop_k] = limited_lists
+    return limited
+
+
 def shifted_slices(
     pred: np.ndarray,
     target: np.ndarray,
@@ -1283,6 +1319,22 @@ def joint_st_patch_shift_rows(
             if reach_indices is None:
                 continue
         for condition, condition_mask in conditions.items():
+            stats = patch_st_shift_stats(
+                pred,
+                target,
+                condition_mask,
+                patch_len,
+                max_shift,
+                reach_indices,
+                chunk_size,
+            )
+            log(
+                "[patch] "
+                f"{system} k={hop_k} condition={condition} "
+                f"count={stats['condition_valid_count']} "
+                f"st_gain={stats['st_shift_gain']:.4g} "
+                f"extra_time={stats['extra_time_gain_after_spatial']:.4g}"
+            )
             rows.append(
                 {
                     "system": system,
@@ -1290,15 +1342,7 @@ def joint_st_patch_shift_rows(
                     "condition": condition,
                     "patch_len": patch_len,
                     "max_patch_shift": int(max_shift),
-                    **patch_st_shift_stats(
-                        pred,
-                        target,
-                        condition_mask,
-                        patch_len,
-                        max_shift,
-                        reach_indices,
-                        chunk_size,
-                    ),
+                    **stats,
                 }
             )
     return rows
@@ -1884,6 +1928,7 @@ def build_markdown(
         f"- Conditional ramp quantile: {report['condition_ramp_q']}",
         f"- Joint ST patch length: {report['joint_st_patch_len']}",
         f"- Joint ST patch conditions: {', '.join(report['joint_st_patch_conditions'])}",
+        f"- Joint ST patch top-k graph neighbors: {report['joint_st_patch_topk'] or 'all'}",
         f"- Horizons: {', '.join(str(h) for h in report['horizons'])}",
         "",
         "## Runs",
@@ -2086,6 +2131,17 @@ def main() -> None:
         hop_k: reach_padded_by_k.get(hop_k, reach_lists)
         for hop_k, reach_lists in reach_lists_by_k.items()
     }
+    patch_reach_lists_by_k = limit_reach_lists_by_topk(
+        adj,
+        reach_lists_by_k,
+        args.joint_st_patch_topk,
+        directed=args.alignment_directed,
+    )
+    patch_reach_padded_by_k = pad_reach_lists(patch_reach_lists_by_k)
+    patch_reach_value_by_k: dict[int, list[np.ndarray] | tuple[np.ndarray, np.ndarray]] = {
+        hop_k: patch_reach_padded_by_k.get(hop_k, reach_lists)
+        for hop_k, reach_lists in patch_reach_lists_by_k.items()
+    }
 
     for run in runs:
         pred_path = run.result_dir / "predictions.npy"
@@ -2111,7 +2167,7 @@ def main() -> None:
                     args.joint_st_patch_len,
                     args.alignment_max_shift,
                     alignment_hop_ks,
-                    reach_value_by_k,
+                    patch_reach_value_by_k,
                     args.peak_q,
                     args.condition_high_q,
                     args.condition_ramp_q,
@@ -2251,6 +2307,7 @@ def main() -> None:
         "joint_st_patch_len": int(args.joint_st_patch_len),
         "joint_st_patch_conditions": args.joint_st_patch_conditions,
         "joint_st_patch_chunk_size": int(args.joint_st_patch_chunk_size),
+        "joint_st_patch_topk": int(args.joint_st_patch_topk),
         "num_runs": len(run_reports),
         "runs": run_reports,
     }
