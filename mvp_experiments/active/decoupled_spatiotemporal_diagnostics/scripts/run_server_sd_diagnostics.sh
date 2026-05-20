@@ -17,6 +17,9 @@ CONDITION_HIGH_Q="${CONDITION_HIGH_Q:-0.75}"
 CONDITION_RAMP_Q="${CONDITION_RAMP_Q:-0.90}"
 JOINT_ST_CONDITIONS="${JOINT_ST_CONDITIONS:-high_volume peak ramp}"
 JOINT_ST_WORKERS="${JOINT_ST_WORKERS:-1}"
+JOINT_ST_PATCH_LEN="${JOINT_ST_PATCH_LEN:-0}"
+JOINT_ST_PATCH_CONDITIONS="${JOINT_ST_PATCH_CONDITIONS:-high_volume peak ramp}"
+JOINT_ST_PATCH_CHUNK_SIZE="${JOINT_ST_PATCH_CHUNK_SIZE:-32768}"
 HORIZONS="${HORIZONS:-1 2 3 4 5 6 7 8 9 10 11 12}"
 INCLUDE_TOKENS="${INCLUDE_TOKENS:-${DATASET_NAME}_}"
 ALIGNMENT_MAX_SHIFT="${ALIGNMENT_MAX_SHIFT:-3}"
@@ -25,6 +28,7 @@ ALIGNMENT_HOP_KS="${ALIGNMENT_HOP_KS:-0 1}"
 ADJ_PATH="${ADJ_PATH:-}"
 ALIGNMENT_DIRECTED="${ALIGNMENT_DIRECTED:-0}"
 ALIGNMENT_ONLY="${ALIGNMENT_ONLY:-0}"
+PATCH_ONLY="${PATCH_ONLY:-0}"
 
 SEARCH_ROOTS=()
 if [ "$#" -gt 0 ]; then
@@ -47,6 +51,7 @@ read -r -a INCLUDE_TOKEN_ARGS <<< "${INCLUDE_TOKENS}"
 read -r -a ALIGNMENT_TIME_WINDOW_ARGS <<< "${ALIGNMENT_TIME_WINDOWS}"
 read -r -a ALIGNMENT_HOP_K_ARGS <<< "${ALIGNMENT_HOP_KS}"
 read -r -a JOINT_ST_CONDITION_ARGS <<< "${JOINT_ST_CONDITIONS}"
+read -r -a JOINT_ST_PATCH_CONDITION_ARGS <<< "${JOINT_ST_PATCH_CONDITIONS}"
 
 INCLUDE_ARGS=()
 for TOKEN in "${INCLUDE_TOKEN_ARGS[@]}"; do
@@ -63,6 +68,9 @@ fi
 if [ "${ALIGNMENT_ONLY}" = "1" ] || [ "${ALIGNMENT_ONLY}" = "true" ]; then
   ADJ_ARGS+=(--alignment-only)
 fi
+if [ "${PATCH_ONLY}" = "1" ] || [ "${PATCH_ONLY}" = "true" ]; then
+  ADJ_ARGS+=(--patch-only)
+fi
 
 python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --dataset-name "${DATASET_NAME}" \
@@ -75,6 +83,9 @@ python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   --condition-ramp-q "${CONDITION_RAMP_Q}" \
   --joint-st-conditions "${JOINT_ST_CONDITION_ARGS[@]}" \
   --joint-st-workers "${JOINT_ST_WORKERS}" \
+  --joint-st-patch-len "${JOINT_ST_PATCH_LEN}" \
+  --joint-st-patch-conditions "${JOINT_ST_PATCH_CONDITION_ARGS[@]}" \
+  --joint-st-patch-chunk-size "${JOINT_ST_PATCH_CHUNK_SIZE}" \
   --horizons "${HORIZON_ARGS[@]}" \
   --alignment-max-shift "${ALIGNMENT_MAX_SHIFT}" \
   --alignment-time-windows "${ALIGNMENT_TIME_WINDOW_ARGS[@]}" \
@@ -84,9 +95,11 @@ python "${SCRIPT_DIR}/run_frequency_diagnostics.py" \
   "${ADJ_ARGS[@]}" \
   "${SEARCH_ARGS[@]}"
 
-python "${SCRIPT_DIR}/plot_decoupled_diagnostics.py" \
-  --input-dir "${OUTPUT_DIR}" \
-  --plot-format png
+if [[ "${PATCH_ONLY}" != "1" && "${PATCH_ONLY}" != "true" ]]; then
+  python "${SCRIPT_DIR}/plot_decoupled_diagnostics.py" \
+    --input-dir "${OUTPUT_DIR}" \
+    --plot-format png
+fi
 
 if [[ "${ALIGNMENT_ONLY}" != "1" && "${ALIGNMENT_ONLY}" != "true" && " ${DECOMP_METHODS} " == *" moving_average "* && " ${DECOMP_METHODS} " == *" fft_lowpass "* ]]; then
   python "${SCRIPT_DIR}/summarize_decomposition_rankings.py" \

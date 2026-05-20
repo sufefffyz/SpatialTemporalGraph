@@ -124,6 +124,11 @@ def parse_args() -> argparse.Namespace:
         help="Only compute time/space alignment and conditional ShiftGain metrics; skip standard and decomposition metrics.",
     )
     parser.add_argument(
+        "--patch-only",
+        action="store_true",
+        help="Only compute patch-level joint ST shift metrics; requires --joint-st-patch-len > 0.",
+    )
+    parser.add_argument(
         "--condition-high-q",
         type=float,
         default=0.75,
@@ -147,6 +152,25 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Number of worker threads for joint spatiotemporal STShiftGain over hop/time-shift tasks.",
+    )
+    parser.add_argument(
+        "--joint-st-patch-len",
+        type=int,
+        default=0,
+        help="If positive, compute patch-level joint ST shift metrics over this many forecast steps.",
+    )
+    parser.add_argument(
+        "--joint-st-patch-conditions",
+        nargs="+",
+        default=["high_volume", "peak", "ramp"],
+        choices=["all", "normal", "high_volume", "peak", "ramp"],
+        help="Traffic regimes for patch-level joint ST shift metrics.",
+    )
+    parser.add_argument(
+        "--joint-st-patch-chunk-size",
+        type=int,
+        default=32768,
+        help="Chunk size for patch-level joint ST shift metric computation.",
     )
     parser.add_argument(
         "--seasonal-period",
@@ -1010,6 +1034,276 @@ def joint_st_shift_rows(
     return metric_rows, curve_rows
 
 
+def patch_condition_masks(
+    target: np.ndarray,
+    base_mask: np.ndarray,
+    patch_len: int,
+    peak_q: float,
+    high_q: float,
+    ramp_q: float,
+) -> dict[str, np.ndarray]:
+    target = np.asarray(target, dtype=np.float32)
+    base_mask = np.asarray(base_mask, dtype=bool)
+    patch_len = int(patch_len)
+    num_steps, output_len, num_nodes = target.shape
+    num_patch_starts = output_len - patch_len + 1
+    if patch_len <= 0 or num_patch_starts <= 0:
+        empty = np.zeros((num_steps, 0, num_nodes), dtype=bool)
+        return {"all": empty, "peak": empty, "high_volume": empty, "ramp": empty, "normal": empty}
+
+    patch_valid = np.ones((num_steps, num_patch_starts, num_nodes), dtype=bool)
+    for offset in range(patch_len):
+        patch_valid &= base_mask[:, offset : offset + num_patch_starts, :]
+
+    center_offset = patch_len // 2
+    center_values = target[:, center_offset : center_offset + num_patch_starts, :]
+    center_valid = base_mask[:, center_offset : center_offset + num_patch_starts, :]
+    with np.errstate(invalid="ignore"):
+        high_thresholds = np.nanquantile(np.where(base_mask, target, np.nan), high_q, axis=(0, 1)).astype(np.float32)
+        peak_thresholds = np.nanquantile(np.where(base_mask, target, np.nan), peak_q, axis=(0, 1)).astype(np.float32)
+    high_grid = high_thresholds.reshape(1, 1, num_nodes)
+    peak_grid = peak_thresholds.reshape(1, 1, num_nodes)
+    high_volume = patch_valid & center_valid & np.isfinite(high_grid) & (center_values >= high_grid)
+    peak = patch_valid & center_valid & np.isfinite(peak_grid) & (center_values >= peak_grid)
+
+    ramp = np.full_like(target, np.nan, dtype=np.float32)
+    ramp_valid = np.zeros_like(base_mask, dtype=bool)
+    if output_len > 1:
+        ramp[:, 1:, :] = np.abs(target[:, 1:, :] - target[:, :-1, :])
+        ramp_valid[:, 1:, :] = base_mask[:, 1:, :] & base_mask[:, :-1, :] & np.isfinite(ramp[:, 1:, :])
+    with np.errstate(invalid="ignore"):
+        ramp_thresholds = np.nanquantile(np.where(ramp_valid, ramp, np.nan), ramp_q, axis=(0, 1)).astype(np.float32)
+    ramp_grid = ramp_thresholds.reshape(1, 1, num_nodes)
+    ramp_center = ramp[:, center_offset : center_offset + num_patch_starts, :]
+    ramp_center_valid = ramp_valid[:, center_offset : center_offset + num_patch_starts, :]
+    ramp_mask = patch_valid & ramp_center_valid & np.isfinite(ramp_grid) & (ramp_center >= ramp_grid)
+    normal = patch_valid & ~peak & ~ramp_mask
+    return {
+        "all": patch_valid,
+        "peak": peak,
+        "high_volume": high_volume,
+        "ramp": ramp_mask,
+        "normal": normal,
+    }
+
+
+def patch_self_mae(
+    pred: np.ndarray,
+    target: np.ndarray,
+    sample_idx: np.ndarray,
+    patch_start: np.ndarray,
+    node_idx: np.ndarray,
+    patch_len: int,
+) -> np.ndarray:
+    err = np.zeros(sample_idx.shape[0], dtype=np.float64)
+    valid = np.ones(sample_idx.shape[0], dtype=bool)
+    for offset in range(patch_len):
+        pred_values = pred[sample_idx, patch_start + offset, node_idx]
+        target_values = target[sample_idx, patch_start + offset, node_idx]
+        pair_valid = np.isfinite(pred_values) & np.isfinite(target_values)
+        valid &= pair_valid
+        err += np.where(pair_valid, np.abs(pred_values - target_values), 0.0)
+    return np.where(valid, err / float(patch_len), np.nan)
+
+
+def patch_neighbor_mae(
+    pred: np.ndarray,
+    target: np.ndarray,
+    sample_idx: np.ndarray,
+    target_patch_start: np.ndarray,
+    pred_patch_start: np.ndarray,
+    node_idx: np.ndarray,
+    patch_len: int,
+    reach_indices: list[np.ndarray] | tuple[np.ndarray, np.ndarray] | None,
+) -> np.ndarray:
+    if reach_indices is None:
+        err = np.zeros(sample_idx.shape[0], dtype=np.float64)
+        valid = np.ones(sample_idx.shape[0], dtype=bool)
+        for offset in range(patch_len):
+            pred_values = pred[sample_idx, pred_patch_start + offset, node_idx]
+            target_values = target[sample_idx, target_patch_start + offset, node_idx]
+            pair_valid = np.isfinite(pred_values) & np.isfinite(target_values)
+            valid &= pair_valid
+            err += np.where(pair_valid, np.abs(pred_values - target_values), 0.0)
+        return np.where(valid, err / float(patch_len), np.nan)
+    if isinstance(reach_indices, tuple):
+        padded, index_valid = reach_indices
+        neighbor_idx = padded[node_idx]
+        neighbor_valid = index_valid[node_idx]
+    else:
+        max_degree = max((len(reach_indices[node]) for node in node_idx), default=0)
+        if max_degree == 0:
+            return np.full(sample_idx.shape[0], np.nan, dtype=np.float64)
+        neighbor_idx = np.zeros((sample_idx.shape[0], max_degree), dtype=np.int64)
+        neighbor_valid = np.zeros((sample_idx.shape[0], max_degree), dtype=bool)
+        for row, node in enumerate(node_idx):
+            indices = reach_indices[int(node)]
+            count = len(indices)
+            neighbor_idx[row, :count] = indices
+            neighbor_valid[row, :count] = True
+
+    err = np.zeros(neighbor_idx.shape, dtype=np.float64)
+    valid = neighbor_valid.copy()
+    for offset in range(patch_len):
+        target_values = target[sample_idx, target_patch_start + offset, node_idx]
+        candidate_pred = pred[sample_idx[:, None], (pred_patch_start + offset)[:, None], neighbor_idx]
+        pair_valid = np.isfinite(candidate_pred) & np.isfinite(target_values[:, None])
+        valid &= pair_valid
+        err += np.where(pair_valid, np.abs(candidate_pred - target_values[:, None]), 0.0)
+    err = np.where(valid, err / float(patch_len), np.inf)
+    best = np.min(err, axis=1)
+    return np.where(np.isfinite(best), best, np.nan)
+
+
+def patch_st_shift_stats(
+    pred: np.ndarray,
+    target: np.ndarray,
+    patch_mask: np.ndarray,
+    patch_len: int,
+    max_shift: int,
+    reach_indices: list[np.ndarray] | tuple[np.ndarray, np.ndarray] | None,
+    chunk_size: int,
+) -> dict[str, float | int]:
+    sample_all, patch_start_all, node_all = np.nonzero(patch_mask)
+    total_count = int(sample_all.size)
+    if total_count == 0:
+        return {
+            "condition_valid_count": 0,
+            "exact_patch_MAE": float("nan"),
+            "zero_shift_patch_ST_MAE": float("nan"),
+            "best_patch_ST_MAE": float("nan"),
+            "st_shift_gain": float("nan"),
+            "spatial_gain_at_zero": float("nan"),
+            "extra_time_gain_after_spatial": float("nan"),
+            "avg_best_patch_shift_delta": float("nan"),
+            "avg_abs_best_patch_shift_delta": float("nan"),
+        }
+
+    output_len = pred.shape[1]
+    max_patch_start = output_len - patch_len
+    exact_total = 0.0
+    zero_total = 0.0
+    best_total = 0.0
+    delta_total = 0.0
+    abs_delta_total = 0.0
+    count = 0
+    chunk_size = int(max(1, chunk_size))
+    for start in range(0, total_count, chunk_size):
+        end = min(start + chunk_size, total_count)
+        sample_idx = sample_all[start:end]
+        patch_start = patch_start_all[start:end]
+        node_idx = node_all[start:end]
+        exact_mae = patch_self_mae(pred, target, sample_idx, patch_start, node_idx, patch_len)
+        zero_mae = patch_neighbor_mae(pred, target, sample_idx, patch_start, patch_start, node_idx, patch_len, reach_indices)
+        best_mae = np.full(end - start, np.inf, dtype=np.float64)
+        best_delta = np.zeros(end - start, dtype=np.int16)
+        for delta in range(-int(max_shift), int(max_shift) + 1):
+            pred_patch_start = patch_start + delta
+            valid_delta = (pred_patch_start >= 0) & (pred_patch_start <= max_patch_start)
+            if not np.any(valid_delta):
+                continue
+            candidate = np.full(end - start, np.nan, dtype=np.float64)
+            candidate[valid_delta] = patch_neighbor_mae(
+                pred,
+                target,
+                sample_idx[valid_delta],
+                patch_start[valid_delta],
+                pred_patch_start[valid_delta],
+                node_idx[valid_delta],
+                patch_len,
+                reach_indices,
+            )
+            candidate_finite = np.isfinite(candidate)
+            better = candidate_finite & (
+                (candidate < best_mae)
+                | (np.isclose(candidate, best_mae, atol=1e-12, rtol=0.0) & (abs(delta) < np.abs(best_delta)))
+            )
+            best_mae = np.where(better, candidate, best_mae)
+            best_delta = np.where(better, delta, best_delta)
+
+        best_mae = np.where(np.isfinite(best_mae), best_mae, np.nan)
+        valid = np.isfinite(exact_mae) & np.isfinite(zero_mae) & np.isfinite(best_mae)
+        if not np.any(valid):
+            continue
+        exact_total += float(np.sum(exact_mae[valid], dtype=np.float64))
+        zero_total += float(np.sum(zero_mae[valid], dtype=np.float64))
+        best_total += float(np.sum(best_mae[valid], dtype=np.float64))
+        delta_total += float(np.sum(best_delta[valid], dtype=np.float64))
+        abs_delta_total += float(np.sum(np.abs(best_delta[valid]), dtype=np.float64))
+        count += int(np.sum(valid))
+
+    if count == 0:
+        exact = zero = best = float("nan")
+        avg_delta = avg_abs_delta = float("nan")
+    else:
+        exact = exact_total / float(count)
+        zero = zero_total / float(count)
+        best = best_total / float(count)
+        avg_delta = delta_total / float(count)
+        avg_abs_delta = abs_delta_total / float(count)
+    return {
+        "condition_valid_count": count,
+        "exact_patch_MAE": exact,
+        "zero_shift_patch_ST_MAE": zero,
+        "best_patch_ST_MAE": best,
+        "st_shift_gain": exact - best if np.isfinite(exact) and np.isfinite(best) else float("nan"),
+        "spatial_gain_at_zero": exact - zero if np.isfinite(exact) and np.isfinite(zero) else float("nan"),
+        "extra_time_gain_after_spatial": zero - best if np.isfinite(zero) and np.isfinite(best) else float("nan"),
+        "avg_best_patch_shift_delta": avg_delta,
+        "avg_abs_best_patch_shift_delta": avg_abs_delta,
+    }
+
+
+def joint_st_patch_shift_rows(
+    system: str,
+    pred: np.ndarray,
+    target: np.ndarray,
+    mask: np.ndarray,
+    patch_len: int,
+    max_shift: int,
+    hop_ks: list[int],
+    reach_lists_by_k: dict[int, list[np.ndarray] | tuple[np.ndarray, np.ndarray]],
+    peak_q: float,
+    high_q: float,
+    ramp_q: float,
+    patch_conditions: list[str],
+    chunk_size: int,
+) -> list[dict]:
+    patch_len = int(patch_len)
+    if patch_len <= 0 or patch_len > pred.shape[1]:
+        return []
+    all_conditions = patch_condition_masks(target, mask, patch_len, peak_q, high_q, ramp_q)
+    conditions = {condition: all_conditions[condition] for condition in patch_conditions if condition in all_conditions}
+    rows: list[dict] = []
+    for hop_k in sorted(set(hop_ks)):
+        if hop_k == 0:
+            reach_indices = None
+        else:
+            reach_indices = reach_lists_by_k.get(hop_k)
+            if reach_indices is None:
+                continue
+        for condition, condition_mask in conditions.items():
+            rows.append(
+                {
+                    "system": system,
+                    "alignment_hop_k": hop_k,
+                    "condition": condition,
+                    "patch_len": patch_len,
+                    "max_patch_shift": int(max_shift),
+                    **patch_st_shift_stats(
+                        pred,
+                        target,
+                        condition_mask,
+                        patch_len,
+                        max_shift,
+                        reach_indices,
+                        chunk_size,
+                    ),
+                }
+            )
+    return rows
+
+
 def spatial_dilate(mask: np.ndarray, reach_indices: object | None) -> np.ndarray:
     if reach_indices is None:
         return mask
@@ -1562,6 +1856,7 @@ def build_markdown(
     alignment_metric_rows: list[dict],
     conditional_shift_metric_rows: list[dict],
     joint_st_shift_metric_rows: list[dict],
+    joint_st_patch_metric_rows: list[dict],
     component_rows: list[dict],
     peak_metric_rows: list[dict],
     residual_metric_rows: list[dict],
@@ -1584,8 +1879,11 @@ def build_markdown(
         f"- Alignment time windows: {', '.join(str(item) for item in report['alignment_time_windows'])}",
         f"- Alignment hop tolerances: {', '.join(str(item) for item in report['alignment_hop_ks'])}",
         f"- Alignment-only mode: {report['alignment_only']}",
+        f"- Patch-only mode: {report['patch_only']}",
         f"- Conditional high-volume quantile: {report['condition_high_q']}",
         f"- Conditional ramp quantile: {report['condition_ramp_q']}",
+        f"- Joint ST patch length: {report['joint_st_patch_len']}",
+        f"- Joint ST patch conditions: {', '.join(report['joint_st_patch_conditions'])}",
         f"- Horizons: {', '.join(str(h) for h in report['horizons'])}",
         "",
         "## Runs",
@@ -1652,6 +1950,18 @@ def build_markdown(
                 f"| {row['system']} | {row['horizon']} | {row['alignment_hop_k']} | {row['condition']} | "
                 f"{row['st_shift_gain']:.4g} | {row['spatial_gain_at_zero']:.4g} | {row['best_time_shift_delta']} | "
                 f"{row['exact_zero_MAE']:.4g} | {row['best_ST_MAE']:.4g} | {row['condition_valid_count']} |"
+            )
+    if joint_st_patch_metric_rows:
+        lines.extend(["", "## Patch-Level Joint Spatiotemporal Shift Diagnostics", ""])
+        lines.append("Patch STShiftGain selects one k-hop neighbor and one forecast-patch offset for an entire patch, reported as absolute patch-MAE reduction.")
+        lines.append("| System | Hop k | Condition | Patch | STShiftGain (MAE drop) | Spatial Gain @0 (MAE drop) | Extra Time Gain | Avg Best Patch Shift | Exact Patch MAE | Best Patch ST-MAE | Count |")
+        lines.append("|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for row in joint_st_patch_metric_rows:
+            lines.append(
+                f"| {row['system']} | {row['alignment_hop_k']} | {row['condition']} | {row['patch_len']} | "
+                f"{row['st_shift_gain']:.4g} | {row['spatial_gain_at_zero']:.4g} | {row['extra_time_gain_after_spatial']:.4g} | "
+                f"{row['avg_best_patch_shift_delta']:.4g} | {row['exact_patch_MAE']:.4g} | {row['best_patch_ST_MAE']:.4g} | "
+                f"{row['condition_valid_count']} |"
             )
     else:
         lines.append("No joint spatiotemporal ShiftGain diagnostics were generated.")
@@ -1725,6 +2035,8 @@ def main() -> None:
         raise ValueError(f"--worst-pct must be in (0, 1], got {args.worst_pct}")
     if args.alignment_max_shift < 0:
         raise ValueError(f"--alignment-max-shift must be >= 0, got {args.alignment_max_shift}")
+    if args.patch_only and args.joint_st_patch_len <= 0:
+        raise ValueError("--patch-only requires --joint-st-patch-len > 0.")
     if not (0 < args.condition_high_q < 1):
         raise ValueError(f"--condition-high-q must be in (0, 1), got {args.condition_high_q}")
     if not (0 < args.condition_ramp_q < 1):
@@ -1761,6 +2073,7 @@ def main() -> None:
     conditional_time_shift_curve_rows: list[dict] = []
     joint_st_shift_metric_rows: list[dict] = []
     joint_st_time_shift_curve_rows: list[dict] = []
+    joint_st_patch_metric_rows: list[dict] = []
     component_rows: list[dict] = []
     peak_metric_rows: list[dict] = []
     distribution_rows: list[dict] = []
@@ -1788,6 +2101,27 @@ def main() -> None:
             raise ValueError(f"Prediction/target shape mismatch for {run.name}: {pred.shape} vs {target.shape}")
 
         run_reports.append({"name": run.name, "result_dir": str(run.result_dir), "shape": list(pred.shape)})
+        if args.joint_st_patch_len > 0:
+            joint_st_patch_metric_rows.extend(
+                joint_st_patch_shift_rows(
+                    run.name,
+                    pred,
+                    target,
+                    valid_target_mask(target, null_val),
+                    args.joint_st_patch_len,
+                    args.alignment_max_shift,
+                    alignment_hop_ks,
+                    reach_value_by_k,
+                    args.peak_q,
+                    args.condition_high_q,
+                    args.condition_ramp_q,
+                    args.joint_st_patch_conditions,
+                    args.joint_st_patch_chunk_size,
+                )
+            )
+
+        if args.patch_only:
+            continue
 
         for horizon in horizons:
             h_idx = horizon - 1
@@ -1908,11 +2242,15 @@ def main() -> None:
         "alignment_hop_ks": alignment_hop_ks,
         "alignment_directed": bool(args.alignment_directed),
         "alignment_only": bool(args.alignment_only),
+        "patch_only": bool(args.patch_only),
         "adj_path": str(args.adj_path.expanduser().resolve()) if args.adj_path is not None else None,
         "condition_high_q": args.condition_high_q,
         "condition_ramp_q": args.condition_ramp_q,
         "joint_st_conditions": args.joint_st_conditions,
         "joint_st_workers": int(max(1, args.joint_st_workers)),
+        "joint_st_patch_len": int(args.joint_st_patch_len),
+        "joint_st_patch_conditions": args.joint_st_patch_conditions,
+        "joint_st_patch_chunk_size": int(args.joint_st_patch_chunk_size),
         "num_runs": len(run_reports),
         "runs": run_reports,
     }
@@ -1927,6 +2265,8 @@ def main() -> None:
     write_csv(args.output_dir / "conditional_time_shift_curve.csv", conditional_time_shift_curve_rows)
     write_csv(args.output_dir / "joint_st_shift_metrics.csv", joint_st_shift_metric_rows)
     write_csv(args.output_dir / "joint_st_time_shift_curve.csv", joint_st_time_shift_curve_rows)
+    write_csv(args.output_dir / "joint_st_patch_shift_metrics.csv", joint_st_patch_metric_rows)
+    write_csv(args.output_dir / "joint_st_patch_shift_summary.csv", joint_st_patch_metric_rows)
     write_csv(args.output_dir / "component_metrics.csv", component_rows)
     write_csv(args.output_dir / "peak_window_metrics.csv", peak_metric_rows)
     write_csv(args.output_dir / "distribution_metrics.csv", distribution_rows)
@@ -1941,6 +2281,7 @@ def main() -> None:
             alignment_metric_rows,
             conditional_shift_metric_rows,
             joint_st_shift_metric_rows,
+            joint_st_patch_metric_rows,
             component_rows,
             peak_metric_rows,
             residual_metric_rows,
