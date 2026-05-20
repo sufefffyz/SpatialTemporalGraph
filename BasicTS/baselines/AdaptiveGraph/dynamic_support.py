@@ -82,6 +82,8 @@ class DynamicThresholdSupport(nn.Module):
         self.mode = mode
         self.radius_scale = float(radius_scale)
         self.radius_param = radius_param
+        if self.radius_param == "softplus" and self.radius_scale <= 0:
+            raise ValueError("radius_scale must be positive when radius_param='softplus'.")
         self.temperature = float(temperature)
         self.weight_mode = weight_mode
         self.normalization = normalization
@@ -112,7 +114,10 @@ class DynamicThresholdSupport(nn.Module):
         nn.init.xavier_uniform_(self.history_proj.weight)
         nn.init.zeros_(self.history_proj.bias)
         nn.init.zeros_(self.radius_head.weight)
-        nn.init.zeros_(self.radius_head.bias)
+        if self.radius_param == "softplus":
+            nn.init.constant_(self.radius_head.bias, math.log(math.expm1(1.0)) / self.radius_scale)
+        else:
+            nn.init.zeros_(self.radius_head.bias)
 
     @staticmethod
     def _degree_to_radius(distance: torch.Tensor, target_avg_degree: float) -> float:
@@ -142,8 +147,7 @@ class DynamicThresholdSupport(nn.Module):
         node_embed = self.node_embed.unsqueeze(0).expand(state.shape[0], -1, -1)
         score = self.radius_head(torch.cat([state, node_embed], dim=-1)).squeeze(-1)
         if self.radius_param == "softplus":
-            offset = math.log(math.expm1(1.0))
-            multiplier = F.softplus(self.radius_scale * score + offset)
+            multiplier = F.softplus(self.radius_scale * score)
         else:
             delta = self.radius_scale * torch.tanh(score)
             multiplier = torch.exp(delta)
