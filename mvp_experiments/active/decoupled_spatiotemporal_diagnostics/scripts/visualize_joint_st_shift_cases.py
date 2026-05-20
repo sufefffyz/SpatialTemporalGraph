@@ -43,8 +43,15 @@ class CaseMatch:
     st_shift_gain: float
     extra_time_gain_after_spatial: float
 
-    @property
-    def rank_score(self) -> float:
+    def rank_score(self, rank_by: str) -> float:
+        if rank_by == "abs_spatial_gain":
+            return self.exact_error - self.zero_spatial_error
+        if rank_by == "abs_st_gain":
+            return self.exact_error - self.best_st_error
+        if rank_by == "st_shift_gain":
+            return self.st_shift_gain
+        if rank_by == "spatial_gain_at_zero":
+            return self.spatial_gain_at_zero
         return self.extra_time_gain_after_spatial * self.exact_error
 
 
@@ -78,6 +85,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--alignment-directed", action="store_true")
     parser.add_argument("--require-time-shift", action="store_true")
     parser.add_argument("--require-spatial-change", action="store_true")
+    parser.add_argument("--require-zero-spatial-change", action="store_true")
+    parser.add_argument(
+        "--rank-by",
+        choices=[
+            "abs_extra_time_gain",
+            "abs_spatial_gain",
+            "abs_st_gain",
+            "st_shift_gain",
+            "spatial_gain_at_zero",
+        ],
+        default="abs_extra_time_gain",
+    )
     parser.add_argument("--allow-repeated-nodes", action="store_true")
     parser.add_argument("--plot-format", choices=["png", "pdf", "both"], default="png")
     return parser.parse_args()
@@ -340,7 +359,9 @@ def case_to_row(case: CaseMatch, frequency: int, model_name: str) -> dict:
         "spatial_gain_at_zero": case.spatial_gain_at_zero,
         "st_shift_gain": case.st_shift_gain,
         "extra_time_gain_after_spatial": case.extra_time_gain_after_spatial,
-        "rank_score": case.rank_score,
+        "abs_ST_gain_MAE": case.exact_error - case.best_st_error,
+        "abs_spatial_gain_MAE_at0": case.exact_error - case.zero_spatial_error,
+        "abs_extra_time_gain_MAE": case.zero_spatial_error - case.best_st_error,
     }
     return row
 
@@ -539,11 +560,13 @@ def main() -> int:
                     continue
                 if args.require_spatial_change and case.best_st_node == case.node:
                     continue
+                if args.require_zero_spatial_change and case.zero_spatial_node == case.node:
+                    continue
                 if not np.isfinite(case.extra_time_gain_after_spatial):
                     continue
                 cases.append(case)
 
-    cases.sort(key=lambda item: (item.rank_score, item.extra_time_gain_after_spatial, item.exact_error), reverse=True)
+    cases.sort(key=lambda item: (item.rank_score(args.rank_by), item.exact_error), reverse=True)
     selected: list[CaseMatch] = []
     used_nodes: set[int] = set()
     for case in cases:
@@ -601,6 +624,8 @@ def main() -> int:
         "pool_size": args.pool_size,
         "require_time_shift": bool(args.require_time_shift),
         "require_spatial_change": bool(args.require_spatial_change),
+        "require_zero_spatial_change": bool(args.require_zero_spatial_change),
+        "rank_by": args.rank_by,
         "frequency_minutes": frequency,
         "written": written,
     }
