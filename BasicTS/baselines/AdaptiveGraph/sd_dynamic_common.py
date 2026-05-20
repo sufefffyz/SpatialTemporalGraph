@@ -40,6 +40,7 @@ def _dynamic_graph_args(mode: str) -> dict:
         "d_model": _env_int("DYNAMIC_GRAPH_D_MODEL", 32),
         "target_avg_degree": _env_float("DYNAMIC_GRAPH_TARGET_AVG_DEGREE", REFERENCE_SD_AVG_DEGREE),
         "radius_scale": _env_float("DYNAMIC_GRAPH_RADIUS_SCALE", 1.0),
+        "radius_param": os.environ.get("DYNAMIC_GRAPH_RADIUS_PARAM", "exp_tanh"),
         "temperature": _env_float("DYNAMIC_GRAPH_TEMPERATURE", 0.05),
         "dist_norm": os.environ.get("DYNAMIC_GRAPH_DIST_NORM", "max"),
         "weight_mode": os.environ.get("DYNAMIC_GRAPH_WEIGHT_MODE", "binary"),
@@ -73,6 +74,7 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
 
     dynamic_graph = _dynamic_graph_args(mode)
     weight_mode = dynamic_graph["weight_mode"]
+    radius_param = dynamic_graph["radius_param"]
     if backbone == "gwnet":
         model_arch = DynamicThresholdGraphWaveNet
         model_param = {
@@ -144,7 +146,10 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
     run_tag = os.environ.get("BASICTS_RUN_TAG", "").strip()
 
     cfg = EasyDict()
-    cfg.DESCRIPTION = f"{model_arch.__name__} on {data_name} with {mode} dynamic OSRM threshold support and {weight_mode} weights"
+    cfg.DESCRIPTION = (
+        f"{model_arch.__name__} on {data_name} with {mode} dynamic OSRM threshold support, "
+        f"{weight_mode} weights, and {radius_param} radius parameterization"
+    )
     cfg.GPU_NUM = 1
     cfg.RUNNER = WandBTimeSeriesForecastingRunner
     cfg._ = random.randint(-1000000, 1000000)
@@ -203,7 +208,15 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
 
     cfg.TRAIN = EasyDict()
     cfg.TRAIN.NUM_EPOCHS = num_epochs
-    ckpt_name_parts = [data_name, f"dynamic_threshold_{mode}", backbone, str(num_epochs), str(input_len), str(output_len)]
+    ckpt_name_parts = [
+        data_name,
+        f"dynamic_threshold_{mode}",
+        radius_param,
+        backbone,
+        str(num_epochs),
+        str(input_len),
+        str(output_len),
+    ]
     if run_tag:
         ckpt_name_parts.append(run_tag)
     cfg.TRAIN.CKPT_SAVE_DIR = os.path.join("checkpoints", model_arch.__name__, "_".join(ckpt_name_parts))
@@ -237,7 +250,10 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
     cfg.WANDB = EasyDict()
     cfg.WANDB.PROJECT = os.environ.get("WANDB_PROJECT", "adaptive_threshold_dynamic_weight")
     cfg.WANDB.MODE = os.environ.get("WANDB_MODE", "online")
-    cfg.WANDB.RUN_NAME = os.environ.get("WANDB_NAME", f"{model_arch.__name__}_{data_name}_{mode}_{weight_mode}_{run_tag}".rstrip("_"))
-    cfg.WANDB.GROUP = os.environ.get("WANDB_RUN_GROUP", f"sd_dynamic_threshold_{mode}_{weight_mode}_{backbone}")
-    cfg.WANDB.TAGS = ["adaptive-threshold", "sd", "dynamic-threshold", mode, weight_mode, backbone]
+    cfg.WANDB.RUN_NAME = os.environ.get(
+        "WANDB_NAME",
+        f"{model_arch.__name__}_{data_name}_{mode}_{weight_mode}_{radius_param}_{run_tag}".rstrip("_"),
+    )
+    cfg.WANDB.GROUP = os.environ.get("WANDB_RUN_GROUP", f"sd_dynamic_threshold_{mode}_{weight_mode}_{radius_param}_{backbone}")
+    cfg.WANDB.TAGS = ["adaptive-threshold", "sd", "dynamic-threshold", mode, weight_mode, radius_param, backbone]
     return cfg

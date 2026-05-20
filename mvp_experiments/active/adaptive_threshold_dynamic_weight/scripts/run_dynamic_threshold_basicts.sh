@@ -6,6 +6,7 @@ MODE="${2:-hard}"
 GPU="${3:-1}"
 RUN_TAG="${4:-dynamic_threshold_20260519}"
 PROJECT="${WANDB_PROJECT:-adaptive_threshold_dynamic_weight}"
+RADIUS_PARAM="${DYNAMIC_GRAPH_RADIUS_PARAM:-exp_tanh}"
 
 if [[ "${MODEL}" != "gwnet" && "${MODEL}" != "dcrnn" && "${MODEL}" != "stgcn" && "${MODEL}" != "flownet_soft" ]]; then
   echo "Usage: $0 {gwnet|dcrnn|stgcn|flownet_soft} {hard|soft} [gpu_id] [run_tag]" >&2
@@ -48,14 +49,14 @@ export BASICTS_SEED="${BASICTS_SEED:-2023}"
 export DYNAMIC_GRAPH_MODE="${MODE}"
 export WANDB_PROJECT="${PROJECT}"
 export WANDB_MODE="${WANDB_MODE:-online}"
-export WANDB_RUN_GROUP="sd_dynamic_threshold_${MODE}_${MODEL}"
-export WANDB_TAGS="adaptive-threshold,sd,dynamic-threshold,${MODE},${MODEL}"
-export WANDB_NAME="${MODEL_NAME}_${BASICTS_DATA_NAME}_${MODE}_${RUN_TAG}"
+export WANDB_RUN_GROUP="sd_dynamic_threshold_${MODE}_${RADIUS_PARAM}_${MODEL}"
+export WANDB_TAGS="adaptive-threshold,sd,dynamic-threshold,${MODE},${RADIUS_PARAM},${MODEL}"
+export WANDB_NAME="${MODEL_NAME}_${BASICTS_DATA_NAME}_${MODE}_${RADIUS_PARAM}_${RUN_TAG}"
 
 log_file="${LOG_ROOT}/${MODEL}_${MODE}.log"
 {
-  echo "model,mode,dataset,gpu,config,log"
-  echo "${MODEL},${MODE},${BASICTS_DATA_NAME},${GPU},${CFG},${log_file}"
+  echo "model,mode,dataset,gpu,config,log,radius_param"
+  echo "${MODEL},${MODE},${BASICTS_DATA_NAME},${GPU},${CFG},${log_file},${RADIUS_PARAM}"
 } > "${LOG_ROOT}/manifest_${MODEL}_${MODE}.csv"
 
 echo "[$(date '+%F %T')] Starting ${MODEL} ${MODE} on ${BASICTS_DATA_NAME} GPU ${GPU}" | tee -a "${log_file}"

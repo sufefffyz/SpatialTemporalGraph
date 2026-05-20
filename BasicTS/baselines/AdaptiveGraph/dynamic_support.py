@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 def load_distance_matrix(path: str, num_nodes: int, normalize: str = "max") -> torch.Tensor:
@@ -55,6 +57,7 @@ class DynamicThresholdSupport(nn.Module):
         target_avg_degree: float = 24.1885,
         init_radius: float | None = None,
         radius_scale: float = 1.0,
+        radius_param: str = "exp_tanh",
         temperature: float = 0.05,
         dist_norm: str = "max",
         gaussian_sigma: float | None = None,
@@ -70,11 +73,15 @@ class DynamicThresholdSupport(nn.Module):
             raise ValueError(f"Unsupported dynamic threshold weight mode: {weight_mode}")
         if normalization not in {"transition", "sym"}:
             raise ValueError(f"Unsupported support normalization: {normalization}")
+        radius_param = str(radius_param or "exp_tanh").lower()
+        if radius_param not in {"exp_tanh", "softplus"}:
+            raise ValueError(f"Unsupported radius parameterization: {radius_param}")
 
         self.num_nodes = int(num_nodes)
         self.seq_len = int(seq_len)
         self.mode = mode
         self.radius_scale = float(radius_scale)
+        self.radius_param = radius_param
         self.temperature = float(temperature)
         self.weight_mode = weight_mode
         self.normalization = normalization
@@ -133,8 +140,13 @@ class DynamicThresholdSupport(nn.Module):
         node_history = history.transpose(1, 2).contiguous()
         state = torch.tanh(self.history_proj(node_history))
         node_embed = self.node_embed.unsqueeze(0).expand(state.shape[0], -1, -1)
-        delta = self.radius_scale * torch.tanh(self.radius_head(torch.cat([state, node_embed], dim=-1)).squeeze(-1))
-        multiplier = torch.exp(delta)
+        score = self.radius_head(torch.cat([state, node_embed], dim=-1)).squeeze(-1)
+        if self.radius_param == "softplus":
+            offset = math.log(math.expm1(1.0))
+            multiplier = F.softplus(self.radius_scale * score + offset)
+        else:
+            delta = self.radius_scale * torch.tanh(score)
+            multiplier = torch.exp(delta)
         return self.init_radius * multiplier
 
     def _masked_weights(self, history_data: torch.Tensor) -> torch.Tensor:
