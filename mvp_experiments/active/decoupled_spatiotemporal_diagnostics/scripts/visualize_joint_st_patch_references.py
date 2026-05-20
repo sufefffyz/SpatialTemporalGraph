@@ -311,46 +311,50 @@ def save_auxiliary_series(
     return str(path)
 
 
-def plot_neighbor_prediction_vs_truth(
+def plot_neighbor_predictions_vs_truths(
     model_name: str,
     pred_h: np.ndarray,
     target_h: np.ndarray,
-    candidate: PatchCandidate,
+    candidates: list[PatchCandidate],
     sample_index: int,
     output_dir: Path,
     context_before: int,
     context_after: int,
     plot_format: str,
 ) -> list[str]:
+    if not candidates:
+        return []
+    primary = candidates[0]
     context_start = max(0, sample_index - context_before)
     context_end = min(target_h.shape[0], sample_index + context_after + 1)
-    x, neighbor_pred = aligned_context_series(pred_h, candidate.source_node, context_start, context_end, candidate.delta)
-    _, neighbor_true = aligned_context_series(target_h, candidate.source_node, context_start, context_end, candidate.delta)
+    x = np.arange(context_start, context_end)
 
-    fig, ax = plt.subplots(figsize=(11.5, 4.2))
-    ax.axvspan(candidate.target_start_sample, candidate.target_end_sample - 1, color="#f2e6c9", alpha=0.55)
-    ax.plot(x, neighbor_true, color="black", linewidth=2.2, label=f"GT source node {candidate.source_node}")
-    ax.plot(
-        x,
-        neighbor_pred,
-        color="#1f77b4",
-        linewidth=2.0,
-        alpha=0.9,
-        label=f"{model_name} pred source node {candidate.source_node}, dt={candidate.delta}",
-    )
+    fig, ax = plt.subplots(figsize=(13.2, 5.2))
+    ax.axvspan(primary.target_start_sample, primary.target_end_sample - 1, color="#f2e6c9", alpha=0.55)
+    colors = plt.cm.tab10.colors
+    series: dict[str, np.ndarray] = {}
+    for idx, candidate in enumerate(candidates):
+        color = colors[idx % len(colors)]
+        _, neighbor_pred = aligned_context_series(pred_h, candidate.source_node, context_start, context_end, candidate.delta)
+        _, neighbor_true = aligned_context_series(target_h, candidate.source_node, context_start, context_end, candidate.delta)
+        label_base = f"#{candidate.rank} node {candidate.source_node}, dt={candidate.delta}"
+        ax.plot(x, neighbor_pred, color=color, linewidth=1.75, alpha=0.82, label=f"pred {label_base}")
+        ax.plot(x, neighbor_true, color=color, linewidth=1.55, linestyle="--", alpha=0.78, label=f"GT {label_base}")
+        series[f"rank{candidate.rank}_node{candidate.source_node}_dt{candidate.delta}_prediction"] = neighbor_pred
+        series[f"rank{candidate.rank}_node{candidate.source_node}_dt{candidate.delta}_ground_truth"] = neighbor_true
     ax.axvline(sample_index, color="#444444", linewidth=1.0, alpha=0.75)
     ax.set_title(
-        f"{model_name}: source node prediction vs source node truth "
-        f"(node {candidate.source_node}, dt={candidate.delta})"
+        f"{model_name}: top-{len(candidates)} source-node predictions vs source-node truths "
+        f"(target {primary.target_node}, H{primary.horizon}, sample {sample_index})"
     )
     ax.set_xlabel("target-aligned test sample index")
     ax.set_ylabel("traffic flow")
     ax.grid(True, axis="y", alpha=0.22)
-    ax.legend(frameon=False)
+    ax.legend(ncol=4, fontsize=7.2, frameon=False)
     fig.tight_layout()
     stem = (
-        f"neighbor_pred_vs_truth_{model_name}_target{candidate.target_node}_"
-        f"source{candidate.source_node}_h{candidate.horizon}_sample{sample_index}"
+        f"top8_neighbor_pred_vs_truth_{model_name}_target{primary.target_node}_"
+        f"h{primary.horizon}_sample{sample_index}"
     )
     written = [str(path) for path in save_figure(fig, output_dir, stem, plot_format)]
     plt.close(fig)
@@ -359,55 +363,60 @@ def plot_neighbor_prediction_vs_truth(
             output_dir,
             stem,
             x,
-            {
-                "neighbor_prediction": neighbor_pred,
-                "neighbor_ground_truth": neighbor_true,
-            },
+            series,
         )
     )
     return written
 
 
-def plot_target_truth_vs_neighbor_truth(
+def plot_target_truth_vs_neighbor_truths(
     model_name: str,
     target_h: np.ndarray,
-    candidate: PatchCandidate,
+    candidates: list[PatchCandidate],
     sample_index: int,
     output_dir: Path,
     context_before: int,
     context_after: int,
     plot_format: str,
 ) -> list[str]:
+    if not candidates:
+        return []
+    primary = candidates[0]
     context_start = max(0, sample_index - context_before)
     context_end = min(target_h.shape[0], sample_index + context_after + 1)
     x = np.arange(context_start, context_end)
-    target_true = np.asarray(target_h[context_start:context_end, candidate.target_node], dtype=np.float32)
-    _, neighbor_true = aligned_context_series(target_h, candidate.source_node, context_start, context_end, candidate.delta)
+    target_true = np.asarray(target_h[context_start:context_end, primary.target_node], dtype=np.float32)
 
-    fig, ax = plt.subplots(figsize=(11.5, 4.2))
-    ax.axvspan(candidate.target_start_sample, candidate.target_end_sample - 1, color="#f2e6c9", alpha=0.55)
-    ax.plot(x, target_true, color="black", linewidth=2.2, label=f"GT target node {candidate.target_node}")
-    ax.plot(
-        x,
-        neighbor_true,
-        color="#2ca02c",
-        linewidth=2.0,
-        alpha=0.9,
-        label=f"GT source node {candidate.source_node}, dt={candidate.delta}",
-    )
+    fig, ax = plt.subplots(figsize=(13.2, 4.8))
+    ax.axvspan(primary.target_start_sample, primary.target_end_sample - 1, color="#f2e6c9", alpha=0.55)
+    ax.plot(x, target_true, color="black", linewidth=2.4, label=f"GT target node {primary.target_node}")
+    colors = plt.cm.tab10.colors
+    series: dict[str, np.ndarray] = {"target_ground_truth": target_true}
+    for idx, candidate in enumerate(candidates):
+        _, neighbor_true = aligned_context_series(target_h, candidate.source_node, context_start, context_end, candidate.delta)
+        label = f"#{candidate.rank} GT node {candidate.source_node}, dt={candidate.delta}"
+        ax.plot(
+            x,
+            neighbor_true,
+            color=colors[idx % len(colors)],
+            linewidth=1.65,
+            alpha=0.78,
+            label=label,
+        )
+        series[f"rank{candidate.rank}_node{candidate.source_node}_dt{candidate.delta}_ground_truth"] = neighbor_true
     ax.axvline(sample_index, color="#444444", linewidth=1.0, alpha=0.75)
     ax.set_title(
-        f"{model_name}: target truth vs source-node truth "
-        f"(target {candidate.target_node}, source {candidate.source_node}, dt={candidate.delta})"
+        f"{model_name}: target truth vs top-{len(candidates)} source-node truths "
+        f"(target {primary.target_node}, H{primary.horizon}, sample {sample_index})"
     )
     ax.set_xlabel("target-aligned test sample index")
     ax.set_ylabel("traffic flow")
     ax.grid(True, axis="y", alpha=0.22)
-    ax.legend(frameon=False)
+    ax.legend(ncol=3, fontsize=7.5, frameon=False)
     fig.tight_layout()
     stem = (
-        f"target_truth_vs_neighbor_truth_{model_name}_target{candidate.target_node}_"
-        f"source{candidate.source_node}_h{candidate.horizon}_sample{sample_index}"
+        f"top8_target_truth_vs_neighbor_truth_{model_name}_target{primary.target_node}_"
+        f"h{primary.horizon}_sample{sample_index}"
     )
     written = [str(path) for path in save_figure(fig, output_dir, stem, plot_format)]
     plt.close(fig)
@@ -416,10 +425,7 @@ def plot_target_truth_vs_neighbor_truth(
             output_dir,
             stem,
             x,
-            {
-                "target_ground_truth": target_true,
-                "neighbor_ground_truth": neighbor_true,
-            },
+            series,
         )
     )
     return written
@@ -569,11 +575,11 @@ def main() -> int:
         )
         if candidates:
             written.extend(
-                plot_neighbor_prediction_vs_truth(
+                plot_neighbor_predictions_vs_truths(
                     run.name,
                     pred_h,
                     target_h,
-                    candidates[0],
+                    candidates,
                     args.sample_index,
                     output_dir,
                     args.context_before,
@@ -582,10 +588,10 @@ def main() -> int:
                 )
             )
             written.extend(
-                plot_target_truth_vs_neighbor_truth(
+                plot_target_truth_vs_neighbor_truths(
                     run.name,
                     target_h,
-                    candidates[0],
+                    candidates,
                     args.sample_index,
                     output_dir,
                     args.context_before,
