@@ -277,6 +277,154 @@ def aligned_patch_series(pred_h: np.ndarray, candidate: PatchCandidate) -> tuple
     return target_x, values
 
 
+def aligned_context_series(
+    arr_h: np.ndarray,
+    node: int,
+    context_start: int,
+    context_end: int,
+    delta: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    x_context = np.arange(context_start, context_end)
+    values = np.full(x_context.shape, np.nan, dtype=np.float32)
+    for idx, sample in enumerate(x_context.tolist()):
+        source_sample = sample + delta
+        if 0 <= source_sample < arr_h.shape[0]:
+            values[idx] = arr_h[source_sample, node]
+    return x_context, values
+
+
+def save_auxiliary_series(
+    output_dir: Path,
+    stem: str,
+    x: np.ndarray,
+    series: dict[str, np.ndarray],
+) -> str:
+    rows = []
+    for idx, sample in enumerate(x.tolist()):
+        row = {"target_aligned_sample_index": int(sample)}
+        for name, values in series.items():
+            value = float(values[idx]) if np.isfinite(values[idx]) else ""
+            row[name] = value
+        rows.append(row)
+    path = output_dir / f"{stem}.csv"
+    write_csv(path, rows)
+    return str(path)
+
+
+def plot_neighbor_prediction_vs_truth(
+    model_name: str,
+    pred_h: np.ndarray,
+    target_h: np.ndarray,
+    candidate: PatchCandidate,
+    sample_index: int,
+    output_dir: Path,
+    context_before: int,
+    context_after: int,
+    plot_format: str,
+) -> list[str]:
+    context_start = max(0, sample_index - context_before)
+    context_end = min(target_h.shape[0], sample_index + context_after + 1)
+    x, neighbor_pred = aligned_context_series(pred_h, candidate.source_node, context_start, context_end, candidate.delta)
+    _, neighbor_true = aligned_context_series(target_h, candidate.source_node, context_start, context_end, candidate.delta)
+
+    fig, ax = plt.subplots(figsize=(11.5, 4.2))
+    ax.axvspan(candidate.target_start_sample, candidate.target_end_sample - 1, color="#f2e6c9", alpha=0.55)
+    ax.plot(x, neighbor_true, color="black", linewidth=2.2, label=f"GT source node {candidate.source_node}")
+    ax.plot(
+        x,
+        neighbor_pred,
+        color="#1f77b4",
+        linewidth=2.0,
+        alpha=0.9,
+        label=f"{model_name} pred source node {candidate.source_node}, dt={candidate.delta}",
+    )
+    ax.axvline(sample_index, color="#444444", linewidth=1.0, alpha=0.75)
+    ax.set_title(
+        f"{model_name}: source node prediction vs source node truth "
+        f"(node {candidate.source_node}, dt={candidate.delta})"
+    )
+    ax.set_xlabel("target-aligned test sample index")
+    ax.set_ylabel("traffic flow")
+    ax.grid(True, axis="y", alpha=0.22)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    stem = (
+        f"neighbor_pred_vs_truth_{model_name}_target{candidate.target_node}_"
+        f"source{candidate.source_node}_h{candidate.horizon}_sample{sample_index}"
+    )
+    written = [str(path) for path in save_figure(fig, output_dir, stem, plot_format)]
+    plt.close(fig)
+    written.append(
+        save_auxiliary_series(
+            output_dir,
+            stem,
+            x,
+            {
+                "neighbor_prediction": neighbor_pred,
+                "neighbor_ground_truth": neighbor_true,
+            },
+        )
+    )
+    return written
+
+
+def plot_target_truth_vs_neighbor_truth(
+    model_name: str,
+    target_h: np.ndarray,
+    candidate: PatchCandidate,
+    sample_index: int,
+    output_dir: Path,
+    context_before: int,
+    context_after: int,
+    plot_format: str,
+) -> list[str]:
+    context_start = max(0, sample_index - context_before)
+    context_end = min(target_h.shape[0], sample_index + context_after + 1)
+    x = np.arange(context_start, context_end)
+    target_true = np.asarray(target_h[context_start:context_end, candidate.target_node], dtype=np.float32)
+    _, neighbor_true = aligned_context_series(target_h, candidate.source_node, context_start, context_end, candidate.delta)
+
+    fig, ax = plt.subplots(figsize=(11.5, 4.2))
+    ax.axvspan(candidate.target_start_sample, candidate.target_end_sample - 1, color="#f2e6c9", alpha=0.55)
+    ax.plot(x, target_true, color="black", linewidth=2.2, label=f"GT target node {candidate.target_node}")
+    ax.plot(
+        x,
+        neighbor_true,
+        color="#2ca02c",
+        linewidth=2.0,
+        alpha=0.9,
+        label=f"GT source node {candidate.source_node}, dt={candidate.delta}",
+    )
+    ax.axvline(sample_index, color="#444444", linewidth=1.0, alpha=0.75)
+    ax.set_title(
+        f"{model_name}: target truth vs source-node truth "
+        f"(target {candidate.target_node}, source {candidate.source_node}, dt={candidate.delta})"
+    )
+    ax.set_xlabel("target-aligned test sample index")
+    ax.set_ylabel("traffic flow")
+    ax.grid(True, axis="y", alpha=0.22)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    stem = (
+        f"target_truth_vs_neighbor_truth_{model_name}_target{candidate.target_node}_"
+        f"source{candidate.source_node}_h{candidate.horizon}_sample{sample_index}"
+    )
+    written = [str(path) for path in save_figure(fig, output_dir, stem, plot_format)]
+    plt.close(fig)
+    written.append(
+        save_auxiliary_series(
+            output_dir,
+            stem,
+            x,
+            {
+                "target_ground_truth": target_true,
+                "neighbor_ground_truth": neighbor_true,
+            },
+        )
+    )
+    return written
+
+
 def plot_model_patches(
     model_name: str,
     pred_h: np.ndarray,
@@ -308,7 +456,13 @@ def plot_model_patches(
     ax.plot(x_context, exact_context, color="#d62728", linewidth=1.8, alpha=0.86, label=f"{model_name} exact node {node}")
     colors = plt.cm.tab10.colors
     for idx, candidate in enumerate(candidates):
-        x_patch, values = aligned_patch_series(pred_h, candidate)
+        x_patch, values = aligned_context_series(
+            pred_h,
+            candidate.source_node,
+            context_start,
+            context_end,
+            candidate.delta,
+        )
         label = f"#{candidate.rank} src node {candidate.source_node}, dt={candidate.delta}, MAE={candidate.patch_mae:.1f}"
         ax.plot(
             x_patch,
@@ -413,6 +567,32 @@ def main() -> int:
                 args.plot_format,
             )
         )
+        if candidates:
+            written.extend(
+                plot_neighbor_prediction_vs_truth(
+                    run.name,
+                    pred_h,
+                    target_h,
+                    candidates[0],
+                    args.sample_index,
+                    output_dir,
+                    args.context_before,
+                    args.context_after,
+                    args.plot_format,
+                )
+            )
+            written.extend(
+                plot_target_truth_vs_neighbor_truth(
+                    run.name,
+                    target_h,
+                    candidates[0],
+                    args.sample_index,
+                    output_dir,
+                    args.context_before,
+                    args.context_after,
+                    args.plot_format,
+                )
+            )
 
     write_csv(output_dir / "patch_reference_all_models_topk.csv", all_candidate_rows)
     written.append(str(output_dir / "patch_reference_all_models_topk.csv"))
