@@ -915,8 +915,8 @@ def best_st_shift_summary(
         "best_ST_MAE": best_mae,
         "zero_shift_ST_MAE": zero_st_mae,
         "exact_zero_MAE": exact_zero_mae,
-        "st_shift_gain": (exact_zero_mae - best_mae) / exact_zero_mae if exact_zero_mae and np.isfinite(exact_zero_mae) else float("nan"),
-        "spatial_gain_at_zero": (exact_zero_mae - zero_st_mae) / exact_zero_mae if exact_zero_mae and np.isfinite(exact_zero_mae) else float("nan"),
+        "st_shift_gain": exact_zero_mae - best_mae if np.isfinite(exact_zero_mae) and np.isfinite(best_mae) else float("nan"),
+        "spatial_gain_at_zero": exact_zero_mae - zero_st_mae if np.isfinite(exact_zero_mae) and np.isfinite(zero_st_mae) else float("nan"),
     }
 
 
@@ -1644,8 +1644,8 @@ def build_markdown(
 
     lines.extend(["", "## Joint Spatiotemporal ShiftGain Diagnostics", ""])
     if joint_st_shift_metric_rows:
-        lines.append("STShiftGain allows both prediction-time shifts and k-hop spatial substitution, using exact same-node/time MAE as the denominator.")
-        lines.append("| System | Horizon | Hop k | Condition | STShiftGain | Spatial Gain @0 | Best Shift | Exact MAE | Best ST-MAE | Count |")
+        lines.append("STShiftGain allows both prediction-time shifts and k-hop spatial substitution, reported as absolute MAE reduction against exact same-node/time MAE.")
+        lines.append("| System | Horizon | Hop k | Condition | STShiftGain (MAE drop) | Spatial Gain @0 (MAE drop) | Best Shift | Exact MAE | Best ST-MAE | Count |")
         lines.append("|---|---:|---:|---|---:|---:|---:|---:|---:|---:|")
         for row in joint_st_shift_metric_rows[:120]:
             lines.append(

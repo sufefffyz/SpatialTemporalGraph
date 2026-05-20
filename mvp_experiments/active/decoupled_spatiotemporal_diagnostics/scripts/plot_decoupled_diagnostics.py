@@ -289,13 +289,21 @@ def build_joint_st_shift_summary_rows(joint_rows: list[dict], systems: list[str]
                 if not subset:
                     continue
                 best_deltas = [to_float(row, "best_time_shift_delta") for row in subset]
+                st_reductions = [
+                    to_float(row, "exact_zero_MAE") - to_float(row, "best_ST_MAE")
+                    for row in subset
+                ]
+                spatial_reductions = [
+                    to_float(row, "exact_zero_MAE") - to_float(row, "zero_shift_ST_MAE")
+                    for row in subset
+                ]
                 rows.append(
                     {
                         "system": system,
                         "alignment_hop_k": hop_k,
                         "condition": condition,
-                        "avg_st_shift_gain": average([to_float(row, "st_shift_gain") for row in subset]),
-                        "avg_spatial_gain_at_zero": average([to_float(row, "spatial_gain_at_zero") for row in subset]),
+                        "avg_st_shift_gain": average(st_reductions),
+                        "avg_spatial_gain_at_zero": average(spatial_reductions),
                         "avg_best_time_shift_delta": average(best_deltas),
                         "avg_abs_best_time_shift_delta": average([abs(value) for value in best_deltas]),
                         "avg_exact_zero_MAE": average([to_float(row, "exact_zero_MAE") for row in subset]),
@@ -543,7 +551,7 @@ def plot_joint_st_shift_bars(summary_rows: list[dict], output_dir: Path, plot_fo
     matrix = np.asarray([[lookup.get((system, condition), float("nan")) for condition in conditions] for system in systems], dtype=float)
     fig, ax = plt.subplots(figsize=(8.0, max(3.8, 0.25 * len(systems) + 1.2)))
     im = ax.imshow(matrix, aspect="auto", cmap="magma")
-    ax.set_title(f"Joint STShiftGain, k={hop_k}")
+    ax.set_title(f"Joint STShiftGain (MAE reduction), k={hop_k}")
     ax.set_xticks(np.arange(len(conditions)), conditions, rotation=30, ha="right")
     ax.set_yticks(np.arange(len(systems)), systems)
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
@@ -726,9 +734,9 @@ def markdown_summary(
                 "",
                 "## Joint Spatiotemporal ShiftGain Diagnostics",
                 "",
-                "These metrics allow both prediction-time shifts and k-hop spatial substitution, using exact same-node/time MAE as the denominator.",
+                "These metrics allow both prediction-time shifts and k-hop spatial substitution, reported as absolute MAE reduction against exact same-node/time MAE.",
                 "",
-                "| System | Hop k | Condition | STShiftGain | Spatial Gain @0 | Avg Best Shift | Avg Abs Best Shift | Exact MAE | Best ST-MAE | Avg Count |",
+                "| System | Hop k | Condition | STShiftGain (MAE drop) | Spatial Gain @0 (MAE drop) | Avg Best Shift | Avg Abs Best Shift | Exact MAE | Best ST-MAE | Avg Count |",
                 "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|",
             ]
         )
