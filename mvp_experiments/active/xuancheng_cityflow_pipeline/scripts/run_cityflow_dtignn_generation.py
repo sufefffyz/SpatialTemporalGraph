@@ -43,6 +43,12 @@ class VehiclePosition:
     end_road: str | None = None
 
 
+@dataclass(frozen=True)
+class RouteData:
+    route: tuple[str, ...]
+    next_by_road: dict[str, str]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="CityFlow config JSON with rlTrafficLight=true.")
@@ -318,50 +324,61 @@ def choose_max_pressure_actions(
     return actions
 
 
-def longest_route_match(drivable: str, route: list[str]) -> str | None:
+def build_route_data(info: dict) -> RouteData:
+    route = tuple(str(info.get("route", "")).split())
+    next_by_road = {start: end for start, end in zip(route, route[1:])}
+    return RouteData(route=route, next_by_road=next_by_road)
+
+
+def longest_route_match(drivable: str, route: tuple[str, ...]) -> str | None:
     candidates = [road_id for road_id in route if drivable == road_id or drivable.startswith(f"{road_id}_")]
     if not candidates:
         return None
     return max(candidates, key=len)
 
 
-def parse_vehicle_position(info: dict) -> VehiclePosition | None:
+def parse_vehicle_position(
+    info: dict,
+    route_data: RouteData,
+    drivable_cache: dict[tuple[tuple[str, ...], str], VehiclePosition | None],
+) -> VehiclePosition | None:
     road = info.get("road")
     if road:
         road = str(road)
         return VehiclePosition(kind="road", key=f"road:{road}", road=road)
 
-    drivable = info.get("drivable", "")
-    route = str(info.get("route", "")).split()
+    drivable = str(info.get("drivable", ""))
+    cache_key = (route_data.route, drivable)
+    if cache_key in drivable_cache:
+        return drivable_cache[cache_key]
+
+    route = route_data.route
     if "_TO_" in drivable and route:
         left, right = str(drivable).split("_TO_", 1)
         for idx, start_road in enumerate(route[:-1]):
             end_road = route[idx + 1]
             if left.startswith(f"{start_road}_") and right.startswith(f"{end_road}_"):
-                return VehiclePosition(
+                position = VehiclePosition(
                     kind="connector",
                     key=f"connector:{start_road}>{end_road}",
                     start_road=start_road,
                     end_road=end_road,
                 )
+                drivable_cache[cache_key] = position
+                return position
 
     if route:
         matched_road = longest_route_match(str(drivable), route)
         if matched_road is not None:
-            return VehiclePosition(kind="road", key=f"road:{matched_road}", road=matched_road)
+            position = VehiclePosition(kind="road", key=f"road:{matched_road}", road=matched_road)
+            drivable_cache[cache_key] = position
+            return position
+    drivable_cache[cache_key] = None
     return None
 
 
-def next_road_from_route(info: dict, current_road: str) -> str | None:
-    route = str(info.get("route", "")).split()
-    if not route:
-        return None
-    for idx, road_id in enumerate(route):
-        if road_id == current_road:
-            if idx + 1 < len(route):
-                return route[idx + 1]
-            return None
-    return None
+def next_road_from_route(route_data: RouteData, current_road: str) -> str | None:
+    return route_data.next_by_road.get(current_road)
 
 
 def make_road_masks(np, n_roads: int, missing_ratios: list[float], seed: int):
@@ -455,6 +472,8 @@ def main() -> int:
     applied_phase: dict[str, int] = {inter_id: 0 for inter_id in signals}
 
     prev_vehicle_position: dict[str, VehiclePosition] = {}
+    route_cache: dict[str, RouteData] = {}
+    drivable_cache: dict[tuple[tuple[str, ...], str], VehiclePosition | None] = {}
     decision_count = 0
     phase_change_count = 0
     bucket_idx = 0
@@ -531,16 +550,20 @@ def main() -> int:
         current_time = float(eng.get_current_time())
         vehicles = eng.get_vehicles()
         current_vehicle_position: dict[str, VehiclePosition] = {}
-        vehicle_info: dict[str, dict] = {}
+        vehicle_route_data: dict[str, RouteData] = {}
 
         for vehicle_id in vehicles:
             info = eng.get_vehicle_info(vehicle_id)
-            position = parse_vehicle_position(info)
+            route_data = route_cache.get(vehicle_id)
+            if route_data is None:
+                route_data = build_route_data(info)
+                route_cache[vehicle_id] = route_data
+            position = parse_vehicle_position(info, route_data, drivable_cache)
             if position is None:
                 skipped_no_road += 1
                 continue
             current_vehicle_position[vehicle_id] = position
-            vehicle_info[vehicle_id] = info
+            vehicle_route_data[vehicle_id] = route_data
 
         if args.start_second < current_time <= total_until:
             for vehicle_id, position in current_vehicle_position.items():
@@ -596,7 +619,7 @@ def main() -> int:
                 if road_idx is None:
                     skipped_unknown_road += 1
                     continue
-                next_road = next_road_from_route(vehicle_info[vehicle_id], road)
+                next_road = next_road_from_route(vehicle_route_data[vehicle_id], road)
                 if next_road is None:
                     bucket_active_unknown_seconds[road_idx] += interval
                     skipped_no_next += 1
