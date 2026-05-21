@@ -34,6 +34,15 @@ class SignalIntersection:
     valid_phases: list[int]
 
 
+@dataclass(frozen=True)
+class VehiclePosition:
+    kind: str
+    key: str
+    road: str | None = None
+    start_road: str | None = None
+    end_road: str | None = None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, help="CityFlow config JSON with rlTrafficLight=true.")
@@ -309,13 +318,37 @@ def choose_max_pressure_actions(
     return actions
 
 
-def parse_vehicle_road(info: dict) -> str | None:
+def longest_route_match(drivable: str, route: list[str]) -> str | None:
+    candidates = [road_id for road_id in route if drivable == road_id or drivable.startswith(f"{road_id}_")]
+    if not candidates:
+        return None
+    return max(candidates, key=len)
+
+
+def parse_vehicle_position(info: dict) -> VehiclePosition | None:
     road = info.get("road")
     if road:
-        return str(road)
+        road = str(road)
+        return VehiclePosition(kind="road", key=f"road:{road}", road=road)
+
     drivable = info.get("drivable", "")
-    if "_" in drivable:
-        return str(drivable).rsplit("_", 1)[0]
+    route = str(info.get("route", "")).split()
+    if "_TO_" in drivable and route:
+        left, right = str(drivable).split("_TO_", 1)
+        for idx, start_road in enumerate(route[:-1]):
+            end_road = route[idx + 1]
+            if left.startswith(f"{start_road}_") and right.startswith(f"{end_road}_"):
+                return VehiclePosition(
+                    kind="connector",
+                    key=f"connector:{start_road}>{end_road}",
+                    start_road=start_road,
+                    end_road=end_road,
+                )
+
+    if route:
+        matched_road = longest_route_match(str(drivable), route)
+        if matched_road is not None:
+            return VehiclePosition(kind="road", key=f"road:{matched_road}", road=matched_road)
     return None
 
 
@@ -421,7 +454,7 @@ def main() -> int:
     transition_remaining: dict[str, int] = {inter_id: 0 for inter_id in signals}
     applied_phase: dict[str, int] = {inter_id: 0 for inter_id in signals}
 
-    prev_vehicle_road: dict[str, str] = {}
+    prev_vehicle_position: dict[str, VehiclePosition] = {}
     decision_count = 0
     phase_change_count = 0
     bucket_idx = 0
@@ -432,6 +465,7 @@ def main() -> int:
     skipped_unknown_road = 0
     skipped_no_next = 0
     skipped_unknown_turn = 0
+    connector_position_steps = 0
 
     def flush_bucket(time_end: float) -> None:
         nonlocal bucket_idx, bucket_start, bucket_elapsed
@@ -496,22 +530,57 @@ def main() -> int:
         eng.next_step()
         current_time = float(eng.get_current_time())
         vehicles = eng.get_vehicles()
-        current_vehicle_road: dict[str, str] = {}
+        current_vehicle_position: dict[str, VehiclePosition] = {}
         vehicle_info: dict[str, dict] = {}
 
         for vehicle_id in vehicles:
             info = eng.get_vehicle_info(vehicle_id)
-            road = parse_vehicle_road(info)
-            if road is None:
+            position = parse_vehicle_position(info)
+            if position is None:
                 skipped_no_road += 1
                 continue
-            current_vehicle_road[vehicle_id] = road
+            current_vehicle_position[vehicle_id] = position
             vehicle_info[vehicle_id] = info
 
         if args.start_second < current_time <= total_until:
-            for vehicle_id, road in current_vehicle_road.items():
-                prev_road = prev_vehicle_road.get(vehicle_id)
-                if prev_road and prev_road != road:
+            for vehicle_id, position in current_vehicle_position.items():
+                if position.kind == "connector":
+                    connector_position_steps += 1
+                    start_road = position.start_road
+                    end_road = position.end_road
+                    if start_road is None or end_road is None:
+                        skipped_unknown_road += 1
+                        continue
+                    start_road_idx = road_to_idx.get(start_road)
+                    if start_road_idx is None:
+                        skipped_unknown_road += 1
+                        continue
+                    turn_idx = movement_to_turn.get((start_road, end_road))
+                    if turn_idx is None:
+                        bucket_movement_unknown[start_road_idx] += 1
+                        bucket_active_unknown_seconds[start_road_idx] += interval
+                        skipped_unknown_turn += 1
+                        continue
+
+                    prev_position = prev_vehicle_position.get(vehicle_id)
+                    if prev_position is None or prev_position.key != position.key:
+                        bucket_movement[start_road_idx, turn_idx] += 1
+                    bucket_active_seconds[start_road_idx, turn_idx] += interval
+                    continue
+
+                road = position.road
+                if road is None:
+                    skipped_unknown_road += 1
+                    continue
+
+                prev_position = prev_vehicle_position.get(vehicle_id)
+                if (
+                    prev_position is not None
+                    and prev_position.kind == "road"
+                    and prev_position.road is not None
+                    and prev_position.road != road
+                ):
+                    prev_road = prev_position.road
                     prev_road_idx = road_to_idx.get(prev_road)
                     if prev_road_idx is None:
                         skipped_unknown_road += 1
@@ -548,7 +617,7 @@ def main() -> int:
             if current_time >= bucket_start + args.bucket_seconds or current_time >= total_until:
                 flush_bucket(min(current_time, float(total_until)))
 
-        prev_vehicle_road = current_vehicle_road
+        prev_vehicle_position = current_vehicle_position
 
         if args.progress_interval > 0 and int(current_time) % args.progress_interval == 0:
             print(
@@ -633,6 +702,7 @@ def main() -> int:
         "skipped_unknown_road": skipped_unknown_road,
         "skipped_no_next": skipped_no_next,
         "skipped_unknown_turn": skipped_unknown_turn,
+        "connector_position_steps": connector_position_steps,
         "dtignn_alignment_note": (
             "Primary target is road-segment left/straight/right movement volume at 10-second buckets. "
             "Signal dynamic graph is represented by phase_id_end plus phase_edge_* metadata; non-signal "
