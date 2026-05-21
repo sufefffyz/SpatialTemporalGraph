@@ -70,7 +70,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--adj-path", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--conditions", nargs="+", default=["peak", "ramp"], choices=["high_volume", "peak", "ramp"])
+    parser.add_argument(
+        "--conditions",
+        nargs="+",
+        default=["peak", "ramp"],
+        choices=["all", "normal", "high_volume", "peak", "ramp"],
+    )
     parser.add_argument("--horizons", nargs="+", type=int, default=[12])
     parser.add_argument("--max-shift", type=int, default=3)
     parser.add_argument("--top-cases", type=int, default=6)
@@ -231,10 +236,14 @@ def ramp_condition_mask(target: np.ndarray, base_mask: np.ndarray, q: float) -> 
 
 
 def condition_masks(target: np.ndarray, base_mask: np.ndarray, peak_q: float, high_q: float, ramp_q: float) -> dict[str, np.ndarray]:
+    peak = quantile_condition_mask(target, base_mask, peak_q)
+    ramp = ramp_condition_mask(target, base_mask, ramp_q)
     return {
+        "all": base_mask,
         "high_volume": quantile_condition_mask(target, base_mask, high_q),
-        "peak": quantile_condition_mask(target, base_mask, peak_q),
-        "ramp": ramp_condition_mask(target, base_mask, ramp_q),
+        "peak": peak,
+        "ramp": ramp,
+        "normal": base_mask & ~peak & ~ramp,
     }
 
 
