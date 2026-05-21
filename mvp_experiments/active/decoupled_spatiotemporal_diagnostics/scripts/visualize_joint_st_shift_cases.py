@@ -86,11 +86,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-before", type=int, default=36)
     parser.add_argument("--window-after", type=int, default=36)
     parser.add_argument("--target-dim", type=int, default=1)
+    parser.add_argument("--target-channel", type=int, default=0)
     parser.add_argument("--dtype", default="float32")
     parser.add_argument("--alignment-directed", action="store_true")
     parser.add_argument("--require-time-shift", action="store_true")
     parser.add_argument("--require-spatial-change", action="store_true")
     parser.add_argument("--require-zero-spatial-change", action="store_true")
+    parser.add_argument(
+        "--exclude-seasonal-low-q10",
+        action="store_true",
+        help="Exclude points below the pre-test same-slot/same-weekday q10 for the target node.",
+    )
+    parser.add_argument(
+        "--exclude-seasonal-low-extreme",
+        action="store_true",
+        help="Exclude points below same-slot/same-weekday q10 and below half of that seasonal median.",
+    )
+    parser.add_argument(
+        "--exclude-recent-drop",
+        action="store_true",
+        help="Exclude points after a recent large downward drop in the target node.",
+    )
+    parser.add_argument("--seasonal-low-min-median", type=float, default=100.0)
+    parser.add_argument("--seasonal-low-ratio", type=float, default=0.5)
+    parser.add_argument("--recent-drop-lookback", type=int, default=6)
+    parser.add_argument("--recent-drop-min-prev", type=float, default=100.0)
+    parser.add_argument("--recent-drop-min-delta", type=float, default=100.0)
+    parser.add_argument("--recent-drop-ratio", type=float, default=0.5)
     parser.add_argument(
         "--rank-by",
         choices=[
@@ -245,6 +267,111 @@ def condition_masks(target: np.ndarray, base_mask: np.ndarray, peak_q: float, hi
         "ramp": ramp,
         "normal": base_mask & ~peak & ~ramp,
     }
+
+
+def split_test_start(desc: dict) -> int:
+    regular = desc.get("regular_settings", {})
+    ratios = regular.get("TRAIN_VAL_TEST_RATIO", [0.6, 0.2, 0.2])
+    train_val = float(ratios[0]) + float(ratios[1])
+    return int(round(int(desc["num_time_steps"]) * train_val))
+
+
+def daily_slots(frequency_minutes: int) -> int:
+    return max(1, int(round(24 * 60 / frequency_minutes)))
+
+
+def load_dataset_data(args: argparse.Namespace, desc: dict) -> np.ndarray:
+    shape = tuple(int(dim) for dim in desc["shape"])
+    path = dataset_dir(args) / "data.dat"
+    if not path.exists():
+        raise FileNotFoundError(f"Dataset data not found: {path}")
+    return np.memmap(path, dtype=args.dtype, mode="r", shape=shape)
+
+
+def weekday_codes(data: np.ndarray, indices: np.ndarray, slots_per_day: int) -> np.ndarray:
+    if data.shape[-1] >= 3:
+        codes = np.rint(np.asarray(data[indices, 0, 2]) * 7).astype(np.int16)
+        return np.clip(codes, 0, 6)
+    return ((indices // slots_per_day) % 7).astype(np.int16)
+
+
+def build_seasonal_reference(
+    data: np.ndarray,
+    test_start: int,
+    slots_per_day: int,
+    target_channel: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    num_nodes = data.shape[1]
+    q10 = np.full((slots_per_day, 7, num_nodes), np.nan, dtype=np.float32)
+    median = np.full((slots_per_day, 7, num_nodes), np.nan, dtype=np.float32)
+    indices = np.arange(test_start)
+    dows = weekday_codes(data, indices, slots_per_day)
+    for slot in range(slots_per_day):
+        slot_mask = (indices % slots_per_day) == slot
+        for dow in range(7):
+            selected = indices[slot_mask & (dows == dow)]
+            if selected.size == 0:
+                continue
+            values = np.asarray(data[selected, :, target_channel], dtype=np.float32)
+            values = np.where(np.isfinite(values) & (values != 0), values, np.nan)
+            with np.errstate(invalid="ignore"):
+                q10[slot, dow] = np.nanquantile(values, 0.10, axis=0)
+                median[slot, dow] = np.nanmedian(values, axis=0)
+    return q10, median
+
+
+def anomaly_exclusion_mask(
+    args: argparse.Namespace,
+    data: np.ndarray | None,
+    seasonal_q10: np.ndarray | None,
+    seasonal_median: np.ndarray | None,
+    target_h: np.ndarray,
+    base_mask: np.ndarray,
+    sample_indices: np.ndarray,
+    slots_per_day: int,
+    test_start: int,
+    input_len: int,
+    horizon_idx: int,
+) -> np.ndarray:
+    excluded = np.zeros_like(base_mask, dtype=bool)
+    if data is None:
+        return excluded
+    full_idx = test_start + sample_indices + input_len + horizon_idx
+    if args.exclude_seasonal_low_q10 or args.exclude_seasonal_low_extreme:
+        if seasonal_q10 is None or seasonal_median is None:
+            raise ValueError("Seasonal filters require seasonal reference arrays.")
+        slots = (full_idx % slots_per_day).astype(np.int16)
+        dows = weekday_codes(data, full_idx, slots_per_day)
+        q10 = seasonal_q10[slots, dows, :]
+        median = seasonal_median[slots, dows, :]
+        seasonal_low = (
+            base_mask
+            & np.isfinite(q10)
+            & np.isfinite(median)
+            & (median >= args.seasonal_low_min_median)
+            & (target_h <= q10)
+        )
+        if args.exclude_seasonal_low_q10:
+            excluded |= seasonal_low
+        if args.exclude_seasonal_low_extreme:
+            excluded |= seasonal_low & (target_h <= args.seasonal_low_ratio * median)
+    if args.exclude_recent_drop:
+        lookback = max(1, int(args.recent_drop_lookback))
+        previous_values = [
+            np.asarray(data[full_idx - lag, :, args.target_channel], dtype=np.float32)
+            for lag in range(1, lookback + 1)
+            if np.all(full_idx - lag >= 0)
+        ]
+        if previous_values:
+            previous_max = np.maximum.reduce(previous_values)
+            excluded |= (
+                base_mask
+                & np.isfinite(previous_max)
+                & (previous_max >= args.recent_drop_min_prev)
+                & ((previous_max - target_h) >= args.recent_drop_min_delta)
+                & (target_h <= args.recent_drop_ratio * previous_max)
+            )
+    return excluded
 
 
 def top_pool(mask: np.ndarray, score: np.ndarray, pool_size: int) -> tuple[np.ndarray, np.ndarray]:
@@ -527,9 +654,34 @@ def main() -> int:
     output_dir = args.output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     num_nodes, output_len, frequency, null_val = dataset_settings(args)
+    desc = dataset_desc(args)
+    regular = desc.get("regular_settings", {})
+    input_len = int(regular.get("INPUT_LEN", 12))
     horizons = sorted({h for h in args.horizons if 1 <= h <= output_len})
     if not horizons:
         raise ValueError(f"No valid horizons in {args.horizons}; output_len={output_len}")
+    use_anomaly_filters = (
+        args.exclude_seasonal_low_q10
+        or args.exclude_seasonal_low_extreme
+        or args.exclude_recent_drop
+    )
+    data = None
+    seasonal_q10 = None
+    seasonal_median = None
+    test_start = 0
+    slots_per_day = daily_slots(frequency)
+    if use_anomaly_filters:
+        data = load_dataset_data(args, desc)
+        if args.target_channel < 0 or args.target_channel >= data.shape[-1]:
+            raise ValueError(f"--target-channel {args.target_channel} is outside dataset feature dimension {data.shape[-1]}")
+        test_start = split_test_start(desc)
+        if args.exclude_seasonal_low_q10 or args.exclude_seasonal_low_extreme:
+            seasonal_q10, seasonal_median = build_seasonal_reference(
+                data,
+                test_start,
+                slots_per_day,
+                args.target_channel,
+            )
 
     adj = load_adjacency(args.adj_path)
     if adj.shape != (num_nodes, num_nodes):
@@ -550,6 +702,21 @@ def main() -> int:
         base_mask = valid_target_mask(target_h, null_val)
         exact_error = np.abs(pred_h - target_h)
         masks = condition_masks(target_h, base_mask, args.peak_q, args.condition_high_q, args.condition_ramp_q)
+        if use_anomaly_filters:
+            excluded = anomaly_exclusion_mask(
+                args,
+                data,
+                seasonal_q10,
+                seasonal_median,
+                target_h,
+                base_mask,
+                np.arange(pred_h.shape[0], dtype=np.int64),
+                slots_per_day,
+                test_start,
+                input_len,
+                h_idx,
+            )
+            masks = {name: mask & ~excluded for name, mask in masks.items()}
         for condition in args.conditions:
             sample_idx, node_idx = top_pool(masks[condition], exact_error, args.pool_size)
             for sample, node in zip(sample_idx.tolist(), node_idx.tolist()):
@@ -635,6 +802,15 @@ def main() -> int:
         "require_spatial_change": bool(args.require_spatial_change),
         "require_zero_spatial_change": bool(args.require_zero_spatial_change),
         "rank_by": args.rank_by,
+        "exclude_seasonal_low_q10": bool(args.exclude_seasonal_low_q10),
+        "exclude_seasonal_low_extreme": bool(args.exclude_seasonal_low_extreme),
+        "exclude_recent_drop": bool(args.exclude_recent_drop),
+        "seasonal_low_min_median": args.seasonal_low_min_median,
+        "seasonal_low_ratio": args.seasonal_low_ratio,
+        "recent_drop_lookback": args.recent_drop_lookback,
+        "recent_drop_min_prev": args.recent_drop_min_prev,
+        "recent_drop_min_delta": args.recent_drop_min_delta,
+        "recent_drop_ratio": args.recent_drop_ratio,
         "frequency_minutes": frequency,
         "written": written,
     }
