@@ -109,6 +109,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only filter unreachable anchor routes; do not expand anchors to full shortest paths.",
     )
+    parser.add_argument(
+        "--drop-cyclic-routes",
+        action="store_true",
+        help=(
+            "Drop routes whose final route contains repeated road IDs. This is stricter than "
+            "topological validity and is useful when CityFlow's router assertion is triggered "
+            "by loop-like expanded routes."
+        ),
+    )
+    parser.add_argument(
+        "--max-output-route-length",
+        type=int,
+        default=0,
+        help="Drop routes longer than this after expansion. 0 disables the guard.",
+    )
     parser.add_argument("--force", action="store_true", help="Overwrite an existing filtered flow.")
     return parser.parse_args()
 
@@ -151,6 +166,12 @@ def main() -> int:
                 continue
             flow_out = dict(flow)
             assert route is not None
+            if args.drop_cyclic_routes and len(set(route)) != len(route):
+                reasons["cyclic_route"] += 1
+                continue
+            if args.max_output_route_length > 0 and len(route) > args.max_output_route_length:
+                reasons["route_too_long"] += 1
+                continue
             original_route_lengths.append(len(flow["route"]))
             output_route_lengths.append(len(route))
             if changed:
@@ -176,6 +197,8 @@ def main() -> int:
         "dropped_records": len(flows) - len(kept),
         "drop_reasons": dict(sorted(reasons.items())),
         "expand_routes": not args.no_expand,
+        "drop_cyclic_routes": bool(args.drop_cyclic_routes),
+        "max_output_route_length": args.max_output_route_length,
         "expanded_records": expanded_records,
         "unique_anchor_pairs_checked": len(path_cache),
         "mean_input_route_length": sum(original_route_lengths) / len(original_route_lengths)
