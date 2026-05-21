@@ -11,6 +11,7 @@ THREAD_NUM="${THREAD_NUM:-1}"
 DOWNLOAD_FIRST="${DOWNLOAD_FIRST:-1}"
 DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-5}"
 SKIP_EXISTING="${SKIP_EXISTING:-1}"
+CONTINUE_ON_ERROR="${CONTINUE_ON_ERROR:-0}"
 WORKER_COUNT="${WORKER_COUNT:-1}"
 WORKER_INDEX="${WORKER_INDEX:-0}"
 MISSING_RATIOS="${MISSING_RATIOS:-0.1,0.3,0.5,0.7,0.9}"
@@ -72,6 +73,7 @@ echo "[info] data_root=${DATA_ROOT}"
 echo "[info] output_dir=${OUTPUT_DIR}"
 echo "[info] log_dir=${LOG_DIR}"
 echo "[info] start=${START_SECOND}s duration=${DURATION}s bucket=${BUCKET_SECONDS}s"
+echo "[info] skip_existing=${SKIP_EXISTING} continue_on_error=${CONTINUE_ON_ERROR}"
 echo "[info] worker_index=${WORKER_INDEX} worker_count=${WORKER_COUNT}"
 echo "[info] python=${PYTHON_BIN}"
 
@@ -98,17 +100,23 @@ for DATE in "${DATES[@]}"; do
   fi
 
   echo "[run] ${DATE} -> ${LOG_PATH}"
-  DATA_ROOT="${DATA_ROOT}" \
-  OUTPUT_DIR="${OUTPUT_DIR}" \
-  DURATION="${DURATION}" \
-  START_SECOND="${START_SECOND}" \
-  BUCKET_SECONDS="${BUCKET_SECONDS}" \
-  THREAD_NUM="${THREAD_NUM}" \
-  DOWNLOAD_FIRST="0" \
-  MISSING_RATIOS="${MISSING_RATIOS}" \
-  MASK_SEED="${MASK_SEED}" \
-  PYTHON_BIN="${PYTHON_BIN}" \
-    bash "${SCRIPT_DIR}/run_server_xuancheng_dtignn_one_day.sh" "${DATE}" >"${LOG_PATH}" 2>&1
+  if ! DATA_ROOT="${DATA_ROOT}" \
+    OUTPUT_DIR="${OUTPUT_DIR}" \
+    DURATION="${DURATION}" \
+    START_SECOND="${START_SECOND}" \
+    BUCKET_SECONDS="${BUCKET_SECONDS}" \
+    THREAD_NUM="${THREAD_NUM}" \
+    DOWNLOAD_FIRST="0" \
+    MISSING_RATIOS="${MISSING_RATIOS}" \
+    MASK_SEED="${MASK_SEED}" \
+    PYTHON_BIN="${PYTHON_BIN}" \
+      bash "${SCRIPT_DIR}/run_server_xuancheng_dtignn_one_day.sh" "${DATE}" >"${LOG_PATH}" 2>&1; then
+    echo "[error] ${DATE}: failed, see ${LOG_PATH}" >&2
+    if [[ "${CONTINUE_ON_ERROR}" == "1" ]]; then
+      continue
+    fi
+    exit 1
+  fi
   echo "[done] ${DATE}: ${NPZ_PATH}"
 done
 
