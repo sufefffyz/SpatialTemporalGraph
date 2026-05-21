@@ -82,6 +82,55 @@ For the released 30 days:
 - Long road CSV, gzip-compressed: depends on values, but budget roughly 5.61 GiB uncompressed for one month.
 - Replay logs: avoid for this pipeline unless debugging; official utility splits logs around 0.4 GB chunks.
 
+## DTIGNN-Style Turn-Flow Dataset
+
+The DTIGNN-style generator builds a short-horizon traffic-flow transition
+benchmark from the same raw Xuancheng CityFlow release:
+
+- Primary target: `movement_volume_lsr`, a 10-second tensor with shape
+  `bucket x road x turn`, where turn is `turn_left`, `go_straight`,
+  `turn_right`.
+- Secondary state: `active_volume_lsr`, mean active vehicles on each road,
+  grouped by each vehicle's next-turn intent.
+- Dynamic graph metadata: `edge_*` arrays store roadLink topology, while
+  `phase_id_end` and `phase_edge_*` reconstruct phase-activated edges.
+- Sparse-observation masks: deterministic road-level masks for missing ratios
+  `0.1,0.3,0.5,0.7,0.9` by default.
+- Xuancheng-specific difference from DTIGNN's public benchmarks: the released
+  network has 1,744 roads and 116 controllable signal intersections, while
+  non-signal intersections remain as always-active static edges.
+
+This is added preprocessing, not an official repository artifact. It follows
+the paper-level max-pressure signal-control setting through a direct CityFlow
+controller because the public official entrypoint is not reproducible as-is.
+
+One-hour smoke, DTIGNN-like 10-second buckets:
+
+```bash
+DATA_ROOT=/data/yuzhang_fei/xuancheng_cityflow \
+OUTPUT_DIR=/data/yuzhang_fei/xuancheng_cityflow/dtignn_turn_smoke_10s \
+DURATION=3600 \
+START_SECOND=0 \
+BUCKET_SECONDS=10 \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_dtignn_one_day.sh 2023-04-03
+```
+
+Use the Xuancheng paper validation window by setting `START_SECOND=61200`
+for 17:00-18:00.
+
+Thirty released days, one hour per day, with worker sharding:
+
+```bash
+DATA_ROOT=/data/yuzhang_fei/xuancheng_cityflow \
+OUTPUT_DIR=/data/yuzhang_fei/xuancheng_cityflow/dtignn_turn_30d_10s_paper_mp \
+DURATION=3600 \
+START_SECOND=0 \
+BUCKET_SECONDS=10 \
+WORKER_COUNT=4 \
+WORKER_INDEX=0 \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_dtignn_month.sh
+```
+
 ## First Run Order
 
 1. R001 one-day smoke: `2023-04-03`, 1,800 seconds, 1-min buckets, verify schema and speed.
