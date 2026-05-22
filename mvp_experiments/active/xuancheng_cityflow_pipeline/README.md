@@ -104,6 +104,32 @@ This is added preprocessing, not an official repository artifact. It follows
 the paper-level max-pressure signal-control setting through a direct CityFlow
 controller because the public official entrypoint is not reproducible as-is.
 
+For DTIGNN-aligned forecasting, prefer the state-style conversion rather than
+the movement-count target:
+
+- Target: `active_volume_lsr`, mean vehicles currently on each road, grouped by
+  next `left/straight/right` intent.
+- Feature tensor: `road_feature`, shaped like DTIGNN road features:
+  `time x road x (3 traffic channels + phase one-hot)`.
+- Sample tensor: `data_split_30to1.pkl`, with `train_x`, `val_x`, `test_x`
+  shaped `sample x road x feature x 30`, and targets shaped
+  `sample x road x feature x 1`.
+- Phase caveat: Xuancheng uses CityFlow phase-id one-hot and phase-edge
+  metadata. This is not the original DTIGNN grid's fixed N/E/S/W phase labels.
+
+Prepare the current one-day 10-second repaired Xuancheng state dataset:
+
+```bash
+DATA_ROOT=/data/yuzhang_fei/xuancheng_cityflow \
+INPUT_DIR=/data/yuzhang_fei/xuancheng_cityflow/dtignn_turn_1d_10s_repaired_nocycle \
+OUTPUT_DIR=/data/yuzhang_fei/xuancheng_cityflow/dtignn_state_active_lsr_1d_10s \
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_prepare_xuancheng_dtignn_state.sh
+```
+
+Use `SPLIT_MODE=official_shuffle` only when intentionally matching the public
+DTIGNN `prepareData.py` shuffle behavior. The default is chronological because
+that is safer for forecasting evaluation.
+
 One-hour smoke, DTIGNN-like 10-second buckets:
 
 ```bash
