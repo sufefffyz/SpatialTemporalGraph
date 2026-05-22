@@ -29,6 +29,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recent-drop-min-prev", type=float, default=100.0)
     parser.add_argument("--recent-drop-min-delta", type=float, default=100.0)
     parser.add_argument("--recent-drop-ratio", type=float, default=0.5)
+    parser.add_argument(
+        "--input-zero-target-min-count",
+        type=int,
+        default=6,
+        help="Mark target-node input as poor when at least this many history flow values are zero.",
+    )
+    parser.add_argument(
+        "--input-zero-sample-share",
+        type=float,
+        default=0.05,
+        help="Mark a whole test sample as poor when flow-zero share over [input_len, nodes] exceeds this value.",
+    )
     return parser.parse_args()
 
 
@@ -136,9 +148,29 @@ def main() -> int:
         "contextual_low_q10": [],
         "contextual_low_extreme": [],
         "recent_drop": [],
+        "input_zero_target_half": [],
+        "input_zero_target_all": [],
+        "input_zero_sample_high": [],
+        "input_quality_union": [],
         "broad_union": [],
         "strict_union": [],
+        "strict_plus_input_union": [],
+        "broad_plus_input_union": [],
     }
+
+    input_zero_count = np.zeros((num_samples, num_nodes), dtype=np.int16)
+    sample_zero_share = np.zeros(num_samples, dtype=np.float32)
+    for sample in range(num_samples):
+        input_flow = np.asarray(
+            data[test_start + sample : test_start + sample + input_len, :, args.target_channel],
+            dtype=np.float32,
+        )
+        zero_mask = input_flow == 0
+        input_zero_count[sample] = zero_mask.sum(axis=0)
+        sample_zero_share[sample] = float(zero_mask.mean())
+    input_zero_target_half_base = input_zero_count >= args.input_zero_target_min_count
+    input_zero_target_all_base = input_zero_count >= input_len
+    input_zero_sample_high_base = sample_zero_share >= args.input_zero_sample_share
 
     for h_idx in range(output_len):
         y = np.asarray(target[:, h_idx, :], dtype=np.float32)
@@ -172,13 +204,25 @@ def main() -> int:
             & (y <= args.recent_drop_ratio * prev_max)
             & ((prev_max - y) >= args.recent_drop_min_delta)
         )
+        input_zero_target_half = valid & input_zero_target_half_base
+        input_zero_target_all = valid & input_zero_target_all_base
+        input_zero_sample_high = valid & input_zero_sample_high_base.reshape(-1, 1)
+        input_quality_union = input_zero_target_half | input_zero_sample_high
+        broad_union = contextual_low_q10 | recent_drop
+        strict_union = contextual_low_extreme | recent_drop
 
         valid_masks.append(valid)
         category_masks["contextual_low_q10"].append(contextual_low_q10)
         category_masks["contextual_low_extreme"].append(contextual_low_extreme)
         category_masks["recent_drop"].append(recent_drop)
-        category_masks["broad_union"].append(contextual_low_q10 | recent_drop)
-        category_masks["strict_union"].append(contextual_low_extreme | recent_drop)
+        category_masks["input_zero_target_half"].append(input_zero_target_half)
+        category_masks["input_zero_target_all"].append(input_zero_target_all)
+        category_masks["input_zero_sample_high"].append(input_zero_sample_high)
+        category_masks["input_quality_union"].append(input_quality_union)
+        category_masks["broad_union"].append(broad_union)
+        category_masks["strict_union"].append(strict_union)
+        category_masks["strict_plus_input_union"].append(strict_union | input_quality_union)
+        category_masks["broad_plus_input_union"].append(broad_union | input_quality_union)
 
     total_valid_points = int(sum(mask.sum() for mask in valid_masks))
     category_count_rows = []
@@ -232,13 +276,18 @@ def main() -> int:
         full_mae = total_abs / total_count
         full_rmse = math.sqrt(total_sq / total_count)
         row = {"model": model_name, "full_mae": full_mae, "full_rmse": full_rmse, "valid_points": total_count}
-        for category in ("strict_union", "broad_union"):
+        clean_prefixes = {
+            "strict_union": "strict_clean",
+            "broad_union": "broad_clean",
+            "strict_plus_input_union": "strict_plus_input_clean",
+            "broad_plus_input_union": "broad_plus_input_clean",
+        }
+        for category, prefix in clean_prefixes.items():
             clean_count = total_count - category_count[category]
             clean_abs = total_abs - category_abs[category]
             clean_sq = total_sq - category_sq[category]
             clean_mae = clean_abs / clean_count
             clean_rmse = math.sqrt(clean_sq / clean_count)
-            prefix = "strict_clean" if category == "strict_union" else "broad_clean"
             row.update(
                 {
                     f"{prefix}_excluded_points": category_count[category],
@@ -288,11 +337,13 @@ def main() -> int:
     ]
     for row in category_count_rows:
         report_lines.append(f"| {row['category']} | {row['points']} | {100 * row['point_share']:.3f}% |")
-    report_lines.extend(
+        report_lines.extend(
         [
             "",
             f"Overlap contextual_low_q10 and recent_drop: {overlap_q10_drop} points.",
             f"Overlap contextual_low_extreme and recent_drop: {overlap_extreme_drop} points.",
+            f"Sample-level input zero share threshold: {args.input_zero_sample_share:.3f}.",
+            f"Target-node input zero-count threshold: {args.input_zero_target_min_count}/{input_len}.",
             "",
             "## Strict-Union Clean Metrics",
             "",
@@ -307,6 +358,24 @@ def main() -> int:
             f"{100 * row['strict_clean_mse_error_share']:.2f}% | "
             f"{row['strict_clean_mae']:.3f} | {row['strict_clean_rmse']:.3f} | "
             f"{row['strict_clean_delta_mae']:.3f} | {row['strict_clean_delta_rmse']:.3f} |"
+        )
+    report_lines.extend(
+        [
+            "",
+            "## Strict Plus Input-Quality Clean Metrics",
+            "",
+            "| Model | Full MAE | Full RMSE | Anom MAE share | Anom MSE share | Clean MAE | Clean RMSE | delta MAE | delta RMSE |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for row in model_rows:
+        report_lines.append(
+            f"| {row['model']} | {row['full_mae']:.3f} | {row['full_rmse']:.3f} | "
+            f"{100 * row['strict_plus_input_clean_mae_error_share']:.2f}% | "
+            f"{100 * row['strict_plus_input_clean_mse_error_share']:.2f}% | "
+            f"{row['strict_plus_input_clean_mae']:.3f} | {row['strict_plus_input_clean_rmse']:.3f} | "
+            f"{row['strict_plus_input_clean_delta_mae']:.3f} | "
+            f"{row['strict_plus_input_clean_delta_rmse']:.3f} |"
         )
     report_lines.extend(
         [
@@ -341,8 +410,14 @@ def main() -> int:
             "contextual_low_q10": "same-slot same-weekday train median >= median_min and target <= train q10",
             "contextual_low_extreme": "contextual_low_q10 and target <= extreme_ratio * train median",
             "recent_drop": "max previous lookback target-node values >= min_prev, current <= ratio*prev_max, and prev_max-current >= min_delta",
+            "input_zero_target_half": "target-node input history has at least input_zero_target_min_count zero flow values",
+            "input_zero_target_all": "target-node input history has all zero flow values",
+            "input_zero_sample_high": "whole input sample has flow-zero share >= input_zero_sample_share",
+            "input_quality_union": "input_zero_target_half OR input_zero_sample_high",
             "strict_union": "contextual_low_extreme OR recent_drop",
             "broad_union": "contextual_low_q10 OR recent_drop",
+            "strict_plus_input_union": "strict_union OR input_quality_union",
+            "broad_plus_input_union": "broad_union OR input_quality_union",
         },
         "parameters": params,
         "overlap_contextual_low_q10_recent_drop": overlap_q10_drop,
