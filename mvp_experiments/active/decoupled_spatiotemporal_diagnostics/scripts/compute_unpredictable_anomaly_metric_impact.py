@@ -337,7 +337,7 @@ def main() -> int:
     ]
     for row in category_count_rows:
         report_lines.append(f"| {row['category']} | {row['points']} | {100 * row['point_share']:.3f}% |")
-        report_lines.extend(
+    report_lines.extend(
         [
             "",
             f"Overlap contextual_low_q10 and recent_drop: {overlap_q10_drop} points.",
