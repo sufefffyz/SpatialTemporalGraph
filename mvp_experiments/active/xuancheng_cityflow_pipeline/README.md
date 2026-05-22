@@ -111,8 +111,13 @@ the movement-count target:
   next `left/straight/right` intent.
 - Feature tensor: `road_feature`, shaped like DTIGNN road features:
   `time x road x (3 traffic channels + phase one-hot)`.
-- Sample tensor: `data_split_30to1.pkl`, with `train_x`, `val_x`, `test_x`
-  shaped `sample x road x feature x 30`, and targets shaped
+- Default sample representation: `split_index_30to1.npz`, which stores
+  chronological `30 -> 1` train/val/test indices over the compact
+  `road_feature` tensor. This avoids materializing tens of GB of overlapping
+  sliding windows for a full day.
+- Optional official-like sample tensor: set `COMPACT_ONLY=0` to write
+  `data_split_30to1.pkl`, with `train_x`, `val_x`, `test_x` shaped
+  `sample x road x feature x 30`, and targets shaped
   `sample x road x feature x 1`.
 - Phase caveat: Xuancheng uses CityFlow phase-id one-hot and phase-edge
   metadata. This is not the original DTIGNN grid's fixed N/E/S/W phase labels.

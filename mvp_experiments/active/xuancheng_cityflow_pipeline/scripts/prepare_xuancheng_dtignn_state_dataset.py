@@ -91,6 +91,14 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="For sparse masks, impute hidden roads from observed in-neighbors as DTIGNN prepareData.py does.",
     )
+    parser.add_argument(
+        "--compact-only",
+        action="store_true",
+        help=(
+            "Save compact road_feature plus split indices only. This avoids materializing "
+            "large sliding-window tensors."
+        ),
+    )
     parser.add_argument("--save-npz-split", action="store_true", help="Also save data_split.npz.")
     parser.add_argument(
         "--max-samples",
@@ -277,6 +285,26 @@ def make_samples(
     return x, y, timestamp
 
 
+def make_sample_index(
+    sequences: list[np.ndarray],
+    input_window: int,
+    horizon: int,
+) -> np.ndarray:
+    stamps: list[tuple[int, int]] = []
+    for seq_idx, seq in enumerate(sequences):
+        n_steps = seq.shape[0]
+        for target_idx in range(input_window + horizon - 1, n_steps):
+            input_start = target_idx - horizon - input_window + 1
+            target_start = target_idx - horizon + 1
+            target_end = target_start + horizon
+            if input_start < 0 or target_end > n_steps:
+                continue
+            stamps.append((seq_idx, target_start))
+    if not stamps:
+        raise ValueError("no samples indexed; input-window/horizon may be too large")
+    return np.asarray(stamps, dtype=np.int64)
+
+
 def split_indices(num_samples: int, ratios: tuple[float, float, float]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     train_count = int(num_samples * ratios[0])
     val_count = int(num_samples * ratios[1])
@@ -358,29 +386,16 @@ def main() -> int:
         phase_encoded_cells += encoded
         road_feature_sequences.append(np.concatenate([day.feature_lsr, phase_onehot], axis=2).astype(np.float32))
 
-    samples_x, samples_y, timestamp = make_samples(road_feature_sequences, args.input_window, args.horizon)
+    timestamp = make_sample_index(road_feature_sequences, args.input_window, args.horizon)
     if args.split_mode == "official_shuffle":
         rng = np.random.default_rng(args.shuffle_seed)
-        order = np.arange(samples_x.shape[0])
+        order = np.arange(timestamp.shape[0])
         rng.shuffle(order)
-        samples_x = samples_x[order]
-        samples_y = samples_y[order]
         timestamp = timestamp[order]
     if args.max_samples is not None and args.max_samples > 0:
-        samples_x = samples_x[: args.max_samples]
-        samples_y = samples_y[: args.max_samples]
         timestamp = timestamp[: args.max_samples]
 
-    train_idx, val_idx, test_idx = split_indices(samples_x.shape[0], split_ratios)
-    train_x_raw, val_x_raw, test_x_raw = samples_x[train_idx], samples_x[val_idx], samples_x[test_idx]
-    train_target, val_target, test_target = samples_y[train_idx], samples_y[val_idx], samples_y[test_idx]
-    rng = random.Random(args.shuffle_seed)
-    if args.apply_official_mask_op:
-        train_x_raw = apply_mask_op(train_x_raw, road_update, adj_road, rng)
-        train_target = apply_mask_op(train_target, road_update, adj_road, rng)
-        val_x_raw = apply_mask_op(val_x_raw, road_update, adj_road, rng)
-        test_x_raw = apply_mask_op(test_x_raw, road_update, adj_road, rng)
-    stats, train_x, val_x, test_x = normalize_inputs(train_x_raw, val_x_raw, test_x_raw)
+    train_idx, val_idx, test_idx = split_indices(timestamp.shape[0], split_ratios)
 
     state_payload = {
         "road_feature": road_feature_sequences,
@@ -397,22 +412,6 @@ def main() -> int:
         "feature_names": np.asarray([*TURN_NAMES, *[f"phase_{args.phase_start_id + i}" for i in range(phase_count)]]),
         "source_npz": [str(path) for path in paths],
         "target_semantics": args.feature_key,
-    }
-    data_split_payload = {
-        "train_x": train_x,
-        "train_target": train_target,
-        "train_timestamp": timestamp[train_idx],
-        "val_x": val_x,
-        "val_target": val_target,
-        "val_timestamp": timestamp[val_idx],
-        "test_x": test_x,
-        "test_target": test_target,
-        "test_timestamp": timestamp[test_idx],
-        "mean": stats["_mean"],
-        "std": stats["_std"],
-        "node_update": road_update,
-        "mask_or": mask_or,
-        "adj_road": adj_road,
     }
     relation_payload = {
         "road_dict_id2road": {int(i): str(road_id) for i, road_id in enumerate(road_ids)},
@@ -432,33 +431,115 @@ def main() -> int:
 
     state_pkl = output_dir / "road_state.pkl"
     split_pkl = output_dir / "data_split_30to1.pkl"
+    split_index_npz = output_dir / "split_index_30to1.npz"
     relation_pkl = output_dir / "roadnet_relation_xuancheng.pkl"
     with state_pkl.open("wb") as f:
         pickle.dump(state_payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-    with split_pkl.open("wb") as f:
-        pickle.dump(data_split_payload, f, protocol=pickle.HIGHEST_PROTOCOL)
     with relation_pkl.open("wb") as f:
         pickle.dump(relation_payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-    if args.save_npz_split:
-        np.savez_compressed(
-            output_dir / "data_split_30to1.npz",
-            train_x=train_x,
-            train_target=train_target,
-            train_timestamp=timestamp[train_idx],
-            val_x=val_x,
-            val_target=val_target,
-            val_timestamp=timestamp[val_idx],
-            test_x=test_x,
-            test_target=test_target,
-            test_timestamp=timestamp[test_idx],
-            mean=stats["_mean"],
-            std=stats["_std"],
-            node_update=road_update,
-            adj_road=adj_road,
-            road_ids=road_ids,
-            signal_ids=signal_ids,
-            feature_names=state_payload["feature_names"],
+    np.savez_compressed(
+        split_index_npz,
+        sample_timestamp=timestamp,
+        train_indices=train_idx,
+        val_indices=val_idx,
+        test_indices=test_idx,
+        train_timestamp=timestamp[train_idx],
+        val_timestamp=timestamp[val_idx],
+        test_timestamp=timestamp[test_idx],
+        input_window=np.asarray(args.input_window),
+        horizon=np.asarray(args.horizon),
+        split_mode=np.asarray(args.split_mode),
+        split_ratios=np.asarray(split_ratios, dtype=np.float32),
+        road_ids=road_ids,
+        signal_ids=signal_ids,
+        feature_names=state_payload["feature_names"],
+    )
+
+    materialized_files: dict[str, str] = {}
+    materialized_shapes: dict[str, list[int]] = {}
+    if not args.compact_only:
+        samples_x, samples_y, sample_timestamp_for_arrays = make_samples(
+            road_feature_sequences,
+            args.input_window,
+            args.horizon,
         )
+        if args.split_mode == "official_shuffle":
+            rng = np.random.default_rng(args.shuffle_seed)
+            order = np.arange(samples_x.shape[0])
+            rng.shuffle(order)
+            samples_x = samples_x[order]
+            samples_y = samples_y[order]
+            sample_timestamp_for_arrays = sample_timestamp_for_arrays[order]
+        if args.max_samples is not None and args.max_samples > 0:
+            samples_x = samples_x[: args.max_samples]
+            samples_y = samples_y[: args.max_samples]
+            sample_timestamp_for_arrays = sample_timestamp_for_arrays[: args.max_samples]
+
+        train_x_raw = samples_x[train_idx]
+        val_x_raw = samples_x[val_idx]
+        test_x_raw = samples_x[test_idx]
+        train_target = samples_y[train_idx]
+        val_target = samples_y[val_idx]
+        test_target = samples_y[test_idx]
+        rng_py = random.Random(args.shuffle_seed)
+        if args.apply_official_mask_op:
+            train_x_raw = apply_mask_op(train_x_raw, road_update, adj_road, rng_py)
+            train_target = apply_mask_op(train_target, road_update, adj_road, rng_py)
+            val_x_raw = apply_mask_op(val_x_raw, road_update, adj_road, rng_py)
+            test_x_raw = apply_mask_op(test_x_raw, road_update, adj_road, rng_py)
+        stats, train_x, val_x, test_x = normalize_inputs(train_x_raw, val_x_raw, test_x_raw)
+
+        data_split_payload = {
+            "train_x": train_x,
+            "train_target": train_target,
+            "train_timestamp": sample_timestamp_for_arrays[train_idx],
+            "val_x": val_x,
+            "val_target": val_target,
+            "val_timestamp": sample_timestamp_for_arrays[val_idx],
+            "test_x": test_x,
+            "test_target": test_target,
+            "test_timestamp": sample_timestamp_for_arrays[test_idx],
+            "mean": stats["_mean"],
+            "std": stats["_std"],
+            "node_update": road_update,
+            "mask_or": mask_or,
+            "adj_road": adj_road,
+        }
+        with split_pkl.open("wb") as f:
+            pickle.dump(data_split_payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+        materialized_files["data_split_pkl"] = str(split_pkl)
+        materialized_shapes.update(
+            {
+                "train_x": list(train_x.shape),
+                "train_target": list(train_target.shape),
+                "val_x": list(val_x.shape),
+                "val_target": list(val_target.shape),
+                "test_x": list(test_x.shape),
+                "test_target": list(test_target.shape),
+            }
+        )
+        if args.save_npz_split:
+            split_npz = output_dir / "data_split_30to1.npz"
+            np.savez_compressed(
+                split_npz,
+                train_x=train_x,
+                train_target=train_target,
+                train_timestamp=sample_timestamp_for_arrays[train_idx],
+                val_x=val_x,
+                val_target=val_target,
+                val_timestamp=sample_timestamp_for_arrays[val_idx],
+                test_x=test_x,
+                test_target=test_target,
+                test_timestamp=sample_timestamp_for_arrays[test_idx],
+                mean=stats["_mean"],
+                std=stats["_std"],
+                node_update=road_update,
+                adj_road=adj_road,
+                road_ids=road_ids,
+                signal_ids=signal_ids,
+                feature_names=state_payload["feature_names"],
+            )
+            materialized_files["data_split_npz"] = str(split_npz)
 
     traffic_all = np.concatenate([seq[:, :, :3].reshape(-1, 3) for seq in road_feature_sequences], axis=0)
     summary = {
@@ -488,15 +569,26 @@ def main() -> int:
             "val": int(len(val_idx)),
             "test": int(len(test_idx)),
         },
+        "compact_only": bool(args.compact_only),
         "shapes": {
             "road_feature_per_day": [list(seq.shape) for seq in road_feature_sequences],
-            "train_x": list(train_x.shape),
-            "train_target": list(train_target.shape),
-            "val_x": list(val_x.shape),
-            "val_target": list(val_target.shape),
-            "test_x": list(test_x.shape),
-            "test_target": list(test_target.shape),
+            **materialized_shapes,
         },
+        "estimated_materialized_float32_bytes": int(
+            timestamp.shape[0]
+            * len(road_ids)
+            * road_feature_sequences[0].shape[2]
+            * (args.input_window + args.horizon)
+            * 4
+        ),
+        "estimated_materialized_float32_gib": float(
+            timestamp.shape[0]
+            * len(road_ids)
+            * road_feature_sequences[0].shape[2]
+            * (args.input_window + args.horizon)
+            * 4
+            / (1024**3)
+        ),
         "missing_ratio": missing_label,
         "observed_roads": int(observed_mask.sum()),
         "masked_roads": int((~observed_mask).sum()),
@@ -515,9 +607,10 @@ def main() -> int:
         "road_signal_conflict_examples": road_signal_conflicts[:10],
         "files": {
             "road_state_pkl": str(state_pkl),
-            "data_split_pkl": str(split_pkl),
+            "split_index_npz": str(split_index_npz),
             "roadnet_relation_pkl": str(relation_pkl),
             "summary_json": str(output_dir / "summary.json"),
+            **materialized_files,
         },
         "deviation_notes": [
             "DTIGNN official datasets store grid-like raw intersection states and then build road_feature; here road_feature is built from Xuancheng CityFlow NPZ active road states.",
@@ -530,7 +623,9 @@ def main() -> int:
     write_json(output_dir / "summary.json", summary)
 
     print(f"[done] wrote {state_pkl}")
-    print(f"[done] wrote {split_pkl}")
+    print(f"[done] wrote {split_index_npz}")
+    if not args.compact_only:
+        print(f"[done] wrote {split_pkl}")
     print(f"[done] wrote {relation_pkl}")
     print(f"[done] wrote {output_dir / 'summary.json'}")
     print(

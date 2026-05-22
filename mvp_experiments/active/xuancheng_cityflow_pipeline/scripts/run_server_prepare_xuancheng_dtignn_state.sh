@@ -10,6 +10,7 @@ INPUT_WINDOW="${INPUT_WINDOW:-30}"
 HORIZON="${HORIZON:-1}"
 SPLIT_MODE="${SPLIT_MODE:-chronological}"
 MISSING_RATIO="${MISSING_RATIO:-dense}"
+COMPACT_ONLY="${COMPACT_ONLY:-1}"
 SAVE_NPZ_SPLIT="${SAVE_NPZ_SPLIT:-1}"
 DEFAULT_CITYFLOW_PYTHON="/home/yuzhang_fei/miniconda3/envs/xuancheng_cityflow/bin/python"
 if [[ -z "${PYTHON_BIN:-}" && -x "${DEFAULT_CITYFLOW_PYTHON}" ]]; then
@@ -27,6 +28,7 @@ echo "[info] output_dir=${OUTPUT_DIR}"
 echo "[info] feature_key=${FEATURE_KEY}"
 echo "[info] input_window=${INPUT_WINDOW} horizon=${HORIZON} split_mode=${SPLIT_MODE}"
 echo "[info] missing_ratio=${MISSING_RATIO}"
+echo "[info] compact_only=${COMPACT_ONLY}"
 echo "[info] python=${PYTHON_BIN}"
 
 ARGS=(
@@ -43,6 +45,9 @@ ARGS=(
 
 if [[ "${SAVE_NPZ_SPLIT}" == "1" ]]; then
   ARGS+=(--save-npz-split)
+fi
+if [[ "${COMPACT_ONLY}" == "1" ]]; then
+  ARGS+=(--compact-only)
 fi
 if [[ "${APPLY_OFFICIAL_MASK_OP:-0}" == "1" ]]; then
   ARGS+=(--apply-official-mask-op)
