@@ -327,6 +327,10 @@ def main() -> int:
         )
     (output_dir / "metric_impact_report.md").write_text("\n".join(report_lines) + "\n", encoding="utf-8")
 
+    params = {
+        key: str(value) if isinstance(value, Path) else value
+        for key, value in vars(args).items()
+    }
     manifest = {
         "dataset": summary["dataset_name"],
         "frequency_minutes": frequency,
@@ -340,7 +344,7 @@ def main() -> int:
             "strict_union": "contextual_low_extreme OR recent_drop",
             "broad_union": "contextual_low_q10 OR recent_drop",
         },
-        "parameters": vars(args),
+        "parameters": params,
         "overlap_contextual_low_q10_recent_drop": overlap_q10_drop,
         "overlap_contextual_low_extreme_recent_drop": overlap_extreme_drop,
         "outputs": [
