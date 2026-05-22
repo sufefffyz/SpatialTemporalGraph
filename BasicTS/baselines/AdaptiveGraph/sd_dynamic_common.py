@@ -33,6 +33,13 @@ def _env_int(name: str, default: int) -> int:
     return default if value is None or value == "" else int(value)
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
+    return value.lower() not in {"0", "false", "no", "off"}
+
+
 def _dynamic_graph_args(mode: str) -> dict:
     args = {
         "dist_mtx_path": os.environ.get("DYNAMIC_GRAPH_DIST_MTX", DEFAULT_OSRM_DISTANCE),
@@ -76,6 +83,7 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
     weight_mode = dynamic_graph["weight_mode"]
     radius_param = dynamic_graph["radius_param"]
     if backbone == "gwnet":
+        addaptadj = _env_bool("DYNAMIC_GWNET_ADDAPTADJ", False)
         model_arch = DynamicThresholdGraphWaveNet
         model_param = {
             "num_nodes": num_nodes,
@@ -83,7 +91,7 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
             "dynamic_graph": dynamic_graph,
             "dropout": 0.3,
             "gcn_bool": True,
-            "addaptadj": False,
+            "addaptadj": addaptadj,
             "aptinit": None,
             "in_dim": 2,
             "out_dim": output_len,
@@ -220,6 +228,8 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
         str(input_len),
         str(output_len),
     ]
+    if backbone == "gwnet" and model_param.get("addaptadj", False):
+        ckpt_name_parts.append("addaptadj")
     if run_tag:
         ckpt_name_parts.append(run_tag)
     cfg.TRAIN.CKPT_SAVE_DIR = os.path.join("checkpoints", model_arch.__name__, "_".join(ckpt_name_parts))
@@ -257,6 +267,10 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
         "WANDB_NAME",
         f"{model_arch.__name__}_{data_name}_{mode}_{weight_mode}_{radius_param}_{run_tag}".rstrip("_"),
     )
-    cfg.WANDB.GROUP = os.environ.get("WANDB_RUN_GROUP", f"sd_dynamic_threshold_{mode}_{weight_mode}_{radius_param}_{backbone}")
-    cfg.WANDB.TAGS = ["adaptive-threshold", "sd", "dynamic-threshold", mode, weight_mode, radius_param, backbone]
+    addaptadj_tag = "addaptadj" if backbone == "gwnet" and model_param.get("addaptadj", False) else "no-addaptadj"
+    cfg.WANDB.GROUP = os.environ.get(
+        "WANDB_RUN_GROUP",
+        f"sd_dynamic_threshold_{mode}_{weight_mode}_{radius_param}_{backbone}_{addaptadj_tag}",
+    )
+    cfg.WANDB.TAGS = ["adaptive-threshold", "sd", "dynamic-threshold", mode, weight_mode, radius_param, backbone, addaptadj_tag]
     return cfg
