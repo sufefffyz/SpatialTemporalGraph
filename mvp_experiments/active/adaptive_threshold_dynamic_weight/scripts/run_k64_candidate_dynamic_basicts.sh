@@ -7,8 +7,8 @@ GPU="${3:-0}"
 RUN_TAG="${4:-dynamic_threshold_k64_candidate_20260525}"
 PROJECT="${WANDB_PROJECT:-adaptive_threshold_topk_prior}"
 
-if [[ "${MODEL}" != "gwnet" && "${MODEL}" != "dcrnn" ]]; then
-  echo "Usage: $0 {gwnet|dcrnn} {osrmK64|gspK64} [gpu_id] [run_tag]" >&2
+if [[ "${MODEL}" != "gwnet" && "${MODEL}" != "stgcn" && "${MODEL}" != "dcrnn" ]]; then
+  echo "Usage: $0 {gwnet|stgcn|dcrnn} {osrmK64|gspK64} [gpu_id] [run_tag]" >&2
   exit 2
 fi
 case "${GRAPH}" in
@@ -33,6 +33,10 @@ case "${MODEL}" in
   gwnet)
     CFG="baselines/GWNet/SD_dynamic_threshold.py"
     MODEL_NAME="DynamicThresholdGraphWaveNet"
+    ;;
+  stgcn)
+    CFG="baselines/STGCN/SD_dynamic_threshold.py"
+    MODEL_NAME="DynamicThresholdSTGCN"
     ;;
   dcrnn)
     CFG="baselines/DCRNN/SD_dynamic_threshold.py"
