@@ -6,8 +6,7 @@ smooth top-k differ only in edge selection:
 
 * osrm_topk: per receiver node, keep the K smallest OSRM-distance neighbors.
 * gsp_smooth_topk: per receiver node, first restrict to a physical OSRM
-  candidate pool, then keep the K lowest training-signal roughness edges, with
-  optional distance and hub penalties.
+  candidate pool, then keep the K lowest training-signal roughness edges.
 
 Only the train split is used for signal roughness.
 """
@@ -42,8 +41,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--node-ids", type=Path, help="Optional node_id CSV.")
     parser.add_argument("--k-list", default="32,64")
     parser.add_argument("--gsp-pool-k", type=int, default=128, help="Physical nearest-neighbor pool before GSP pruning.")
-    parser.add_argument("--lambda-dist", type=float, default=0.25)
-    parser.add_argument("--lambda-hub", type=float, default=0.05)
+    parser.add_argument("--lambda-dist", type=float, default=0.25, help=argparse.SUPPRESS)
+    parser.add_argument("--lambda-hub", type=float, default=0.05, help=argparse.SUPPRESS)
     parser.add_argument("--sigma", type=float, default=None)
     parser.add_argument("--include-self", action="store_true", default=True)
     parser.add_argument("--copy-adj", action="store_true", help="Copy adj_mx.pkl instead of symlinking.")
@@ -183,8 +182,6 @@ def build_gsp_topk(
     signal: np.ndarray,
     k: int,
     pool_k: int,
-    lambda_dist: float,
-    lambda_hub: float,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     n = distance.shape[0]
     pool_i: list[np.ndarray] = []
@@ -202,26 +199,24 @@ def build_gsp_topk(
     cand_j = np.concatenate(pool_j)
     cand_dist = distance[cand_i, cand_j].astype(np.float64)
     rough = np.square(signal[:, cand_i] - signal[:, cand_j]).mean(axis=0).astype(np.float64)
-    src_pool_deg = np.bincount(cand_j, minlength=n).astype(np.float64)
     dist_scale = max(float(np.median(cand_dist[np.isfinite(cand_dist)])), 1e-6)
     rough_scale = max(float(np.median(rough[np.isfinite(rough)])), 1e-6)
-    score = -rough / rough_scale - lambda_dist * cand_dist / dist_scale - lambda_hub * np.log1p(src_pool_deg[cand_j])
 
     keep = np.zeros(cand_i.size, dtype=bool)
     for i in range(n):
         idx = np.flatnonzero(cand_i == i)
         if idx.size == 0:
             continue
-        chosen_local = topk_indices(score[idx], min(k, idx.size), largest=True)
+        chosen_local = topk_indices(rough[idx], min(k, idx.size), largest=False)
         keep[idx[chosen_local]] = True
 
     info = {
+        "selection_metric": "train_signal_roughness",
         "candidate_pool_edges": int(cand_i.size),
         "candidate_pool_avg_degree": float(cand_i.size / n),
         "roughness_scale": rough_scale,
+        "roughness_quantiles": [float(item) for item in np.percentile(rough, [0, 5, 25, 50, 75, 95, 100])],
         "distance_scale_m": dist_scale,
-        "lambda_dist": lambda_dist,
-        "lambda_hub": lambda_hub,
     }
     return cand_i[keep], cand_j[keep], info
 
@@ -315,8 +310,6 @@ def main() -> None:
             signal=signal,
             k=k,
             pool_k=max(args.gsp_pool_k, k),
-            lambda_dist=args.lambda_dist,
-            lambda_hub=args.lambda_hub,
         )
         variants.append(("gsp_smooth_topk", gsp_i, gsp_j, gsp_info))
 
@@ -364,8 +357,7 @@ def main() -> None:
         "base_dataset": str(args.base_dataset),
         "reference_adj": str(args.reference_adj) if args.reference_adj else None,
         "gsp_pool_k": args.gsp_pool_k,
-        "lambda_dist": args.lambda_dist,
-        "lambda_hub": args.lambda_hub,
+        "gsp_selection_metric": "train_signal_roughness",
         "graphs": graphs,
     }
     summary_path = args.output_graph_dir / f"{args.dataset}_topk_prior_graph_summary.json"
