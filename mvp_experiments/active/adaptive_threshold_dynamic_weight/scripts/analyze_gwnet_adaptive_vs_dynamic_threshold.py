@@ -172,6 +172,7 @@ def _prepare_runner(
     seed: int,
     gpu: str,
     device: str,
+    split: str,
     basic_ts_dir: Path,
 ):
     os.environ.setdefault("WANDB_MODE", "disabled")
@@ -192,6 +193,13 @@ def _prepare_runner(
     cfg = init_cfg(cfg_path, save=True)
     runner = cfg["RUNNER"](cfg)
     runner.init_test(cfg)
+    if split == "train":
+        cfg.TRAIN.DATA.SHUFFLE = False
+        runner.test_data_loader = runner.build_train_data_loader(cfg)
+    elif split == "valid":
+        runner.test_data_loader = runner.build_val_data_loader(cfg)
+    elif split != "test":
+        raise ValueError(f"Unsupported split: {split}")
     runner.load_model(ckpt_path, strict=True)
     runner.model.eval()
     return cfg, runner
@@ -205,6 +213,7 @@ def _prepare_original_runner(args: argparse.Namespace, basic_ts_dir: Path):
         args.seed,
         args.gpu,
         args.device,
+        args.split,
         basic_ts_dir,
     )
 
@@ -220,6 +229,7 @@ def _prepare_dynamic_runner(args: argparse.Namespace, basic_ts_dir: Path):
         args.seed,
         args.gpu,
         args.device,
+        args.split,
         basic_ts_dir,
     )
 
@@ -366,12 +376,20 @@ def main() -> None:
     parser.add_argument("--dynamic-ckpt", default=str(basic_ts / "checkpoints/DynamicThresholdGraphWaveNet/SD_dynamic_threshold_hard_exp_tanh_gwnet_100_12_12_addaptadj_dynamic_threshold_hard_addaptadj_20260522_gpu1/94d620cfd224e6d2cf7cd2c344b1a3cd/DynamicThresholdGraphWaveNet_best_val_MAE.pt"))
     parser.add_argument("--dynamic-run-tag", default="dynamic_threshold_hard_addaptadj_20260522_gpu1")
     parser.add_argument("--dynamic-addaptadj", action="store_true", default=True)
-    parser.add_argument("--output-dir", default=str(repo_root / "mvp_experiments/active/adaptive_threshold_dynamic_weight/results/gwnet_original_adaptive_vs_dynamic_threshold_addaptadj_live_20260525"))
+    parser.add_argument("--split", choices=["train", "valid", "test"], default="test")
+    parser.add_argument("--output-dir", default=None)
     parser.add_argument("--seed", type=int, default=2023)
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--device", default="cuda:0")
     args = parser.parse_args()
 
+    if args.output_dir is None:
+        split_suffix = "live" if args.split == "test" else f"{args.split}_live"
+        args.output_dir = str(
+            repo_root
+            / "mvp_experiments/active/adaptive_threshold_dynamic_weight/results"
+            / f"gwnet_original_adaptive_vs_dynamic_threshold_addaptadj_{split_suffix}_20260525"
+        )
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -420,6 +438,7 @@ def main() -> None:
 
     summary = {
         "target_match": target_match,
+        "split": args.split,
         "num_samples": int(num_samples),
         "num_nodes": num_nodes,
         "overall": {
