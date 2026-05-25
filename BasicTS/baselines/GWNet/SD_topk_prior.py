@@ -6,6 +6,7 @@ from .SD_osrm_gaussian_global import (
     GRAPH_TAG,
     INPUT_LEN,
     MODEL_ARCH,
+    MODEL_PARAM,
     NUM_EPOCHS,
     OUTPUT_LEN,
     RUN_TAG,
