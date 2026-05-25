@@ -178,7 +178,7 @@ def main() -> int:
 
     road_ids = np.asarray(archive["road_ids"]).astype(str)
     adj = make_adjacency(archive)
-    road_id_to_idx = {road_id: idx for idx, road_id in enumerate(road_ids)}
+    road_id_to_idx = {str(road_id): int(idx) for idx, road_id in enumerate(road_ids)}
 
     all_summary: dict[str, dict] = {}
     for task in tasks:
