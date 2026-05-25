@@ -158,6 +158,7 @@ class DynamicThresholdSupport(nn.Module):
         self_loops: bool = True,
         straight_through: bool = True,
         edge_chunk_size: int = 2048,
+        edge_output: bool = False,
     ) -> None:
         super().__init__()
         if mode not in {"soft", "hard"}:
@@ -183,7 +184,7 @@ class DynamicThresholdSupport(nn.Module):
         self.self_loops = bool(self_loops)
         self.straight_through = bool(straight_through)
         self.edge_chunk_size = int(edge_chunk_size)
-        self.edge_output = candidate_adj_path is not None
+        self.edge_output = bool(edge_output)
 
         dist = load_distance_matrix(dist_mtx_path, self.num_nodes, dist_norm)
         self.register_buffer("distance", dist)

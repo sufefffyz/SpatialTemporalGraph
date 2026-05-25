@@ -53,6 +53,7 @@ def _dynamic_graph_args(mode: str) -> dict:
         "weight_mode": os.environ.get("DYNAMIC_GRAPH_WEIGHT_MODE", "binary"),
         "self_loops": os.environ.get("DYNAMIC_GRAPH_SELF_LOOPS", "1") != "0",
         "straight_through": os.environ.get("DYNAMIC_GRAPH_STRAIGHT_THROUGH", "1") != "0",
+        "edge_output": _env_bool("DYNAMIC_GRAPH_EDGE_OUTPUT", False),
     }
     if os.environ.get("DYNAMIC_GRAPH_CANDIDATE_ADJ"):
         args["candidate_adj_path"] = os.environ["DYNAMIC_GRAPH_CANDIDATE_ADJ"]
