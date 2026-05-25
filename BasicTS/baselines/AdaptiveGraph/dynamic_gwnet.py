@@ -4,12 +4,14 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from .dynamic_support import DynamicThresholdSupport
+from .dynamic_support import DynamicEdgeSupport, DynamicThresholdSupport, dynamic_edge_support_matmul_4d
 
 
 class DynamicNConv(nn.Module):
-    def forward(self, x: torch.Tensor, support: torch.Tensor) -> torch.Tensor:
-        if support.dim() == 2:
+    def forward(self, x: torch.Tensor, support: torch.Tensor | DynamicEdgeSupport) -> torch.Tensor:
+        if isinstance(support, DynamicEdgeSupport):
+            x = dynamic_edge_support_matmul_4d(support, x)
+        elif support.dim() == 2:
             x = torch.einsum("bcvl,vw->bcwl", x, support.to(x.device))
         elif support.dim() == 3:
             x = torch.einsum("bcvl,bvw->bcwl", x, support.to(x.device))

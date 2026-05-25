@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -18,8 +19,17 @@ def make_distance(path: Path, n: int) -> None:
     np.save(path, dist)
 
 
-def dynamic_args(path: Path, mode: str) -> dict:
-    return {
+def make_candidate(path: Path, n: int, k: int = 3) -> None:
+    adj = np.zeros((n, n), dtype="float32")
+    for i in range(n):
+        for step in range(1, k + 1):
+            adj[i, (i + step) % n] = 1.0
+    with path.open("wb") as f:
+        pickle.dump(adj, f)
+
+
+def dynamic_args(path: Path, mode: str, candidate_path: Path | None = None) -> dict:
+    args = {
         "dist_mtx_path": str(path),
         "mode": mode,
         "d_model": 8,
@@ -28,6 +38,9 @@ def dynamic_args(path: Path, mode: str) -> dict:
         "temperature": 0.1,
         "dist_norm": "max",
     }
+    if candidate_path is not None:
+        args["candidate_adj_path"] = str(candidate_path)
+    return args
 
 
 def main() -> None:
@@ -40,12 +53,35 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         dist_path = Path(tmp) / "dist.npy"
+        candidate_path = Path(tmp) / "adj_mx.pkl"
         make_distance(dist_path, nodes)
+        make_candidate(candidate_path, nodes)
         for mode in ("soft", "hard"):
+            for candidate in (None, candidate_path):
+                candidate_label = "candidate" if candidate is not None else "dense"
+                graph_args = dynamic_args(dist_path, mode, candidate)
+                support = DynamicThresholdGraphWaveNet(
+                    num_nodes=nodes,
+                    seq_len=seq_len,
+                    dynamic_graph=graph_args,
+                    in_dim=2,
+                    out_dim=horizon,
+                    residual_channels=4,
+                    dilation_channels=4,
+                    skip_channels=8,
+                    end_channels=16,
+                    blocks=4,
+                    layers=2,
+                ).dynamic_support.transition_supports(history_2c)
+                if candidate is None:
+                    assert isinstance(support[0], torch.Tensor), (mode, candidate_label, "support_type")
+                else:
+                    assert not isinstance(support[0], torch.Tensor), (mode, candidate_label, "support_type")
+
             gwnet = DynamicThresholdGraphWaveNet(
                 num_nodes=nodes,
                 seq_len=seq_len,
-                dynamic_graph=dynamic_args(dist_path, mode),
+                dynamic_graph=dynamic_args(dist_path, mode, candidate_path),
                 in_dim=2,
                 out_dim=horizon,
                 residual_channels=4,
@@ -59,7 +95,7 @@ def main() -> None:
             assert tuple(y.shape) == (batch, horizon, nodes, 1), (mode, "gwnet", tuple(y.shape))
 
             dcrnn = DynamicThresholdDCRNN(
-                dynamic_graph=dynamic_args(dist_path, mode),
+                dynamic_graph=dynamic_args(dist_path, mode, candidate_path),
                 cl_decay_steps=2000,
                 horizon=horizon,
                 input_dim=2,

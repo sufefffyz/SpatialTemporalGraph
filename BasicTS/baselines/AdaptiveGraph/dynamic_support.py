@@ -61,6 +61,75 @@ def load_candidate_mask(path: str | None, num_nodes: int) -> torch.Tensor:
     return torch.from_numpy(mask)
 
 
+class DynamicEdgeSupport:
+    """Batch-conditioned sparse support on a fixed candidate edge set.
+
+    ``edge_index[0]`` stores source nodes and ``edge_index[1]`` stores target
+    nodes for the support matrix used by graph convolution. ``edge_weight`` is
+    batch-dependent with shape ``[B, E]``.
+    """
+
+    def __init__(
+        self,
+        edge_index: torch.Tensor,
+        edge_weight: torch.Tensor,
+        num_nodes: int,
+        chunk_size: int = 2048,
+    ) -> None:
+        self.edge_index = edge_index
+        self.edge_weight = edge_weight
+        self.num_nodes = int(num_nodes)
+        self.chunk_size = int(chunk_size)
+
+
+def dynamic_edge_support_matmul_3d(support: DynamicEdgeSupport, x: torch.Tensor) -> torch.Tensor:
+    """Apply a dynamic sparse support to ``x`` with shape ``[B, N, F]``."""
+
+    if x.dim() != 3:
+        raise ValueError(f"Expected x rank 3, got {x.dim()}.")
+    batch_size, num_nodes, features = x.shape
+    if num_nodes != support.num_nodes:
+        raise ValueError(f"x has {num_nodes} nodes, support has {support.num_nodes}.")
+
+    edge_index = support.edge_index.to(x.device)
+    edge_weight = support.edge_weight.to(x.device)
+    src, dst = edge_index[0], edge_index[1]
+    out = x.new_zeros(batch_size, num_nodes, features)
+    chunk_size = max(1, support.chunk_size)
+    for start in range(0, src.numel(), chunk_size):
+        end = min(start + chunk_size, src.numel())
+        src_chunk = src[start:end]
+        dst_chunk = dst[start:end]
+        msg = x.index_select(1, src_chunk) * edge_weight[:, start:end].unsqueeze(-1)
+        dst_index = dst_chunk.view(1, -1, 1).expand(batch_size, -1, features)
+        out.scatter_add_(1, dst_index, msg)
+    return out
+
+
+def dynamic_edge_support_matmul_4d(support: DynamicEdgeSupport, x: torch.Tensor) -> torch.Tensor:
+    """Apply a dynamic sparse support to ``x`` with shape ``[B, C, N, T]``."""
+
+    if x.dim() != 4:
+        raise ValueError(f"Expected x rank 4, got {x.dim()}.")
+    batch_size, channels, num_nodes, steps = x.shape
+    if num_nodes != support.num_nodes:
+        raise ValueError(f"x has {num_nodes} nodes, support has {support.num_nodes}.")
+
+    edge_index = support.edge_index.to(x.device)
+    edge_weight = support.edge_weight.to(x.device)
+    src, dst = edge_index[0], edge_index[1]
+    out = x.new_zeros(batch_size, channels, num_nodes, steps)
+    chunk_size = max(1, support.chunk_size)
+    for start in range(0, src.numel(), chunk_size):
+        end = min(start + chunk_size, src.numel())
+        src_chunk = src[start:end]
+        dst_chunk = dst[start:end]
+        msg = x.index_select(2, src_chunk) * edge_weight[:, start:end].view(batch_size, 1, -1, 1)
+        dst_index = dst_chunk.view(1, 1, -1, 1).expand(batch_size, channels, -1, steps)
+        out.scatter_add_(2, dst_index, msg)
+    return out
+
+
 class DynamicThresholdSupport(nn.Module):
     """FlowNet-style node-wise dynamic radius converted into graph supports.
 
@@ -89,6 +158,7 @@ class DynamicThresholdSupport(nn.Module):
         normalization: str = "transition",
         self_loops: bool = True,
         straight_through: bool = True,
+        edge_chunk_size: int = 2048,
     ) -> None:
         super().__init__()
         if mode not in {"soft", "hard"}:
@@ -113,12 +183,18 @@ class DynamicThresholdSupport(nn.Module):
         self.normalization = normalization
         self.self_loops = bool(self_loops)
         self.straight_through = bool(straight_through)
+        self.edge_chunk_size = int(edge_chunk_size)
+        self.edge_output = candidate_adj_path is not None
 
         dist = load_distance_matrix(dist_mtx_path, self.num_nodes, dist_norm)
         self.register_buffer("distance", dist)
         self.register_buffer("eye", torch.eye(self.num_nodes, dtype=torch.float32))
         candidate_mask = load_candidate_mask(candidate_adj_path, self.num_nodes)
         self.register_buffer("candidate_mask", candidate_mask)
+        candidate_src, candidate_dst = torch.nonzero(candidate_mask > 0, as_tuple=True)
+        self.register_buffer("candidate_src", candidate_src.long())
+        self.register_buffer("candidate_dst", candidate_dst.long())
+        self.register_buffer("self_loop_nodes", torch.arange(self.num_nodes, dtype=torch.long))
 
         if init_radius is None:
             init_radius = self._degree_to_radius(dist, target_avg_degree, candidate_mask)
@@ -206,11 +282,78 @@ class DynamicThresholdSupport(nn.Module):
             mask = mask * (1.0 - self.eye.unsqueeze(0))
         return mask * self.base_weight.unsqueeze(0)
 
+    def _candidate_edge_weights(self, history_data: torch.Tensor) -> torch.Tensor:
+        radius = self._node_radius(history_data)
+        src = self.candidate_src
+        dst = self.candidate_dst
+        logits = (radius[:, src] - self.distance[src, dst].unsqueeze(0)) / max(self.temperature, 1e-6)
+        soft_mask = torch.sigmoid(logits)
+        if self.mode == "hard":
+            hard_mask = (logits >= 0).to(soft_mask.dtype)
+            if self.straight_through:
+                mask = hard_mask + soft_mask - soft_mask.detach()
+            else:
+                mask = hard_mask
+        else:
+            mask = soft_mask
+        return mask * self.base_weight[src, dst].unsqueeze(0)
+
+    def _transition_edge_supports(self, history_data: torch.Tensor) -> list[DynamicEdgeSupport]:
+        edge_weight = self._candidate_edge_weights(history_data)
+        batch_size = edge_weight.shape[0]
+        src = self.candidate_src
+        dst = self.candidate_dst
+
+        row_sum = edge_weight.new_zeros(batch_size, self.num_nodes)
+        row_sum.scatter_add_(1, src.unsqueeze(0).expand(batch_size, -1), edge_weight)
+        col_sum = edge_weight.new_zeros(batch_size, self.num_nodes)
+        col_sum.scatter_add_(1, dst.unsqueeze(0).expand(batch_size, -1), edge_weight)
+
+        if self.self_loops:
+            loop_weight = edge_weight.new_ones(batch_size, self.num_nodes)
+            row_sum = row_sum + loop_weight
+            col_sum = col_sum + loop_weight
+            loop_nodes = self.self_loop_nodes
+            forward_edge_index = torch.stack(
+                [torch.cat([dst, loop_nodes]), torch.cat([src, loop_nodes])],
+                dim=0,
+            )
+            backward_edge_index = torch.stack(
+                [torch.cat([src, loop_nodes]), torch.cat([dst, loop_nodes])],
+                dim=0,
+            )
+            forward_weight = torch.cat(
+                [
+                    edge_weight / row_sum[:, src].clamp_min(1e-6),
+                    loop_weight / row_sum.clamp_min(1e-6),
+                ],
+                dim=1,
+            )
+            backward_weight = torch.cat(
+                [
+                    edge_weight / col_sum[:, dst].clamp_min(1e-6),
+                    loop_weight / col_sum.clamp_min(1e-6),
+                ],
+                dim=1,
+            )
+        else:
+            forward_edge_index = torch.stack([dst, src], dim=0)
+            backward_edge_index = torch.stack([src, dst], dim=0)
+            forward_weight = edge_weight / row_sum[:, src].clamp_min(1e-6)
+            backward_weight = edge_weight / col_sum[:, dst].clamp_min(1e-6)
+
+        return [
+            DynamicEdgeSupport(forward_edge_index, forward_weight, self.num_nodes, self.edge_chunk_size),
+            DynamicEdgeSupport(backward_edge_index, backward_weight, self.num_nodes, self.edge_chunk_size),
+        ]
+
     @staticmethod
     def _row_normalize(weights: torch.Tensor) -> torch.Tensor:
         return weights / weights.sum(dim=-1, keepdim=True).clamp_min(1e-6)
 
-    def transition_supports(self, history_data: torch.Tensor) -> list[torch.Tensor]:
+    def transition_supports(self, history_data: torch.Tensor) -> list[torch.Tensor | DynamicEdgeSupport]:
+        if self.edge_output:
+            return self._transition_edge_supports(history_data)
         weights = self._masked_weights(history_data)
         forward_adj = self._row_normalize(weights)
         backward_adj = self._row_normalize(weights.transpose(-1, -2))

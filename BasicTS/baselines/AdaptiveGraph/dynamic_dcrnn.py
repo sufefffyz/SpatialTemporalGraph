@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from .dynamic_support import DynamicThresholdSupport
+from .dynamic_support import DynamicEdgeSupport, DynamicThresholdSupport, dynamic_edge_support_matmul_3d
 
 
 class LayerParams:
@@ -71,7 +71,9 @@ class DynamicDCGRUCell(nn.Module):
         return value
 
     @staticmethod
-    def _support_mul(support: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+    def _support_mul(support: torch.Tensor | DynamicEdgeSupport, x: torch.Tensor) -> torch.Tensor:
+        if isinstance(support, DynamicEdgeSupport):
+            return dynamic_edge_support_matmul_3d(support, x)
         support = support.to(x.device)
         if support.dim() == 2:
             return torch.einsum("ij,bjf->bif", support, x)
