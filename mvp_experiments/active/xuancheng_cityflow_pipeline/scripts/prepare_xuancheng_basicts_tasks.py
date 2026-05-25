@@ -192,7 +192,9 @@ def main() -> int:
 
             save_memmap(out_dir / "data.dat", data)
             with (out_dir / "adj_mx.pkl").open("wb") as f:
-                pickle.dump((road_ids.tolist(), road_id_to_idx, adj), f, protocol=pickle.HIGHEST_PROTOCOL)
+                # Store adjacency as nested Python lists for NumPy 1/2 pickle compatibility
+                # across the CityFlow generation env and the STGraph training env.
+                pickle.dump((road_ids.tolist(), road_id_to_idx, adj.tolist()), f, protocol=pickle.HIGHEST_PROTOCOL)
             write_meta_csv(out_dir / "meta.csv", archive)
 
             input_len = args.input_len_10s if resolution_label == "10S" else args.input_len_5min
