@@ -64,9 +64,8 @@ def load_candidate_mask(path: str | None, num_nodes: int) -> torch.Tensor:
 class DynamicEdgeSupport:
     """Batch-conditioned sparse support on a fixed candidate edge set.
 
-    ``edge_index[0]`` stores source nodes and ``edge_index[1]`` stores target
-    nodes for the support matrix used by graph convolution. ``edge_weight`` is
-    batch-dependent with shape ``[B, E]``.
+    ``edge_index[0]`` and ``edge_index[1]`` store the row and column indices of
+    the support matrix. ``edge_weight`` is batch-dependent with shape ``[B, E]``.
     """
 
     def __init__(
@@ -93,15 +92,15 @@ def dynamic_edge_support_matmul_3d(support: DynamicEdgeSupport, x: torch.Tensor)
 
     edge_index = support.edge_index.to(x.device)
     edge_weight = support.edge_weight.to(x.device)
-    src, dst = edge_index[0], edge_index[1]
+    row, col = edge_index[0], edge_index[1]
     out = x.new_zeros(batch_size, num_nodes, features)
     chunk_size = max(1, support.chunk_size)
-    for start in range(0, src.numel(), chunk_size):
-        end = min(start + chunk_size, src.numel())
-        src_chunk = src[start:end]
-        dst_chunk = dst[start:end]
-        msg = x.index_select(1, src_chunk) * edge_weight[:, start:end].unsqueeze(-1)
-        dst_index = dst_chunk.view(1, -1, 1).expand(batch_size, -1, features)
+    for start in range(0, row.numel(), chunk_size):
+        end = min(start + chunk_size, row.numel())
+        row_chunk = row[start:end]
+        col_chunk = col[start:end]
+        msg = x.index_select(1, col_chunk) * edge_weight[:, start:end].unsqueeze(-1)
+        dst_index = row_chunk.view(1, -1, 1).expand(batch_size, -1, features)
         out.scatter_add_(1, dst_index, msg)
     return out
 
