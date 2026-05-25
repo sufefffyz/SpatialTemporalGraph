@@ -13,15 +13,17 @@ CFG.DESCRIPTION = f"GraphWaveNet SD timing ablation ({VARIANT})"
 CFG.TRAIN.NUM_EPOCHS = NUM_EPOCHS
 CFG.TEST.INTERVAL = NUM_EPOCHS
 
-if VARIANT in {"no_wandb", "fast_env", "buffered_support"}:
+if VARIANT in {"no_wandb", "tf32_only", "nondet_only", "fast_env", "buffered_support"}:
     CFG.RUNNER = SimpleTimeSeriesForecastingRunner
 elif VARIANT == "baseline":
     CFG.RUNNER = WandBTimeSeriesForecastingRunner
 else:
     raise ValueError(f"Unknown GWNET_TIMING_VARIANT={VARIANT}")
 
-if VARIANT in {"fast_env", "buffered_support"}:
+if VARIANT in {"tf32_only", "fast_env", "buffered_support"}:
     CFG.ENV.TF32 = True
+
+if VARIANT in {"nondet_only", "fast_env", "buffered_support"}:
     CFG.ENV.DETERMINISTIC = False
     CFG.ENV.CUDNN.DETERMINISTIC = False
     CFG.ENV.CUDNN.BENCHMARK = True
