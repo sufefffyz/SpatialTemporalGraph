@@ -191,7 +191,8 @@ def _prepare_dynamic_runner(args: argparse.Namespace, basic_ts_dir: Path):
     os.chdir(basic_ts_dir)
 
     from easytorch.config import init_cfg
-    from easytorch.device import set_device_type, set_visible_devices
+    from easytorch.device import set_device_type
+    from easytorch.utils import set_visible_devices
 
     set_device_type("gpu" if args.device.startswith("cuda") else "cpu")
     if args.device.startswith("cuda"):
