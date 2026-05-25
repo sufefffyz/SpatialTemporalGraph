@@ -76,9 +76,12 @@ def load_node_ids(path: Path | None, n: int) -> list[str] | None:
         return None
     with path.open(newline="") as fp:
         reader = csv.DictReader(fp)
-        if reader.fieldnames is None or "node_id" not in reader.fieldnames:
-            raise ValueError(f"{path} must contain a node_id column.")
-        node_ids = [str(row["node_id"]) for row in reader]
+        if reader.fieldnames is None:
+            raise ValueError(f"{path} must contain a node_id or ID column.")
+        id_column = "node_id" if "node_id" in reader.fieldnames else "ID" if "ID" in reader.fieldnames else None
+        if id_column is None:
+            raise ValueError(f"{path} must contain a node_id or ID column.")
+        node_ids = [str(row[id_column]) for row in reader]
     if len(node_ids) != n:
         raise ValueError(f"node ID count {len(node_ids)} != distance size {n}.")
     return node_ids
