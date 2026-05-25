@@ -54,6 +54,8 @@ def _dynamic_graph_args(mode: str) -> dict:
         "self_loops": os.environ.get("DYNAMIC_GRAPH_SELF_LOOPS", "1") != "0",
         "straight_through": os.environ.get("DYNAMIC_GRAPH_STRAIGHT_THROUGH", "1") != "0",
     }
+    if os.environ.get("DYNAMIC_GRAPH_CANDIDATE_ADJ"):
+        args["candidate_adj_path"] = os.environ["DYNAMIC_GRAPH_CANDIDATE_ADJ"]
     if os.environ.get("DYNAMIC_GRAPH_INIT_RADIUS"):
         args["init_radius"] = float(os.environ["DYNAMIC_GRAPH_INIT_RADIUS"])
     if os.environ.get("DYNAMIC_GRAPH_GAUSSIAN_SIGMA"):
@@ -68,6 +70,7 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
         raise ValueError(f"DYNAMIC_GRAPH_MODE must be soft or hard, got {mode}.")
 
     data_name = os.environ.get("BASICTS_DATA_NAME", "SD")
+    graph_tag = os.environ.get("BASICTS_GRAPH_TAG", "").strip()
     desc_path = Path("datasets") / data_name / "desc.json"
     desc = json.loads(desc_path.read_text(encoding="utf-8"))
     regular_settings = desc["regular_settings"]
@@ -228,6 +231,8 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
         str(input_len),
         str(output_len),
     ]
+    if graph_tag:
+        ckpt_name_parts.append(graph_tag)
     if backbone == "gwnet" and model_param.get("addaptadj", False):
         ckpt_name_parts.append("addaptadj")
     if run_tag:
@@ -265,12 +270,25 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
     cfg.WANDB.MODE = os.environ.get("WANDB_MODE", "online")
     cfg.WANDB.RUN_NAME = os.environ.get(
         "WANDB_NAME",
-        f"{model_arch.__name__}_{data_name}_{mode}_{weight_mode}_{radius_param}_{run_tag}".rstrip("_"),
+        f"{model_arch.__name__}_{data_name}_{graph_tag}_{mode}_{weight_mode}_{radius_param}_{run_tag}".rstrip("_"),
     )
     addaptadj_tag = "addaptadj" if backbone == "gwnet" and model_param.get("addaptadj", False) else "no-addaptadj"
+    candidate_tag = "candidate-k64" if dynamic_graph.get("candidate_adj_path") else "full-pair"
     cfg.WANDB.GROUP = os.environ.get(
         "WANDB_RUN_GROUP",
-        f"sd_dynamic_threshold_{mode}_{weight_mode}_{radius_param}_{backbone}_{addaptadj_tag}",
+        f"sd_dynamic_threshold_{mode}_{weight_mode}_{radius_param}_{backbone}_{addaptadj_tag}_{candidate_tag}",
     )
-    cfg.WANDB.TAGS = ["adaptive-threshold", "sd", "dynamic-threshold", mode, weight_mode, radius_param, backbone, addaptadj_tag]
+    cfg.WANDB.TAGS = [
+        "adaptive-threshold",
+        "sd",
+        "dynamic-threshold",
+        mode,
+        weight_mode,
+        radius_param,
+        backbone,
+        addaptadj_tag,
+        candidate_tag,
+    ]
+    if graph_tag:
+        cfg.WANDB.TAGS.append(graph_tag)
     return cfg

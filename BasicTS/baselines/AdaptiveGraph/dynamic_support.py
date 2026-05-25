@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +39,28 @@ def load_distance_matrix(path: str, num_nodes: int, normalize: str = "max") -> t
     return torch.from_numpy(dist.astype("float32"))
 
 
+def load_candidate_mask(path: str | None, num_nodes: int) -> torch.Tensor:
+    if not path:
+        return torch.ones((num_nodes, num_nodes), dtype=torch.float32) - torch.eye(num_nodes, dtype=torch.float32)
+    matrix_path = Path(path).expanduser()
+    if not matrix_path.exists():
+        raise FileNotFoundError(f"Dynamic graph candidate adjacency not found: {matrix_path}")
+    with matrix_path.open("rb") as f:
+        adj = pickle.load(f, encoding="latin1")
+    if isinstance(adj, (list, tuple)):
+        if len(adj) == 3:
+            adj = adj[2]
+        elif len(adj) == 1:
+            adj = adj[0]
+    adj = np.asarray(adj, dtype="float32")
+    if adj.shape[0] < num_nodes or adj.shape[1] < num_nodes:
+        raise ValueError(f"Candidate adjacency shape {adj.shape} is smaller than num_nodes={num_nodes}.")
+    adj = adj[:num_nodes, :num_nodes]
+    mask = (adj > 0).astype("float32")
+    np.fill_diagonal(mask, 0.0)
+    return torch.from_numpy(mask)
+
+
 class DynamicThresholdSupport(nn.Module):
     """FlowNet-style node-wise dynamic radius converted into graph supports.
 
@@ -52,6 +75,7 @@ class DynamicThresholdSupport(nn.Module):
         num_nodes: int,
         seq_len: int,
         dist_mtx_path: str,
+        candidate_adj_path: str | None = None,
         mode: str = "hard",
         d_model: int = 32,
         target_avg_degree: float = 24.1885,
@@ -93,9 +117,11 @@ class DynamicThresholdSupport(nn.Module):
         dist = load_distance_matrix(dist_mtx_path, self.num_nodes, dist_norm)
         self.register_buffer("distance", dist)
         self.register_buffer("eye", torch.eye(self.num_nodes, dtype=torch.float32))
+        candidate_mask = load_candidate_mask(candidate_adj_path, self.num_nodes)
+        self.register_buffer("candidate_mask", candidate_mask)
 
         if init_radius is None:
-            init_radius = self._degree_to_radius(dist, target_avg_degree)
+            init_radius = self._degree_to_radius(dist, target_avg_degree, candidate_mask)
         self.init_radius = float(init_radius)
         if self.weight_mode == "gaussian":
             sigma = float(gaussian_sigma) if gaussian_sigma is not None else max(self.init_radius, 1e-3)
@@ -120,12 +146,19 @@ class DynamicThresholdSupport(nn.Module):
             nn.init.zeros_(self.radius_head.bias)
 
     @staticmethod
-    def _degree_to_radius(distance: torch.Tensor, target_avg_degree: float) -> float:
+    def _degree_to_radius(
+        distance: torch.Tensor,
+        target_avg_degree: float,
+        candidate_mask: torch.Tensor | None = None,
+    ) -> float:
         n = int(distance.shape[0])
         target_edges = int(round(float(target_avg_degree) * n))
         if target_edges <= 0:
             return 1e-3
-        mask = ~torch.eye(n, dtype=torch.bool, device=distance.device)
+        if candidate_mask is None:
+            mask = ~torch.eye(n, dtype=torch.bool, device=distance.device)
+        else:
+            mask = candidate_mask.to(device=distance.device, dtype=torch.bool)
         values = distance[mask]
         values = values[torch.isfinite(values)]
         values = values[values > 0]
@@ -166,6 +199,7 @@ class DynamicThresholdSupport(nn.Module):
         else:
             mask = soft_mask
 
+        mask = mask * self.candidate_mask.unsqueeze(0)
         if self.self_loops:
             mask = mask * (1.0 - self.eye.unsqueeze(0)) + self.eye.unsqueeze(0)
         else:
