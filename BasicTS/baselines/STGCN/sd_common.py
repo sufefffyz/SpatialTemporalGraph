@@ -116,11 +116,11 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
 
     cfg.ENV = EasyDict()
     cfg.ENV.SEED = int(os.environ.get("BASICTS_SEED", "2023"))
-    cfg.ENV.DETERMINISTIC = True
+    cfg.ENV.DETERMINISTIC = False
     cfg.ENV.CUDNN = EasyDict()
     cfg.ENV.CUDNN.ENABLED = True
     cfg.ENV.CUDNN.BENCHMARK = True
-    cfg.ENV.CUDNN.DETERMINISTIC = True
+    cfg.ENV.CUDNN.DETERMINISTIC = False
 
     cfg.DATASET = EasyDict()
     cfg.DATASET.NAME = data_name
