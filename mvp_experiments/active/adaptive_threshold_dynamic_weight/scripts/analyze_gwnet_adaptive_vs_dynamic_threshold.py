@@ -144,10 +144,6 @@ def _load_sd_original_degree(basic_ts_dir: Path) -> tuple[np.ndarray, np.ndarray
     return out_degree, in_degree
 
 
-def _per_node_mae(prediction: np.ndarray, target: np.ndarray) -> np.ndarray:
-    return np.mean(np.abs(prediction - target), axis=(0, 1, 3))
-
-
 def _adaptive_topk_stats(ckpt_path: Path) -> dict[str, object]:
     ckpt = torch.load(str(ckpt_path), map_location="cpu")
     state = ckpt["model_state_dict"]
@@ -228,9 +224,19 @@ def _prepare_dynamic_runner(args: argparse.Namespace, basic_ts_dir: Path):
     )
 
 
-def _evaluate_runner_mae(runner, num_nodes: int, desc: str) -> dict[str, np.ndarray]:
+def _masked_abs_sum_count(pred: np.ndarray, target: np.ndarray, null_val: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+    valid = np.abs(target - null_val) > 1e-5
+    err = np.abs(pred - target) * valid
+    return err.sum(axis=(0, 1, 3)), valid.sum(axis=(0, 1, 3))
+
+
+def _safe_divide(numerator: np.ndarray, denominator: np.ndarray) -> np.ndarray:
+    return numerator / np.maximum(denominator, 1)
+
+
+def _evaluate_runner_mae(runner, num_nodes: int, desc: str, null_val: float = 0.0) -> dict[str, np.ndarray]:
     sum_abs = np.zeros(num_nodes, dtype=np.float64)
-    count = 0
+    count = np.zeros(num_nodes, dtype=np.float64)
     targets = []
 
     with torch.no_grad():
@@ -239,20 +245,20 @@ def _evaluate_runner_mae(runner, num_nodes: int, desc: str) -> dict[str, np.ndar
             pred = forward_return["prediction"].detach().cpu().numpy().astype(np.float32)
             target = forward_return["target"].detach().cpu().numpy().astype(np.float32)
             targets.append(target)
-            err = np.abs(pred - target)
-            sum_abs += err.sum(axis=(0, 1, 3))
-            count += err.shape[0] * err.shape[1] * err.shape[3]
+            batch_sum, batch_count = _masked_abs_sum_count(pred, target, null_val)
+            sum_abs += batch_sum
+            count += batch_count
 
     return {
-        "per_node_mae": sum_abs / count,
+        "per_node_mae": _safe_divide(sum_abs, count),
         "targets": np.concatenate(targets, axis=0),
     }
 
 
-def _evaluate_dynamic_and_degrees(args: argparse.Namespace, runner, num_nodes: int):
+def _evaluate_dynamic_and_degrees(args: argparse.Namespace, runner, num_nodes: int, null_val: float = 0.0):
     device = next(runner.model.parameters()).device
     sum_abs = np.zeros(num_nodes, dtype=np.float64)
-    count = 0
+    count = np.zeros(num_nodes, dtype=np.float64)
     dyn_targets = []
     dyn_preds = []
     degree_sum = np.zeros(num_nodes, dtype=np.float64)
@@ -287,11 +293,11 @@ def _evaluate_dynamic_and_degrees(args: argparse.Namespace, runner, num_nodes: i
             target = forward_return["target"].detach().cpu().numpy().astype(np.float32)
             dyn_preds.append(pred)
             dyn_targets.append(target)
-            err = np.abs(pred - target)
-            sum_abs += err.sum(axis=(0, 1, 3))
-            count += err.shape[0] * err.shape[1] * err.shape[3]
+            batch_sum, batch_count = _masked_abs_sum_count(pred, target, null_val)
+            sum_abs += batch_sum
+            count += batch_count
 
-    per_node_mae = sum_abs / count
+    per_node_mae = _safe_divide(sum_abs, count)
     mean_degree = degree_sum / sample_count
     var_degree = np.maximum(degree_sumsq / sample_count - np.square(mean_degree), 0.0)
     std_degree = np.sqrt(var_degree)
