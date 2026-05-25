@@ -135,6 +135,36 @@ Use `SPLIT_MODE=official_shuffle` only when intentionally matching the public
 DTIGNN `prepareData.py` shuffle behavior. The default is chronological because
 that is safer for forecasting evaluation.
 
+## Xuancheng 2x2 Prediction Tasks
+
+For STGCN/GWNet baselines, keep target semantics and temporal resolution as
+separate factors:
+
+| Dataset | Resolution | Target |
+|---|---:|---|
+| `XCHENG_10S_FLOW` | 10s | road-level through-flow count in the interval |
+| `XCHENG_10S_STOCK` | 10s | mean vehicles currently on the road |
+| `XCHENG_5MIN_FLOW` | 5min | road-level through-flow count summed from 10s buckets |
+| `XCHENG_5MIN_STOCK` | 5min | mean road vehicle stock averaged from 10s buckets |
+
+The stock target is a time-average over the bucket, not a bucket-end snapshot:
+vehicle-seconds divided by bucket seconds. The flow target is an interval count.
+
+Prepare the BasicTS datasets on the server:
+
+```bash
+cd /home/yuzhang_fei/code/SpatialTemporalGraph
+bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_prepare_xuancheng_basicts_tasks.sh
+```
+
+Run the queued STGCN/GWNet baselines:
+
+```bash
+cd /home/yuzhang_fei/code/SpatialTemporalGraph
+GPU=0 BASICTS_NUM_EPOCHS=50 BASICTS_BATCH_SIZE=16 \
+  bash mvp_experiments/active/xuancheng_cityflow_pipeline/scripts/run_server_xuancheng_basicts_baselines.sh
+```
+
 One-hour smoke, DTIGNN-like 10-second buckets:
 
 ```bash
