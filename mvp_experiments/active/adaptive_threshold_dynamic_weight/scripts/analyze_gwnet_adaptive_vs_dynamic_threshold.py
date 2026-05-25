@@ -2,8 +2,9 @@
 """Compare original adaptive GWNet and DynamicThreshold GWNet by node and graph degree.
 
 The script is intended to run from the repository root or from BasicTS on the
-server. It reuses saved original-adaptive predictions and evaluates the dynamic
-threshold checkpoint once to obtain per-node errors and generated graph degrees.
+server. It evaluates both checkpoints on the same BasicTS test loader. This
+avoids relying on BasicTS saved raw memmaps, which can be misaligned when an
+incomplete final batch is saved by batch index.
 """
 
 from __future__ import annotations
@@ -28,10 +29,6 @@ def _repo_root() -> Path:
 
 def _basic_ts_dir(repo_root: Path) -> Path:
     return repo_root / "BasicTS"
-
-
-def _load_raw_memmap(path: Path, shape: tuple[int, ...]) -> np.memmap:
-    return np.memmap(path, dtype="float32", mode="r", shape=shape)
 
 
 def _summary(values: np.ndarray) -> dict[str, float]:
@@ -147,13 +144,6 @@ def _load_sd_original_degree(basic_ts_dir: Path) -> tuple[np.ndarray, np.ndarray
     return out_degree, in_degree
 
 
-def _load_original_predictions(pred_dir: Path, num_samples: int, horizon: int, num_nodes: int) -> tuple[np.memmap, np.memmap]:
-    shape = (num_samples, horizon, num_nodes, 1)
-    pred = _load_raw_memmap(pred_dir / "predictions.npy", shape)
-    target = _load_raw_memmap(pred_dir / "targets.npy", shape)
-    return pred, target
-
-
 def _per_node_mae(prediction: np.ndarray, target: np.ndarray) -> np.ndarray:
     return np.mean(np.abs(prediction - target), axis=(0, 1, 3))
 
@@ -179,13 +169,18 @@ def _adaptive_topk_stats(ckpt_path: Path) -> dict[str, object]:
     }
 
 
-def _prepare_dynamic_runner(args: argparse.Namespace, basic_ts_dir: Path):
+def _prepare_runner(
+    cfg_path: str,
+    ckpt_path: str,
+    run_tag: str,
+    seed: int,
+    gpu: str,
+    device: str,
+    basic_ts_dir: Path,
+):
     os.environ.setdefault("WANDB_MODE", "disabled")
-    os.environ["BASICTS_RUN_TAG"] = args.dynamic_run_tag
-    os.environ["BASICTS_SEED"] = str(args.seed)
-    os.environ["DYNAMIC_GRAPH_MODE"] = "hard"
-    os.environ["DYNAMIC_GRAPH_WEIGHT_MODE"] = "binary"
-    os.environ["DYNAMIC_GWNET_ADDAPTADJ"] = "1" if args.dynamic_addaptadj else "0"
+    os.environ["BASICTS_RUN_TAG"] = run_tag
+    os.environ["BASICTS_SEED"] = str(seed)
 
     sys.path.insert(0, str(basic_ts_dir))
     os.chdir(basic_ts_dir)
@@ -194,16 +189,64 @@ def _prepare_dynamic_runner(args: argparse.Namespace, basic_ts_dir: Path):
     from easytorch.device import set_device_type
     from easytorch.utils import set_visible_devices
 
-    set_device_type("gpu" if args.device.startswith("cuda") else "cpu")
-    if args.device.startswith("cuda"):
-        set_visible_devices(args.gpu)
+    set_device_type("gpu" if device.startswith("cuda") else "cpu")
+    if device.startswith("cuda"):
+        set_visible_devices(gpu)
 
-    cfg = init_cfg(args.dynamic_cfg, save=True)
+    cfg = init_cfg(cfg_path, save=True)
     runner = cfg["RUNNER"](cfg)
     runner.init_test(cfg)
-    runner.load_model(args.dynamic_ckpt, strict=True)
+    runner.load_model(ckpt_path, strict=True)
     runner.model.eval()
     return cfg, runner
+
+
+def _prepare_original_runner(args: argparse.Namespace, basic_ts_dir: Path):
+    return _prepare_runner(
+        args.original_cfg,
+        args.original_adaptive_ckpt,
+        args.original_run_tag,
+        args.seed,
+        args.gpu,
+        args.device,
+        basic_ts_dir,
+    )
+
+
+def _prepare_dynamic_runner(args: argparse.Namespace, basic_ts_dir: Path):
+    os.environ["DYNAMIC_GRAPH_MODE"] = "hard"
+    os.environ["DYNAMIC_GRAPH_WEIGHT_MODE"] = "binary"
+    os.environ["DYNAMIC_GWNET_ADDAPTADJ"] = "1" if args.dynamic_addaptadj else "0"
+    return _prepare_runner(
+        args.dynamic_cfg,
+        args.dynamic_ckpt,
+        args.dynamic_run_tag,
+        args.seed,
+        args.gpu,
+        args.device,
+        basic_ts_dir,
+    )
+
+
+def _evaluate_runner_mae(runner, num_nodes: int, desc: str) -> dict[str, np.ndarray]:
+    sum_abs = np.zeros(num_nodes, dtype=np.float64)
+    count = 0
+    targets = []
+
+    with torch.no_grad():
+        for batch in tqdm(runner.test_data_loader, desc=desc):
+            forward_return = runner.forward(batch, epoch=None, iter_num=None, train=False)
+            pred = forward_return["prediction"].detach().cpu().numpy().astype(np.float32)
+            target = forward_return["target"].detach().cpu().numpy().astype(np.float32)
+            targets.append(target)
+            err = np.abs(pred - target)
+            sum_abs += err.sum(axis=(0, 1, 3))
+            count += err.shape[0] * err.shape[1] * err.shape[3]
+
+    return {
+        "per_node_mae": sum_abs / count,
+        "targets": np.concatenate(targets, axis=0),
+    }
 
 
 def _evaluate_dynamic_and_degrees(args: argparse.Namespace, runner, num_nodes: int):
@@ -310,13 +353,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     repo_root = _repo_root()
     basic_ts = _basic_ts_dir(repo_root)
-    parser.add_argument("--original-pred-dir", default=str(basic_ts / "checkpoints/GraphWaveNet/SD_original_100_12_12_diagnostic_export_models_20260515/28da12d4def10340559faf32d42484f2/test_results"))
+    parser.add_argument("--original-cfg", default="baselines/GWNet/SD.py")
+    parser.add_argument("--original-run-tag", default="sd_aligned_fresh_wandb_project_20260511_191840")
     parser.add_argument("--original-adaptive-ckpt", default=str(basic_ts / "checkpoints/GraphWaveNet/SD_original_100_12_12_sd_aligned_fresh_wandb_project_20260511_191840/ee9d39fd3520017a6931110f1a52414e/GraphWaveNet_best_val_MAE.pt"))
     parser.add_argument("--dynamic-cfg", default="baselines/GWNet/SD_dynamic_threshold.py")
     parser.add_argument("--dynamic-ckpt", default=str(basic_ts / "checkpoints/DynamicThresholdGraphWaveNet/SD_dynamic_threshold_hard_exp_tanh_gwnet_100_12_12_addaptadj_dynamic_threshold_hard_addaptadj_20260522_gpu1/94d620cfd224e6d2cf7cd2c344b1a3cd/DynamicThresholdGraphWaveNet_best_val_MAE.pt"))
     parser.add_argument("--dynamic-run-tag", default="dynamic_threshold_hard_addaptadj_20260522_gpu1")
     parser.add_argument("--dynamic-addaptadj", action="store_true", default=True)
-    parser.add_argument("--output-dir", default=str(repo_root / "mvp_experiments/active/adaptive_threshold_dynamic_weight/results/gwnet_original_adaptive_vs_dynamic_threshold_addaptadj_20260525"))
+    parser.add_argument("--output-dir", default=str(repo_root / "mvp_experiments/active/adaptive_threshold_dynamic_weight/results/gwnet_original_adaptive_vs_dynamic_threshold_addaptadj_live_20260525"))
     parser.add_argument("--seed", type=int, default=2023)
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--device", default="cuda:0")
@@ -326,18 +370,17 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     num_nodes = 716
-    horizon = 12
-    original_pred_dir = Path(args.original_pred_dir)
-    original_shape_file = original_pred_dir / "predictions.npy"
-    num_samples = original_shape_file.stat().st_size // (4 * horizon * num_nodes)
-    original_pred, original_target = _load_original_predictions(original_pred_dir, num_samples, horizon, num_nodes)
-    original_mae = _per_node_mae(original_pred, original_target)
+
+    _, original_runner = _prepare_original_runner(args, basic_ts)
+    original = _evaluate_runner_mae(original_runner, num_nodes, "original adaptive eval")
+    original_mae = original["per_node_mae"]
+    num_samples = original["targets"].shape[0]
 
     _, runner = _prepare_dynamic_runner(args, basic_ts)
     dynamic = _evaluate_dynamic_and_degrees(args, runner, num_nodes)
     dynamic_mae = dynamic["per_node_mae"]
 
-    target_match = bool(np.allclose(np.asarray(original_target), dynamic["targets"], atol=1e-4, rtol=1e-5))
+    target_match = bool(np.allclose(original["targets"], dynamic["targets"], atol=1e-4, rtol=1e-5))
     if not target_match:
         print("WARNING: original and dynamic targets are not exactly aligned.", file=sys.stderr)
 
