@@ -13,7 +13,8 @@ from basicts.data import TimeSeriesForecastingDataset
 from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
 from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
-from basicts.utils.serialization import load_adj
+from basicts.utils.adjacent_matrix_norm import calculate_symmetric_normalized_laplacian
+from basicts.utils.serialization import load_pkl
 
 from .arch import STGCN
 
@@ -38,8 +39,12 @@ RESCALE = bool(REGULAR_SETTINGS["RESCALE"])
 NULL_VAL = _null_val(REGULAR_SETTINGS.get("NULL_VAL", "nan"))
 
 MODEL_ARCH = STGCN
-adj_mx, _ = load_adj(f"datasets/{DATA_NAME}/adj_mx.pkl", "normlap")
-GSO = torch.tensor(np.asarray(adj_mx[0], dtype=np.float32), dtype=torch.float32)
+_, _, RAW_ADJ = load_pkl(f"datasets/{DATA_NAME}/adj_mx.pkl")
+RAW_ADJ = np.asarray(RAW_ADJ, dtype=np.float32)
+GSO = torch.tensor(
+    np.asarray(calculate_symmetric_normalized_laplacian(RAW_ADJ).astype(np.float32).todense()),
+    dtype=torch.float32,
+)
 MODEL_PARAM = {
     "Ks": 3,
     "Kt": 3,
