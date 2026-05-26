@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--adj-path", type=Path, default=None)
     parser.add_argument("--variants", nargs="+", default=["lagtime", "tabst"], choices=["lagtime", "tabst"])
+    parser.add_argument("--backend", choices=["sklearn-hist", "lightgbm"], default="sklearn-hist")
     parser.add_argument("--horizons", nargs="+", type=int, default=list(range(1, 13)))
     parser.add_argument("--train-rows-per-horizon", type=int, default=200_000)
     parser.add_argument("--feature-chunk-rows", type=int, default=250_000)
@@ -31,6 +32,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=0.07)
     parser.add_argument("--max-leaf-nodes", type=int, default=31)
     parser.add_argument("--l2-regularization", type=float, default=0.03)
+    parser.add_argument("--feature-fraction", type=float, default=0.9)
+    parser.add_argument("--bagging-fraction", type=float, default=0.8)
+    parser.add_argument("--bagging-freq", type=int, default=5)
+    parser.add_argument("--min-child-samples", type=int, default=20)
+    parser.add_argument("--num-threads", type=int, default=-1)
     parser.add_argument("--target-channel", type=int, default=0)
     parser.add_argument("--dtype", default="float32")
     return parser.parse_args()
@@ -284,19 +290,42 @@ def sample_training_rows(
     return starts, nodes, y
 
 
-def make_model(args: argparse.Namespace, seed: int) -> HistGradientBoostingRegressor:
-    return HistGradientBoostingRegressor(
-        loss="squared_error",
-        learning_rate=args.learning_rate,
-        max_iter=args.max_iter,
-        max_leaf_nodes=args.max_leaf_nodes,
-        l2_regularization=args.l2_regularization,
-        random_state=seed,
-        early_stopping=True,
-        validation_fraction=0.1,
-        n_iter_no_change=15,
-        verbose=0,
-    )
+def make_model(args: argparse.Namespace, seed: int):
+    if args.backend == "sklearn-hist":
+        return HistGradientBoostingRegressor(
+            loss="squared_error",
+            learning_rate=args.learning_rate,
+            max_iter=args.max_iter,
+            max_leaf_nodes=args.max_leaf_nodes,
+            l2_regularization=args.l2_regularization,
+            random_state=seed,
+            early_stopping=True,
+            validation_fraction=0.1,
+            n_iter_no_change=15,
+            verbose=0,
+        )
+    if args.backend == "lightgbm":
+        try:
+            import lightgbm as lgb
+        except ImportError as exc:
+            raise ImportError("Install LightGBM first, for example: pip install lightgbm==4.6.0") from exc
+        return lgb.LGBMRegressor(
+            boosting_type="gbdt",
+            objective="regression",
+            metric="l2",
+            n_estimators=args.max_iter,
+            learning_rate=args.learning_rate,
+            num_leaves=args.max_leaf_nodes,
+            reg_lambda=args.l2_regularization,
+            feature_fraction=args.feature_fraction,
+            bagging_fraction=args.bagging_fraction,
+            bagging_freq=args.bagging_freq,
+            min_child_samples=args.min_child_samples,
+            n_jobs=args.num_threads,
+            random_state=seed,
+            verbosity=-1,
+        )
+    raise ValueError(f"Unsupported backend: {args.backend}")
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:
@@ -414,6 +443,7 @@ def main() -> int:
                 "train_start_count": train_start_count,
                 "test_samples": test_samples,
                 "num_nodes": num_nodes,
+                "backend": args.backend,
                 "variants": args.variants,
                 "horizons": horizons,
             },
@@ -592,13 +622,18 @@ def main() -> int:
         "test_start": test_start,
         "test_samples": test_samples,
         "num_nodes": num_nodes,
-        "model": "sklearn HistGradientBoostingRegressor",
+        "model": args.backend,
         "params": {
             "train_rows_per_horizon": args.train_rows_per_horizon,
             "max_iter": args.max_iter,
             "learning_rate": args.learning_rate,
             "max_leaf_nodes": args.max_leaf_nodes,
             "l2_regularization": args.l2_regularization,
+            "feature_fraction": args.feature_fraction,
+            "bagging_fraction": args.bagging_fraction,
+            "bagging_freq": args.bagging_freq,
+            "min_child_samples": args.min_child_samples,
+            "num_threads": args.num_threads,
             "seed": args.seed,
         },
         "variants": args.variants,
