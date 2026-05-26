@@ -127,6 +127,17 @@ def neighbor_stats(
     slots_per_day: int,
     target_channel: int,
 ) -> np.ndarray:
+    def safe_nanmean(values: np.ndarray) -> np.ndarray:
+        finite = np.isfinite(values)
+        counts = finite.sum(axis=1)
+        sums = np.where(finite, values, 0.0).sum(axis=1)
+        return np.divide(sums, counts, out=np.zeros(values.shape[0], dtype=np.float32), where=counts > 0)
+
+    def safe_nanmax(values: np.ndarray) -> np.ndarray:
+        finite = np.isfinite(values)
+        max_values = np.where(finite, values, -np.inf).max(axis=1)
+        return np.where(finite.any(axis=1), max_values, 0.0).astype(np.float32)
+
     out = np.zeros((starts.shape[0], 8), dtype=np.float32)
     out[:, -1] = 0.0
     for node in np.unique(nodes):
@@ -141,13 +152,12 @@ def neighbor_stats(
         trends = last_vals - first_vals
         target_slots = (target_indices[pos] % slots_per_day).astype(np.int16)
         med = seasonal_refs["median"][target_slots, target_dows[pos], :][:, neigh]
-        with np.errstate(invalid="ignore"):
-            out[pos, 0] = np.nanmean(last_vals, axis=1)
-            out[pos, 1] = np.nanmax(last_vals, axis=1)
-            out[pos, 2] = np.nanmean(trends, axis=1)
-            out[pos, 3] = np.nanmax(trends, axis=1)
-            out[pos, 4] = np.nanmean(med, axis=1)
-            out[pos, 5] = np.nanmax(med, axis=1)
+        out[pos, 0] = safe_nanmean(last_vals)
+        out[pos, 1] = safe_nanmax(last_vals)
+        out[pos, 2] = safe_nanmean(trends)
+        out[pos, 3] = safe_nanmax(trends)
+        out[pos, 4] = safe_nanmean(med)
+        out[pos, 5] = safe_nanmax(med)
         out[pos, 6] = float(neigh.size)
         out[pos, 7] = 1.0
     return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
