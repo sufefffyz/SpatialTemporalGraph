@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--adj-path", type=Path, default=None)
     parser.add_argument("--variants", nargs="+", default=["lagtime", "tabst"], choices=["lagtime", "tabst"])
-    parser.add_argument("--backend", choices=["sklearn-hist", "lightgbm"], default="sklearn-hist")
+    parser.add_argument("--backend", choices=["sklearn-hist", "lightgbm", "xgboost"], default="sklearn-hist")
     parser.add_argument("--horizons", nargs="+", type=int, default=list(range(1, 13)))
     parser.add_argument("--train-rows-per-horizon", type=int, default=200_000)
     parser.add_argument("--feature-chunk-rows", type=int, default=250_000)
@@ -332,6 +332,26 @@ def make_model(args: argparse.Namespace, seed: int):
             n_jobs=args.num_threads,
             random_state=seed,
             verbosity=-1,
+        )
+    if args.backend == "xgboost":
+        try:
+            import xgboost as xgb
+        except ImportError as exc:
+            raise ImportError("Install XGBoost first, for example: pip install xgboost==3.2.0") from exc
+        return xgb.XGBRegressor(
+            objective="reg:squarederror",
+            eval_metric="rmse",
+            tree_method="hist",
+            grow_policy="lossguide",
+            n_estimators=args.max_iter,
+            learning_rate=args.learning_rate,
+            max_leaves=args.max_leaf_nodes,
+            reg_lambda=args.l2_regularization,
+            colsample_bytree=args.feature_fraction,
+            subsample=args.bagging_fraction,
+            n_jobs=args.num_threads,
+            random_state=seed,
+            verbosity=0,
         )
     raise ValueError(f"Unsupported backend: {args.backend}")
 
