@@ -7,6 +7,7 @@ RUN_TAG="${3:-effres_k64_20260526}"
 PROJECT="${WANDB_PROJECT:-adaptive_threshold_topk_prior}"
 WAIT_FOR_GPU_IDLE="${WAIT_FOR_GPU_IDLE:-1}"
 GPU_UTIL_LIMIT="${GPU_UTIL_LIMIT:-40}"
+GPU_MEM_LIMIT_MB="${GPU_MEM_LIMIT_MB:-12000}"
 
 if [[ "${MODEL}" != "gwnet" && "${MODEL}" != "dcrnn" && "${MODEL}" != "dynamic_gwnet" && "${MODEL}" != "dynamic_dcrnn" && "${MODEL}" != "dynamic_stgcn" ]]; then
   echo "Usage: $0 {gwnet|dcrnn|dynamic_gwnet|dynamic_dcrnn|dynamic_stgcn} [gpu_id] [run_tag]" >&2
@@ -59,11 +60,12 @@ wait_for_gpu_idle() {
   fi
   while true; do
     util="$(nvidia-smi --id="${GPU}" --query-gpu=utilization.gpu --format=csv,noheader,nounits | tr -d '[:space:]')"
-    if [[ -n "${util}" && "${util}" -le "${GPU_UTIL_LIMIT}" ]]; then
-      echo "[$(date '+%F %T')] GPU ${GPU} util ${util}% <= ${GPU_UTIL_LIMIT}%, starting."
+    mem_used="$(nvidia-smi --id="${GPU}" --query-gpu=memory.used --format=csv,noheader,nounits | tr -d '[:space:]')"
+    if [[ -n "${util}" && -n "${mem_used}" && "${util}" -le "${GPU_UTIL_LIMIT}" && "${mem_used}" -le "${GPU_MEM_LIMIT_MB}" ]]; then
+      echo "[$(date '+%F %T')] GPU ${GPU} util ${util}% <= ${GPU_UTIL_LIMIT}% and mem ${mem_used}MiB <= ${GPU_MEM_LIMIT_MB}MiB, starting."
       return
     fi
-    echo "[$(date '+%F %T')] Waiting for GPU ${GPU}: util=${util}% > ${GPU_UTIL_LIMIT}%"
+    echo "[$(date '+%F %T')] Waiting for GPU ${GPU}: util=${util}% / mem=${mem_used}MiB; limits util<=${GPU_UTIL_LIMIT}%, mem<=${GPU_MEM_LIMIT_MB}MiB"
     sleep 300
   done
 }
