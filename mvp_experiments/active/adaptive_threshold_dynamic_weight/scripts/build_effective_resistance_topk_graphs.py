@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--k-list", default="64")
     parser.add_argument("--sigma", type=float, default=None, help="OSRM Gaussian sigma in meters. Default estimates from conductance graph.")
     parser.add_argument("--weight-mode", choices=["osrm_gaussian", "resistance_gaussian"], default="osrm_gaussian")
+    parser.add_argument("--min-weight", type=float, default=1e-8, help="Positive floor applied to retained edges to preserve the K-hop support.")
     parser.add_argument("--include-self", action="store_true", default=True)
     parser.add_argument("--copy-adj", action="store_true", help="Copy adj_mx.pkl instead of symlinking.")
     parser.add_argument("--overwrite", action="store_true")
@@ -357,6 +358,8 @@ def main() -> None:
             weight_mode=args.weight_mode,
             include_self=args.include_self,
         )
+        if args.min_weight > 0:
+            adj[edge_i, edge_j] = np.maximum(adj[edge_i, edge_j], np.float32(args.min_weight))
         dataset_name = f"{args.dataset}_EFFRESTOPK_K{k:03d}"
         graph_path = args.output_graph_dir / f"{dataset_name}_adj_mx.pkl"
         dump_pickle(graph_path, basicts_payload(adj, node_ids), overwrite=args.overwrite)
@@ -369,6 +372,7 @@ def main() -> None:
                 **selection_info,
             },
             "weight": args.weight_mode,
+            "min_weight": float(args.min_weight),
             "sigma": sigma_info,
             "resistance": resistance_info,
             "graph_path": str(graph_path),
