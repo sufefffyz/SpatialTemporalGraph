@@ -6,10 +6,18 @@ import csv
 import json
 import pickle
 import time
+import warnings
 from pathlib import Path
 
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
+
+
+warnings.filterwarnings(
+    "ignore",
+    message="X does not have valid feature names, but LGBMRegressor was fitted with feature names",
+    category=UserWarning,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
