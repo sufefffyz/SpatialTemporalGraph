@@ -12,7 +12,7 @@ import numpy as np
 from tqdm import tqdm
 from fastdtw import fastdtw
 
-from basicts.utils.serialization import load_pkl, load_dataset_data
+from basicts.utils.serialization import load_pkl, load_dataset_data, load_dataset_desc
 
 
 def get_normalized_adj(A):
@@ -49,7 +49,12 @@ def generate_dtw_spa_matrix(dataset_name, sigma1=0.1, thres1=0.6, sigma2=10, thr
     num_node = data.shape[1]
     if not os.path.exists('{0}/{1}_dtw_distance.npy'.format(os.path.abspath(__file__ + "/.."), dataset_name)):
         print("generate dtw distance matrix")
-        data_mean = np.mean([data[:, :, 0][24*12*i: 24*12*(i+1)] for i in range(data.shape[0]//(24*12))], axis=0)
+        desc = load_dataset_desc(dataset_name)
+        steps_per_day = int(round(24 * 60 / desc.get("frequency (minutes)", 5)))
+        data_mean = np.mean(
+            [data[:, :, 0][steps_per_day * i: steps_per_day * (i + 1)] for i in range(data.shape[0] // steps_per_day)],
+            axis=0,
+        )
         data_mean = data_mean.squeeze().T 
         dtw_distance = np.zeros((num_node, num_node))
         for i in tqdm(range(num_node)):
@@ -112,7 +117,9 @@ def generate_dtw_spa_matrix(dataset_name, sigma1=0.1, thres1=0.6, sigma2=10, thr
         sp_matrix[sp_matrix < thres2] = 0 
     else:
         spatial_distance_file = "./datasets/{0}/adj_mx.pkl".format(dataset_name)
-        sp_matrix = load_pkl(spatial_distance_file)[-1]
+        sp_matrix = load_pkl(spatial_distance_file)
+        if isinstance(sp_matrix, (list, tuple)):
+            sp_matrix = sp_matrix[-1]
 
     print(f'average degree of spatial graph is {np.sum(sp_matrix > 0)/2/num_node}')
     print(f'average degree of semantic graph is {np.sum(dtw_matrix > 0)/2/num_node}')
@@ -192,5 +199,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     generate_dtw_spa_matrix(args.dataset)
-
 

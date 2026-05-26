@@ -1,3 +1,4 @@
+import os
 from typing import Tuple, Union, Dict, Optional
 import wandb
 import torch
@@ -19,7 +20,27 @@ class MTGNNRunner(SimpleTimeSeriesForecastingRunner):
         # wandb logging
         self.model_name = cfg['MODEL']['NAME']
         self.dataset_name = cfg['DATASET']['NAME']
-        wandb.init(project="SpatialTemporalModel", name=f'{self.model_name}_{self.dataset_name}',config=cfg)
+        wandb_cfg = cfg.get("WANDB", {})
+        project = os.environ.get("WANDB_PROJECT") or wandb_cfg.get("PROJECT", "SpatialTemporalModel")
+        entity = os.environ.get("WANDB_ENTITY") or wandb_cfg.get("ENTITY", None) or None
+        mode = os.environ.get("WANDB_MODE") or wandb_cfg.get("MODE", None)
+        run_name = os.environ.get("WANDB_NAME") or wandb_cfg.get("RUN_NAME", f"{self.model_name}_{self.dataset_name}")
+        group = os.environ.get("WANDB_RUN_GROUP") or wandb_cfg.get("GROUP", None)
+        tags = wandb_cfg.get("TAGS", None)
+        init_kwargs = {
+            "project": project,
+            "name": run_name,
+            "config": cfg,
+        }
+        if entity:
+            init_kwargs["entity"] = entity
+        if mode:
+            init_kwargs["mode"] = mode
+        if group:
+            init_kwargs["group"] = group
+        if tags:
+            init_kwargs["tags"] = tags
+        wandb.init(**init_kwargs)
         
         wandb.watch(self.model, log="all")
 
@@ -97,4 +118,3 @@ class MTGNNRunner(SimpleTimeSeriesForecastingRunner):
         super().on_training_end(cfg, train_epoch)
         self.logger.info("Close the WandB run...")
         wandb.finish()
-
