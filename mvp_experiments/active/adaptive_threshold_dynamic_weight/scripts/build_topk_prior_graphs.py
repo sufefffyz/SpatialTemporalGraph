@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Build OSRM-nearest and GSP-smooth top-k prior graphs for BasicTS.
 
-The two variants intentionally share the same edge weights.  OSRM top-k and GSP
+The two variants intentionally share the same OSRM Gaussian edge weights. OSRM top-k and GSP
 smooth top-k differ only in edge selection:
 
 * osrm_topk: per receiver node, keep the K smallest OSRM-distance neighbors.
-* gsp_smooth_topk: per receiver node, first restrict to a physical OSRM
+* gsp_smooth_topk: per receiver node, first restrict to a physical OSRM-distance
   candidate pool, then keep the K lowest training-signal roughness edges.
 
 Only the train split is used for signal roughness.
@@ -34,6 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", default="SD")
     parser.add_argument("--distance", required=True, type=Path, help="OSRM distance matrix .npy in meters.")
+    parser.add_argument("--distance-name", default="OSRMTOPK", help="Dataset suffix for nearest OSRM-distance top-k graphs.")
+    parser.add_argument("--distance-label", default="osrm_distance", help="Human-readable distance source label.")
     parser.add_argument("--base-dataset", required=True, type=Path, help="BasicTS base dataset dir, e.g. BasicTS/datasets/SD.")
     parser.add_argument("--output-graph-dir", required=True, type=Path)
     parser.add_argument("--output-dataset-root", required=True, type=Path, help="Usually BasicTS/datasets.")
@@ -306,8 +308,8 @@ def main() -> None:
     graphs = []
     for k in parse_csv_ints(args.k_list):
         variants: list[tuple[str, np.ndarray, np.ndarray, dict[str, Any]]] = []
-        osrm_i, osrm_j = build_osrm_topk(distance, k)
-        variants.append(("osrm_topk", osrm_i, osrm_j, {}))
+        topk_i, topk_j = build_osrm_topk(distance, k)
+        variants.append(("osrm_topk", topk_i, topk_j, {}))
         gsp_i, gsp_j, gsp_info = build_gsp_topk(
             distance=distance,
             signal=signal,
@@ -318,11 +320,12 @@ def main() -> None:
 
         for method, edge_i, edge_j, method_info in variants:
             adj = adjacency_from_edges(distance, edge_i, edge_j, sigma=sigma, include_self=args.include_self)
-            dataset_name = f"{args.dataset}_{'OSRMTOPK' if method == 'osrm_topk' else 'GSPTOPK'}_K{k:03d}"
+            dataset_name = f"{args.dataset}_{args.distance_name if method == 'osrm_topk' else 'GSPTOPK'}_K{k:03d}"
             graph_path = args.output_graph_dir / f"{dataset_name}_adj_mx.pkl"
             dump_pickle(graph_path, basicts_payload(adj, node_ids), overwrite=args.overwrite)
             variant = {
                 "source": method,
+                "distance_label": args.distance_label,
                 "k": int(k),
                 "weight": "osrm_gaussian_distance",
                 "sigma": sigma_info,
@@ -360,6 +363,7 @@ def main() -> None:
         "base_dataset": str(args.base_dataset),
         "reference_adj": str(args.reference_adj) if args.reference_adj else None,
         "gsp_pool_k": args.gsp_pool_k,
+        "distance_label": args.distance_label,
         "gsp_selection_metric": "train_signal_roughness",
         "graphs": graphs,
     }

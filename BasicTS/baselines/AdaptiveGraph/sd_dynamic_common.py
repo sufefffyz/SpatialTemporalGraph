@@ -82,6 +82,7 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
     rescale = regular_settings["RESCALE"]
     null_val = regular_settings["NULL_VAL"]
     num_nodes = int(desc["num_nodes"])
+    data_name_canonical = data_name.upper().replace("_", "-")
 
     dynamic_graph = _dynamic_graph_args(mode)
     weight_mode = dynamic_graph["weight_mode"]
@@ -127,8 +128,12 @@ def build_dynamic_sd_cfg(backbone: str) -> EasyDict:
             "seq_len": input_len,
             "use_curriculum_learning": True,
         }
-        optim = ("Adam", {"lr": 0.003, "eps": 1e-3})
-        scheduler = {"milestones": [80], "gamma": 0.3}
+        if data_name_canonical == "METR-LA":
+            optim = ("Adam", {"lr": 0.01, "eps": 1e-3})
+            scheduler = {"milestones": [20, 30, 40, 50], "gamma": 0.1}
+        else:
+            optim = ("Adam", {"lr": 0.003, "eps": 1e-3})
+            scheduler = {"milestones": [80], "gamma": 0.3}
         batch_size = 64
         forward_features = [0, 1]
         setup_graph = True

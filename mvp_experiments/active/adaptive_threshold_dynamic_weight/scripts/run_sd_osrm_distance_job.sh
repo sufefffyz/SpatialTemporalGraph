@@ -19,6 +19,7 @@ OSRM_BLOCK_SIZE=${OSRM_BLOCK_SIZE:-64}
 OSRM_TIMEOUT=${OSRM_TIMEOUT:-300}
 OSRM_RETRIES=${OSRM_RETRIES:-2}
 OSRM_MAX_TABLE_SIZE=${OSRM_MAX_TABLE_SIZE:-1000000}
+COMPUTE=${COMPUTE:-straight,osrm}
 
 BUILDER="$REPO/mvp_experiments/active/adaptive_threshold_dynamic_weight/scripts/build_distance_matrices.py"
 PBF_DST="$OSRM_DIR/$(basename "$PBF_SRC")"
@@ -61,6 +62,7 @@ echo "OUT_DIR=$OUT_DIR"
 echo "LOG_FILE=$LOG_FILE"
 echo "OSRM_PORT=$OSRM_PORT"
 echo "OSRM_BLOCK_SIZE=$OSRM_BLOCK_SIZE"
+echo "COMPUTE=$COMPUTE"
 
 begin_stage "preflight"
 test -f "$META"
@@ -142,7 +144,7 @@ begin_stage "build_distance_matrices"
   --dataset "$DATASET" \
   --meta "$META" \
   --output-dir "$OUT_DIR" \
-  --compute straight,osrm \
+  --compute "$COMPUTE" \
   --osrm-url "http://127.0.0.1:${OSRM_PORT}" \
   --osrm-block-size "$OSRM_BLOCK_SIZE" \
   --osrm-timeout "$OSRM_TIMEOUT" \

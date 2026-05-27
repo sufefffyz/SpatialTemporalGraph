@@ -45,6 +45,8 @@ raw_adj = np.asarray(raw_adj, dtype=np.float32)
 support_forward = calculate_transition_matrix(raw_adj).T
 support_backward = calculate_transition_matrix(raw_adj.T).T
 
+DATA_NAME_CANONICAL = DATA_NAME.upper().replace("_", "-")
+
 MODEL_ARCH = DCRNN
 MODEL_PARAM = {
     "cl_decay_steps": 2000,
@@ -135,10 +137,16 @@ CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
 CFG.TRAIN.LOSS = masked_mae
 CFG.TRAIN.OPTIM = EasyDict()
 CFG.TRAIN.OPTIM.TYPE = "Adam"
-CFG.TRAIN.OPTIM.PARAM = {"lr": 0.003, "eps": 1e-3}
+if DATA_NAME_CANONICAL == "METR-LA":
+    CFG.TRAIN.OPTIM.PARAM = {"lr": 0.01, "eps": 1e-3}
+else:
+    CFG.TRAIN.OPTIM.PARAM = {"lr": 0.003, "eps": 1e-3}
 CFG.TRAIN.LR_SCHEDULER = EasyDict()
 CFG.TRAIN.LR_SCHEDULER.TYPE = "MultiStepLR"
-CFG.TRAIN.LR_SCHEDULER.PARAM = {"milestones": [80], "gamma": 0.3}
+if DATA_NAME_CANONICAL == "METR-LA":
+    CFG.TRAIN.LR_SCHEDULER.PARAM = {"milestones": [20, 30, 40, 50], "gamma": 0.1}
+else:
+    CFG.TRAIN.LR_SCHEDULER.PARAM = {"milestones": [80], "gamma": 0.3}
 CFG.TRAIN.DATA = EasyDict()
 CFG.TRAIN.DATA.BATCH_SIZE = 64
 CFG.TRAIN.DATA.SHUFFLE = True
