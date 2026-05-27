@@ -136,8 +136,9 @@ def setup_env(args: argparse.Namespace, graph: str, variant: str) -> None:
 
 def init_runner(args: argparse.Namespace, graph: str, variant: str):
     setup_env(args, graph, variant)
-    sys.path.insert(0, str(args.basicts_dir))
-    os.chdir(args.basicts_dir)
+    basicts_dir = args.basicts_dir.resolve()
+    sys.path.insert(0, str(basicts_dir))
+    os.chdir(basicts_dir)
 
     from easytorch.config import init_cfg  # pylint: disable=import-outside-toplevel
     from easytorch.device import set_device_type  # pylint: disable=import-outside-toplevel
