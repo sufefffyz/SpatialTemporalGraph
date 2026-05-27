@@ -159,6 +159,8 @@ def find_checkpoint(basicts_dir: Path, cfg: Any) -> Path | None:
     ckpt_root = basicts_dir / cfg.TRAIN.CKPT_SAVE_DIR
     model_name = str(cfg.MODEL.NAME)
     matches = sorted(ckpt_root.glob(f"*/{model_name}_best_val_MAE.pt"))
+    if not matches and len(ckpt_root.name) == 32:
+        matches = sorted(ckpt_root.parent.glob(f"*/{model_name}_best_val_MAE.pt"))
     return matches[-1] if matches else None
 
 
@@ -587,6 +589,7 @@ def write_summary(args: argparse.Namespace, graphs: list[str], pair_tables: dict
 
 def main() -> None:
     args = parse_args()
+    args.basicts_dir = args.basicts_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     graphs = [item.strip() for item in args.graphs.split(",") if item.strip()]
     unknown = [item for item in graphs if item not in GRAPH_SPECS]
