@@ -8,7 +8,7 @@ RUN_TAG="${4:-largest_aligned_priority_$(date '+%Y%m%d_%H%M%S')}"
 PROJECT="${WANDB_PROJECT:-adaptive_threshold_largest_aligned}"
 
 if [[ "${MODEL}" != "gwnet" && "${MODEL}" != "dcrnn" && "${MODEL}" != "stgcn" ]]; then
-  echo "Usage: $0 {gwnet|dcrnn|stgcn} {original|osrmK64|gspK64|dynFull|dynOsrmK64|dynGspK64|dynFullAddapt|dynOsrmK64Addapt|dynGspK64Addapt} [gpu_id] [run_tag]" >&2
+  echo "Usage: $0 {gwnet|dcrnn|stgcn} {original|osrmK64|gspK64|osrmK64Addapt|gspK64Addapt|dynFull|dynOsrmK64|dynGspK64|dynFullAddapt|dynOsrmK64Addapt|dynGspK64Addapt} [gpu_id] [run_tag]" >&2
   exit 2
 fi
 
@@ -27,11 +27,25 @@ case "${GRAPH}" in
     GRAPH_KIND="topk_prior"
     DYNAMIC="0"
     ;;
+  osrmK64Addapt)
+    DATASET_NAME="SD_OSRMTOPK_K064"
+    GRAPH_TAG="osrmK64"
+    GRAPH_KIND="topk_prior"
+    DYNAMIC="0"
+    ADDAPT="1"
+    ;;
   gspK64)
     DATASET_NAME="SD_GSPTOPK_K064"
     GRAPH_TAG="gspK64"
     GRAPH_KIND="topk_prior"
     DYNAMIC="0"
+    ;;
+  gspK64Addapt)
+    DATASET_NAME="SD_GSPTOPK_K064"
+    GRAPH_TAG="gspK64"
+    GRAPH_KIND="topk_prior"
+    DYNAMIC="0"
+    ADDAPT="1"
     ;;
   dynOsrmK64)
     DATASET_NAME="SD"
@@ -77,7 +91,7 @@ case "${GRAPH}" in
     ADDAPT="1"
     ;;
   *)
-    echo "GRAPH must be one of: original, osrmK64, gspK64, dynFull, dynOsrmK64, dynGspK64, dynFullAddapt, dynOsrmK64Addapt, dynGspK64Addapt" >&2
+    echo "GRAPH must be one of: original, osrmK64, gspK64, osrmK64Addapt, gspK64Addapt, dynFull, dynOsrmK64, dynGspK64, dynFullAddapt, dynOsrmK64Addapt, dynGspK64Addapt" >&2
     exit 2
     ;;
 esac
@@ -166,6 +180,10 @@ fi
 export WANDB_RUN_GROUP="sd_largest_aligned_${MODEL}_${GRAPH_KIND}_${CANDIDATE_TAG}_${ADDAPT_TAG}"
 export WANDB_TAGS="adaptive-threshold,sd,largest-aligned,${MODEL},${GRAPH_KIND},${GRAPH_TAG},${CANDIDATE_TAG},${ADDAPT_TAG}"
 export WANDB_NAME="${MODEL_NAME}_${DATASET_NAME}_${GRAPH}_${GRAPH_KIND}_${RUN_TAG}"
+
+if [[ "${MODEL}" == "gwnet" ]]; then
+  export GWNET_ADDAPTADJ="${ADDAPT}"
+fi
 
 if [[ "${DYNAMIC}" == "1" ]]; then
   export DYNAMIC_GRAPH_MODE="hard"

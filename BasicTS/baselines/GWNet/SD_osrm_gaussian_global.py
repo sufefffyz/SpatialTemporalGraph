@@ -43,6 +43,7 @@ raw_adj = np.asarray(raw_adj, dtype=np.float32)
 
 support_forward = calculate_transition_matrix(raw_adj).T
 support_backward = calculate_transition_matrix(raw_adj.T).T
+ADDAPTADJ = os.environ.get("GWNET_ADDAPTADJ", "0").lower() not in {"0", "false", "no", "off"}
 
 MODEL_ARCH = GraphWaveNet
 MODEL_PARAM = {
@@ -53,7 +54,7 @@ MODEL_PARAM = {
     ],
     "dropout": 0.3,
     "gcn_bool": True,
-    "addaptadj": False,
+    "addaptadj": ADDAPTADJ,
     "aptinit": None,
     "in_dim": 2,
     "out_dim": OUTPUT_LEN,
@@ -126,6 +127,8 @@ CFG.METRICS.NULL_VAL = NULL_VAL
 CFG.TRAIN = EasyDict()
 CFG.TRAIN.NUM_EPOCHS = NUM_EPOCHS
 CKPT_NAME_PARTS = [DATA_NAME, "osrm_gaussian_global_fixed", str(CFG.TRAIN.NUM_EPOCHS), str(INPUT_LEN), str(OUTPUT_LEN)]
+if ADDAPTADJ:
+    CKPT_NAME_PARTS.append("addaptadj")
 if RUN_TAG:
     CKPT_NAME_PARTS.append(RUN_TAG)
 CFG.TRAIN.CKPT_SAVE_DIR = os.path.join(
