@@ -13,8 +13,10 @@ from basicts.data import TimeSeriesForecastingDataset
 from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
 from basicts.runners import WandBTimeSeriesForecastingRunner
 from basicts.scaler import ZScoreScaler
-from basicts.utils.adjacent_matrix_norm import calculate_symmetric_normalized_laplacian
+from basicts.utils.adjacent_matrix_norm import calculate_scaled_laplacian, calculate_symmetric_normalized_laplacian
 from basicts.utils.serialization import load_adj, load_pkl
+
+from baselines.AdaptiveGraph.largest_aligned import apply_largest_aligned_cfg
 
 from .arch import STGCN
 
@@ -33,9 +35,14 @@ def _load_desc(data_name: str) -> dict:
     return json.loads(desc_path.read_text(encoding="utf-8"))
 
 
-def _build_gso(data_name: str, graph_variant: str) -> torch.Tensor:
+def _build_gso(data_name: str, graph_variant: str, largest_aligned: bool = False) -> torch.Tensor:
     adj_path = Path("datasets") / data_name / "adj_mx.pkl"
 
+    if largest_aligned and graph_variant == "distthre":
+        raw_adj = _unwrap_adj_payload(load_pkl(str(adj_path)))
+        raw_adj = raw_adj - np.eye(raw_adj.shape[0], dtype=np.float32)
+        gso = calculate_scaled_laplacian(raw_adj).astype(np.float32).todense()
+        return torch.tensor(gso, dtype=torch.float32)
     if graph_variant == "osrm_gaussian_global":
         raw_adj = _unwrap_adj_payload(load_pkl(str(adj_path)))
         gso = calculate_symmetric_normalized_laplacian(raw_adj).astype(np.float32).todense()
@@ -58,7 +65,7 @@ def _build_gso(data_name: str, graph_variant: str) -> torch.Tensor:
     return torch.tensor(gso, dtype=torch.float32)
 
 
-def build_sd_cfg(graph_variant: str) -> EasyDict:
+def build_sd_cfg(graph_variant: str, largest_aligned: bool = False) -> EasyDict:
     graph_tag = None
     if graph_variant == "osrm_gaussian_global":
         data_name = os.environ.get("BASICTS_DATA_NAME", "SD_OSRMGG_B100")
@@ -93,7 +100,7 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
     rescale = regular_settings["RESCALE"]
     null_val = regular_settings["NULL_VAL"]
 
-    gso = _build_gso(data_name, graph_variant)
+    gso = _build_gso(data_name, graph_variant, largest_aligned=largest_aligned)
     model_arch = STGCN
     model_param = {
         "Ks": 3,
@@ -214,5 +221,8 @@ def build_sd_cfg(graph_variant: str) -> EasyDict:
         cfg.WANDB.RUN_NAME = os.environ.get("WANDB_NAME", f"{model_arch.__name__}_{data_name}_{graph_tag}")
         cfg.WANDB.GROUP = os.environ.get("WANDB_RUN_GROUP", "sd_osrm_gaussian_global_stgcn")
         cfg.WANDB.TAGS = ["adaptive-threshold", "sd", "osrm-gaussian-global", "stgcn", graph_tag]
+
+    if largest_aligned:
+        cfg = apply_largest_aligned_cfg(cfg, "stgcn")
 
     return cfg
