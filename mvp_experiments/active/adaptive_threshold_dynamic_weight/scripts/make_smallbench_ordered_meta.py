@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
 
 def load_basicts_ids(path: Path) -> list[str] | None:
     with path.open("rb") as fp:
-        obj: Any = pickle.load(fp)
+        obj: Any = pickle.load(fp, encoding="latin1")
     if isinstance(obj, (tuple, list)) and len(obj) >= 2 and isinstance(obj[0], (list, tuple)):
         return [str(item) for item in obj[0]]
     return None
