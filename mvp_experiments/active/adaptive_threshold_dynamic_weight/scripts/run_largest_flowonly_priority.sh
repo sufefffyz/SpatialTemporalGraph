@@ -8,7 +8,7 @@ RUN_TAG="${4:-largest_flowonly_priority_$(date '+%Y%m%d_%H%M%S')}"
 PROJECT="${WANDB_PROJECT:-adaptive_threshold_largest_flowonly}"
 
 if [[ "${MODEL}" != "gwnet" && "${MODEL}" != "dcrnn" && "${MODEL}" != "stgcn" ]]; then
-  echo "Usage: $0 {gwnet|dcrnn|stgcn} {original|osrmK64|gspK64|osrmK64Addapt|gspK64Addapt|dynFull|dynOsrmK64|dynGspK64|dynFullAddapt|dynOsrmK64Addapt|dynGspK64Addapt} [gpu_id] [run_tag]" >&2
+  echo "Usage: $0 {gwnet|dcrnn|stgcn} {original|originalAddapt|osrmK64|gspK64|osrmK64Addapt|gspK64Addapt|dynFull|dynOsrmK64|dynGspK64|dynFullAddapt|dynOsrmK64Addapt|dynGspK64Addapt} [gpu_id] [run_tag]" >&2
   exit 2
 fi
 
@@ -20,6 +20,13 @@ case "${GRAPH}" in
     GRAPH_TAG="original"
     GRAPH_KIND="original"
     DYNAMIC="0"
+    ;;
+  originalAddapt)
+    DATASET_NAME="SD"
+    GRAPH_TAG="original"
+    GRAPH_KIND="original"
+    DYNAMIC="0"
+    ADDAPT="1"
     ;;
   osrmK64)
     DATASET_NAME="SD_OSRMTOPK_K064"
@@ -91,7 +98,7 @@ case "${GRAPH}" in
     ADDAPT="1"
     ;;
   *)
-    echo "GRAPH must be one of: original, osrmK64, gspK64, osrmK64Addapt, gspK64Addapt, dynFull, dynOsrmK64, dynGspK64, dynFullAddapt, dynOsrmK64Addapt, dynGspK64Addapt" >&2
+    echo "GRAPH must be one of: original, originalAddapt, osrmK64, gspK64, osrmK64Addapt, gspK64Addapt, dynFull, dynOsrmK64, dynGspK64, dynFullAddapt, dynOsrmK64Addapt, dynGspK64Addapt" >&2
     exit 2
     ;;
 esac
