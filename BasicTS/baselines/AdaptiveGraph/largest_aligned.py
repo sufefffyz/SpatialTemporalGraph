@@ -36,6 +36,13 @@ def _append_wandb_tag(cfg: EasyDict, tag: str) -> None:
             cfg.WANDB.GROUP = f"{group}_{tag.replace('-', '_')}"
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() not in {"0", "false", "no", "off"}
+
+
 def _set_common_large_st_controls(cfg: EasyDict) -> None:
     cfg.ENV.DETERMINISTIC = False
     cfg.ENV.CUDNN.ENABLED = True
@@ -59,6 +66,8 @@ def apply_largest_aligned_cfg(cfg: EasyDict, backbone: str) -> EasyDict:
 
     if backbone == "gwnet":
         cfg.MODEL.PARAM["in_dim"] = 3
+        if "addaptadj" in cfg.MODEL.PARAM:
+            cfg.MODEL.PARAM["addaptadj"] = _env_bool("GWNET_ADDAPTADJ", bool(cfg.MODEL.PARAM["addaptadj"]))
         cfg.TRAIN.OPTIM.TYPE = "Adam"
         cfg.TRAIN.OPTIM.PARAM = {"lr": 0.001, "weight_decay": 0.0001}
         _set_scheduler(cfg, None)
