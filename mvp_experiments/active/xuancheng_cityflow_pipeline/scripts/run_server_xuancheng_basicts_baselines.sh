@@ -40,6 +40,12 @@ for DATASET in "${DATASET_LIST[@]}"; do
       stgcn)
         CFG="baselines/STGCN/XCHENG.py"
         ;;
+      mtgnn)
+        CFG="baselines/MTGNN/XCHENG.py"
+        ;;
+      agcrn)
+        CFG="baselines/AGCRN/XCHENG.py"
+        ;;
       *)
         echo "[error] unsupported model: ${MODEL}" >&2
         exit 2
