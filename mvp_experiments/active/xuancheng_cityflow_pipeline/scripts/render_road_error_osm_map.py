@@ -47,6 +47,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--halo-opacity", type=float, default=0.7)
     parser.add_argument("--halo-extra", type=float, default=2.4)
     parser.add_argument("--zoom-start", type=int, default=13)
+    parser.add_argument("--leaflet-css", type=Path, default=None, help="Optional local Leaflet CSS to embed.")
+    parser.add_argument("--leaflet-js", type=Path, default=None, help="Optional local Leaflet JS to embed.")
     return parser.parse_args()
 
 
@@ -227,16 +229,26 @@ def build_html(
     line_opacity: float,
     halo_opacity: float,
     halo_extra: float,
+    leaflet_css: str | None,
+    leaflet_js: str | None,
 ) -> str:
     safe_title = html.escape(title)
     palette_json = html_json(PALETTE)
+    if leaflet_css is None:
+        leaflet_css_tag = '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />'
+    else:
+        leaflet_css_tag = f"<style>\n{leaflet_css}\n</style>"
+    if leaflet_js is None:
+        leaflet_js_tag = '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
+    else:
+        leaflet_js_tag = f"<script>\n{leaflet_js}\n</script>"
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{safe_title}</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  {leaflet_css_tag}
   <style>
     html, body, #map {{ height: 100%; margin: 0; width: 100%; }}
     body {{ color: #e5e7eb; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
@@ -295,7 +307,7 @@ def build_html(
     <h2 id="top-title"></h2>
     <div id="top-table"></div>
   </div>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  {leaflet_js_tag}
   <script>
     const roadData = {html_json(geojson)};
     const layerSpecs = {html_json(layers)};
@@ -444,6 +456,8 @@ def main() -> int:
     output_html = args.output_html.expanduser().resolve()
     output_summary = args.output_summary.expanduser().resolve() if args.output_summary else output_html.with_suffix(".summary.json")
     tile = TILE_PRESETS[args.tile_preset]
+    leaflet_css = args.leaflet_css.read_text(encoding="utf-8") if args.leaflet_css else None
+    leaflet_js = args.leaflet_js.read_text(encoding="utf-8") if args.leaflet_js else None
 
     layers, tables = load_layers(error_dir)
     geojson, summary = build_geojson(load_json(roadnet_path), sumo_net_path, args.coord_mode, tables)
@@ -471,6 +485,8 @@ def main() -> int:
             args.line_opacity,
             args.halo_opacity,
             args.halo_extra,
+            leaflet_css,
+            leaflet_js,
         ),
         encoding="utf-8",
     )
