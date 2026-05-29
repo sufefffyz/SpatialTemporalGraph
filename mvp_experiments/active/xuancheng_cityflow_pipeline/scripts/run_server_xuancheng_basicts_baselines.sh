@@ -8,8 +8,9 @@ MODELS="${MODELS:-gwnet,stgcn}"
 DATASETS="${DATASETS:-XCHENG_10S_FLOW,XCHENG_10S_STOCK,XCHENG_5MIN_FLOW,XCHENG_5MIN_STOCK}"
 RUN_TAG="${RUN_TAG:-xuancheng_2x2_$(date +%Y%m%d_%H%M%S)}"
 LOG_ROOT="${LOG_ROOT:-${BASICTS_DIR}/logs/xuancheng_cityflow/${RUN_TAG}}"
-BASICTS_NUM_EPOCHS="${BASICTS_NUM_EPOCHS:-50}"
+BASICTS_NUM_EPOCHS="${BASICTS_NUM_EPOCHS:-100}"
 BASICTS_BATCH_SIZE="${BASICTS_BATCH_SIZE:-16}"
+BASICTS_EARLY_STOPPING_PATIENCE="${BASICTS_EARLY_STOPPING_PATIENCE:-30}"
 WANDB_MODE="${WANDB_MODE:-disabled}"
 
 mkdir -p "${LOG_ROOT}"
@@ -19,7 +20,7 @@ echo "[info] Xuancheng BasicTS baseline queue"
 echo "[info] basicts_dir=${BASICTS_DIR}"
 echo "[info] datasets=${DATASETS}"
 echo "[info] models=${MODELS}"
-echo "[info] gpu=${GPU} epochs=${BASICTS_NUM_EPOCHS} batch=${BASICTS_BATCH_SIZE}"
+echo "[info] gpu=${GPU} epochs=${BASICTS_NUM_EPOCHS} batch=${BASICTS_BATCH_SIZE} patience=${BASICTS_EARLY_STOPPING_PATIENCE}"
 echo "[info] log_root=${LOG_ROOT}"
 
 IFS=',' read -r -a MODEL_LIST <<< "${MODELS}"
@@ -46,6 +47,15 @@ for DATASET in "${DATASET_LIST[@]}"; do
       agcrn)
         CFG="baselines/AGCRN/XCHENG.py"
         ;;
+      d2stgnn)
+        CFG="baselines/D2STGNN/XCHENG.py"
+        ;;
+      dgcrn)
+        CFG="baselines/DGCRN/XCHENG.py"
+        ;;
+      staeformer)
+        CFG="baselines/STAEformer/XCHENG.py"
+        ;;
       *)
         echo "[error] unsupported model: ${MODEL}" >&2
         exit 2
@@ -59,6 +69,7 @@ for DATASET in "${DATASET_LIST[@]}"; do
     BASICTS_RUN_TAG="${RUN_TAG}" \
     BASICTS_NUM_EPOCHS="${BASICTS_NUM_EPOCHS}" \
     BASICTS_BATCH_SIZE="${BASICTS_BATCH_SIZE}" \
+    BASICTS_EARLY_STOPPING_PATIENCE="${BASICTS_EARLY_STOPPING_PATIENCE}" \
     WANDB_MODE="${WANDB_MODE}" \
       python experiments/train.py -c "${CFG}" -g "${GPU}" 2>&1 | tee -a "${LOG_FILE}"
     echo "[$(date '+%F %T')] done model=${MODEL} dataset=${DATASET}" | tee -a "${LOG_FILE}"

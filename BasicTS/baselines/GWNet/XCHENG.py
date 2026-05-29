@@ -59,7 +59,7 @@ MODEL_PARAM = {
     "blocks": int(os.environ.get("BASICTS_GWNET_BLOCKS", "4")),
     "layers": int(os.environ.get("BASICTS_GWNET_LAYERS", "2")),
 }
-NUM_EPOCHS = int(os.environ.get("BASICTS_NUM_EPOCHS", "50"))
+NUM_EPOCHS = int(os.environ.get("BASICTS_NUM_EPOCHS", "100"))
 RUN_TAG = os.environ.get("BASICTS_RUN_TAG", "").strip()
 BATCH_SIZE = int(os.environ.get("BASICTS_BATCH_SIZE", "16"))
 
@@ -141,7 +141,7 @@ CFG.TRAIN.DATA = EasyDict()
 CFG.TRAIN.DATA.BATCH_SIZE = BATCH_SIZE
 CFG.TRAIN.DATA.SHUFFLE = True
 CFG.TRAIN.CLIP_GRAD_PARAM = {"max_norm": 5.0}
-CFG.TRAIN.EARLY_STOPPING_PATIENCE = int(os.environ.get("BASICTS_EARLY_STOPPING_PATIENCE", "15"))
+CFG.TRAIN.EARLY_STOPPING_PATIENCE = int(os.environ.get("BASICTS_EARLY_STOPPING_PATIENCE", "30"))
 
 CFG.VAL = EasyDict()
 CFG.VAL.INTERVAL = 1
