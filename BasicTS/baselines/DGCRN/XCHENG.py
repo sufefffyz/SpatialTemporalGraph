@@ -4,6 +4,7 @@ import random
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 from easydict import EasyDict
 
@@ -12,7 +13,8 @@ sys.path.append(os.path.abspath(__file__ + "/../../.."))
 from basicts.data import TimeSeriesForecastingDataset
 from basicts.metrics import masked_mae, masked_mape, masked_rmse, masked_wape
 from basicts.scaler import ZScoreScaler
-from basicts.utils import load_adj
+from basicts.utils.adjacent_matrix_norm import calculate_transition_matrix
+from basicts.utils.serialization import load_pkl
 
 from .arch import DGCRN
 from .runner import DGCRNRunner
@@ -38,7 +40,9 @@ RESCALE = bool(REGULAR_SETTINGS["RESCALE"])
 NULL_VAL = _null_val(REGULAR_SETTINGS.get("NULL_VAL", "nan"))
 
 MODEL_ARCH = DGCRN
-adj_mx, _ = load_adj(f"datasets/{DATA_NAME}/adj_mx.pkl", "doubletransition")
+_, _, RAW_ADJ = load_pkl(f"datasets/{DATA_NAME}/adj_mx.pkl")
+RAW_ADJ = np.asarray(RAW_ADJ, dtype=np.float32)
+adj_mx = [calculate_transition_matrix(RAW_ADJ).T, calculate_transition_matrix(RAW_ADJ.T).T]
 MODEL_PARAM = {
     "gcn_depth": int(os.environ.get("BASICTS_DGCRN_GCN_DEPTH", "2")),
     "num_nodes": int(DESC["num_nodes"]),
