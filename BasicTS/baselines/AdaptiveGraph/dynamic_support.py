@@ -148,6 +148,10 @@ class DynamicThresholdSupport(nn.Module):
         d_model: int = 32,
         target_avg_degree: float = 24.1885,
         init_radius: float | None = None,
+        init_mode: str = "scalar",
+        init_degree_min: int = 8,
+        init_degree_max: int = 64,
+        init_seed: int = 2023,
         radius_scale: float = 1.0,
         radius_param: str = "exp_tanh",
         temperature: float = 0.05,
@@ -170,10 +174,14 @@ class DynamicThresholdSupport(nn.Module):
         radius_param = str(radius_param or "exp_tanh").lower()
         if radius_param not in {"exp_tanh", "softplus"}:
             raise ValueError(f"Unsupported radius parameterization: {radius_param}")
+        init_mode = str(init_mode or "scalar").lower()
+        if init_mode not in {"scalar", "random_degree"}:
+            raise ValueError(f"Unsupported dynamic threshold init mode: {init_mode}")
 
         self.num_nodes = int(num_nodes)
         self.seq_len = int(seq_len)
         self.mode = mode
+        self.init_mode = init_mode
         self.radius_scale = float(radius_scale)
         self.radius_param = radius_param
         if self.radius_param == "softplus" and self.radius_scale <= 0:
@@ -197,8 +205,19 @@ class DynamicThresholdSupport(nn.Module):
         self.register_buffer("self_loop_nodes", torch.arange(self.num_nodes, dtype=torch.long))
 
         if init_radius is None:
-            init_radius = self._degree_to_radius(dist, target_avg_degree, candidate_mask)
-        self.init_radius = float(init_radius)
+            init_radius_node = self._init_node_radius(
+                dist,
+                target_avg_degree=target_avg_degree,
+                candidate_mask=candidate_mask,
+                init_mode=init_mode,
+                init_degree_min=init_degree_min,
+                init_degree_max=init_degree_max,
+                init_seed=init_seed,
+            )
+        else:
+            init_radius_node = torch.full((self.num_nodes,), float(init_radius), dtype=torch.float32)
+        self.init_radius = float(init_radius_node.mean().item())
+        self.register_buffer("init_radius_node", init_radius_node.float())
         if self.weight_mode == "gaussian":
             sigma = float(gaussian_sigma) if gaussian_sigma is not None else max(self.init_radius, 1e-3)
             base_weight = torch.exp(-torch.square(dist / max(sigma, 1e-6)))
@@ -211,6 +230,54 @@ class DynamicThresholdSupport(nn.Module):
         self.node_embed = nn.Parameter(torch.randn(self.num_nodes, d_model) * 0.02)
         self.radius_head = nn.Linear(d_model * 2, 1)
         self.reset_parameters()
+
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        # Older DynamicThreshold checkpoints were trained with a scalar radius and
+        # do not contain this buffer. Reuse the config-built initialization when
+        # loading them so strict checkpoint loading remains backward compatible.
+        key = prefix + "init_radius_node"
+        if key not in state_dict:
+            state_dict[key] = self.init_radius_node
+        super()._load_from_state_dict(
+            state_dict,
+            prefix,
+            local_metadata,
+            strict,
+            missing_keys,
+            unexpected_keys,
+            error_msgs,
+        )
+
+    @classmethod
+    def _init_node_radius(
+        cls,
+        distance: torch.Tensor,
+        target_avg_degree: float,
+        candidate_mask: torch.Tensor,
+        init_mode: str,
+        init_degree_min: int,
+        init_degree_max: int,
+        init_seed: int,
+    ) -> torch.Tensor:
+        if init_mode == "scalar":
+            radius = cls._degree_to_radius(distance, target_avg_degree, candidate_mask)
+            return torch.full((int(distance.shape[0]),), float(radius), dtype=torch.float32)
+        return cls._random_degree_to_node_radius(
+            distance,
+            init_degree_min=init_degree_min,
+            init_degree_max=init_degree_max,
+            candidate_mask=candidate_mask,
+            init_seed=init_seed,
+        )
 
     def reset_parameters(self) -> None:
         nn.init.xavier_uniform_(self.history_proj.weight)
@@ -244,6 +311,33 @@ class DynamicThresholdSupport(nn.Module):
         sorted_values = torch.sort(values).values
         return float(sorted_values[target_edges - 1].item())
 
+    @staticmethod
+    def _random_degree_to_node_radius(
+        distance: torch.Tensor,
+        init_degree_min: int,
+        init_degree_max: int,
+        candidate_mask: torch.Tensor,
+        init_seed: int,
+    ) -> torch.Tensor:
+        n = int(distance.shape[0])
+        k_min = max(1, int(init_degree_min))
+        k_max = max(k_min, int(init_degree_max))
+        mask = candidate_mask.to(device=distance.device, dtype=torch.bool)
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(int(init_seed))
+        target_degrees = torch.randint(k_min, k_max + 1, (n,), generator=generator)
+        radii = torch.empty(n, dtype=distance.dtype, device=distance.device)
+        for node in range(n):
+            values = distance[node][mask[node]]
+            values = values[torch.isfinite(values)]
+            values = values[values > 0]
+            if values.numel() == 0:
+                radii[node] = 1e-3
+                continue
+            k = min(int(target_degrees[node].item()), int(values.numel()))
+            radii[node] = torch.sort(values).values[k - 1]
+        return radii.cpu().float()
+
     def _node_radius(self, history_data: torch.Tensor) -> torch.Tensor:
         if history_data.dim() == 4:
             history = history_data[..., 0]
@@ -260,7 +354,7 @@ class DynamicThresholdSupport(nn.Module):
         else:
             delta = self.radius_scale * torch.tanh(score)
             multiplier = torch.exp(delta)
-        return self.init_radius * multiplier
+        return self.init_radius_node.unsqueeze(0).to(multiplier.device) * multiplier
 
     def _masked_weights(self, history_data: torch.Tensor) -> torch.Tensor:
         radius = self._node_radius(history_data)
