@@ -8,6 +8,7 @@ MODELS="${MODELS:-gwnet,stgcn}"
 DATASETS="${DATASETS:-XCHENG_10S_FLOW,XCHENG_10S_STOCK,XCHENG_5MIN_FLOW,XCHENG_5MIN_STOCK}"
 RUN_TAG="${RUN_TAG:-xuancheng_2x2_$(date +%Y%m%d_%H%M%S)}"
 LOG_ROOT="${LOG_ROOT:-${BASICTS_DIR}/logs/xuancheng_cityflow/${RUN_TAG}}"
+PYTHON_BIN="${PYTHON_BIN:-/home/yuzhang_fei/miniconda3/envs/STGraph/bin/python}"
 BASICTS_NUM_EPOCHS="${BASICTS_NUM_EPOCHS:-100}"
 BASICTS_BATCH_SIZE="${BASICTS_BATCH_SIZE:-16}"
 BASICTS_EARLY_STOPPING_PATIENCE="${BASICTS_EARLY_STOPPING_PATIENCE:-30}"
@@ -20,6 +21,7 @@ echo "[info] Xuancheng BasicTS baseline queue"
 echo "[info] basicts_dir=${BASICTS_DIR}"
 echo "[info] datasets=${DATASETS}"
 echo "[info] models=${MODELS}"
+echo "[info] python=${PYTHON_BIN}"
 echo "[info] gpu=${GPU} epochs=${BASICTS_NUM_EPOCHS} batch=${BASICTS_BATCH_SIZE} patience=${BASICTS_EARLY_STOPPING_PATIENCE}"
 echo "[info] log_root=${LOG_ROOT}"
 
@@ -74,7 +76,7 @@ for DATASET in "${DATASET_LIST[@]}"; do
     BASICTS_BATCH_SIZE="${BASICTS_BATCH_SIZE}" \
     BASICTS_EARLY_STOPPING_PATIENCE="${BASICTS_EARLY_STOPPING_PATIENCE}" \
     WANDB_MODE="${WANDB_MODE}" \
-      python experiments/train.py -c "${CFG}" -g "${GPU}" 2>&1 | tee -a "${LOG_FILE}"
+      "${PYTHON_BIN}" experiments/train.py -c "${CFG}" -g "${GPU}" 2>&1 | tee -a "${LOG_FILE}"
     echo "[$(date '+%F %T')] done model=${MODEL} dataset=${DATASET}" | tee -a "${LOG_FILE}"
   done
 done
