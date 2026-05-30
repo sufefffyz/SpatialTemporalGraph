@@ -35,6 +35,9 @@ for DATASET in "${DATASET_LIST[@]}"; do
       gwnet)
         CFG="baselines/GWNet/XCHENG.py"
         ;;
+      gwnet_noadaptive)
+        CFG="baselines/GWNet/XCHENG_NOADAPT.py"
+        ;;
       sparsegwnet)
         CFG="baselines/GWNet/XCHENG_SPARSE.py"
         ;;
