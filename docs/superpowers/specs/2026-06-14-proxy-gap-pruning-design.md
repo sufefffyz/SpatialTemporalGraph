@@ -70,9 +70,9 @@ Initial defaults:
 - `STRATEGY=proxy_gap`
 - `RETENTION_RATIO=0.1` via existing ratio env
 - `WARMUP_EPOCHS=1`
-- `PRUNING_PERIOD=10`
+- `PRUNING_PERIOD=1`
 - `SCORE_MOMENTUM=0.0` unless overridden
-- `REVISIT_PROBABILITY=0.1`
+- `REVISIT_PROBABILITY=0.5`
 - `REFERENCE_TYPE=seasonal`
 - `FINAL_FULL_RATIO` follows the existing non-Soft-Random default derived from `DELTA=0.875`
 - `RESCALE=False`
