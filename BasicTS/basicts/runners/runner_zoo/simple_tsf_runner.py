@@ -98,8 +98,19 @@ class SimpleTimeSeriesForecastingRunner(BaseTimeSeriesForecastingRunner):
             future_data_4_dec[..., 0] = torch.empty_like(future_data_4_dec[..., 0])
 
         # Forward pass through the model
-        model_return = self.model(history_data=history_data, future_data=future_data_4_dec,
-                                  batch_seen=iter_num, epoch=epoch, train=train)
+        model_kwargs = {
+            "history_data": history_data,
+            "future_data": future_data_4_dec,
+            "batch_seen": iter_num,
+            "epoch": epoch,
+            "train": train,
+        }
+        if "idx" in data:
+            idx = data["idx"]
+            if not isinstance(idx, torch.Tensor):
+                idx = torch.as_tensor(idx, dtype=torch.long)
+            model_kwargs["idx"] = self.to_running_device(idx.long())
+        model_return = self.model(**model_kwargs)
 
         # Parse model return
         if isinstance(model_return, torch.Tensor):
