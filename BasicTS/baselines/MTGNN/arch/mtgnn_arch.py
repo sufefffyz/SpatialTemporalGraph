@@ -128,7 +128,10 @@ class MTGNN(nn.Module):
                 else:
                     adp = self.gc(idx)
             else:
-                adp = self.predefined_A
+                adp = self.predefined_A.to(history_data.device)
+                if idx is not None:
+                    idx = idx.to(adp.device)
+                    adp = adp.index_select(0, idx).index_select(1, idx)
 
         x = self.start_conv(history_data)
         skip = self.skip0(

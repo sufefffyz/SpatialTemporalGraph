@@ -10,7 +10,12 @@ class nconv(nn.Module):
         super(nconv, self).__init__()
 
     def forward(self, x, A):
-        x = torch.einsum('ncvl,vw->ncwl', (x, A))
+        if A.dim() == 2:
+            x = torch.einsum('ncvl,vw->ncwl', (x, A))
+        elif A.dim() == 3:
+            x = torch.einsum('ncvl,nvw->ncwl', (x, A))
+        else:
+            raise ValueError(f"Graph support must have shape [N, N] or [B, N, N], got {tuple(A.shape)}")
         return x.contiguous()
 
 
