@@ -27,7 +27,7 @@ case "$RUN_MODE" in
     ;;
   full)
     DEFAULT_MAX_EPOCHS=100
-    DEFAULT_PATIENCE=30
+    DEFAULT_PATIENCE=20
     ;;
   *)
     echo "Unknown RUN_MODE=$RUN_MODE. Use smoke or full." >&2
@@ -47,20 +47,22 @@ ensure_dataset_link() {
 }
 
 dataset_batch_size() {
-  local model="$1"
+  local _model="$1"
   local dataset="$2"
   if [[ "$RUN_MODE" == "smoke" ]]; then
     echo "${SMOKE_BS:-4}"
     return
   fi
 
-  case "$model:$dataset" in
-    dstagnn:Alameda|dstagnn:Contra_Costa) echo 64 ;;
-    dstagnn:Orange) echo 48 ;;
-    d2stgnn:Alameda|d2stgnn:Contra_Costa) echo 45 ;;
-    d2stgnn:Orange) echo 24 ;;
-    bist:*) echo 64 ;;
-    *) echo 32 ;;
+  if [[ -n "${IGSTGNN_BATCH_SIZE:-}" ]]; then
+    echo "$IGSTGNN_BATCH_SIZE"
+    return
+  fi
+
+  case "$dataset" in
+    Alameda|Contra_Costa) echo 48 ;;
+    Orange) echo 24 ;;
+    *) echo 48 ;;
   esac
 }
 
@@ -75,19 +77,11 @@ model_extra_args() {
     d2stgnn)
       local max_epochs="${D2STGNN_MAX_EPOCHS:-$DEFAULT_MAX_EPOCHS}"
       local patience="${D2STGNN_PATIENCE:-$DEFAULT_PATIENCE}"
-      if [[ "$RUN_MODE" == "full" ]]; then
-        max_epochs="${D2STGNN_MAX_EPOCHS:-80}"
-        patience="${D2STGNN_PATIENCE:-80}"
-      fi
       echo "--input_dim 3 --num_feat 1 --tpd 96 --max_epochs $max_epochs --patience $patience --bs $bs"
       ;;
     bist)
       local max_epochs="${BIST_MAX_EPOCHS:-$DEFAULT_MAX_EPOCHS}"
       local patience="${BIST_PATIENCE:-$DEFAULT_PATIENCE}"
-      if [[ "$RUN_MODE" == "full" ]]; then
-        max_epochs="${BIST_MAX_EPOCHS:-500}"
-        patience="${BIST_PATIENCE:-20}"
-      fi
       local core=8
       case "$dataset" in
         Alameda|Contra_Costa) core=8 ;;

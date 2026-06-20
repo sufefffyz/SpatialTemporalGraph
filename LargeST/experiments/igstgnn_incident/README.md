@@ -49,7 +49,10 @@ Run full experiments:
 RUN_MODE=full GPU=2 bash experiments/igstgnn_incident/run_igstgnn_incident_baselines.sh
 ```
 
-The full-run batch sizes are project defaults for these IGSTGNN datasets because
-the papers do not provide LargeST-baseline hyperparameters for Alameda,
-Contra_Costa, or Orange.
+Full-run batch size, epoch count, and patience follow the IGSTGNN reproduction
+setting for the same datasets:
 
+- `Alameda`: `bs=48`
+- `Contra_Costa`: `bs=48`
+- `Orange`: `bs=24`
+- all datasets/models: `max_epochs=100`, `patience=20`
