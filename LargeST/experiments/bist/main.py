@@ -10,7 +10,7 @@ torch.set_num_threads(3)
 
 from src.models.bist import BiST, MLP
 from src.engines.bist_engine import BaseEngine
-from src.utils.bist_args import get_config
+from src.utils.bist_args import get_config as get_public_config
 from src.utils.bist_dataloader import load_dataset, get_dataset_info
 from src.utils.metrics import masked_mae
 from src.utils.logging import get_logger
@@ -32,7 +32,7 @@ def cont_learning(model, save_path, args):
 
 
 def get_config():
-    parser = get_config()
+    parser = get_public_config()
     parser.add_argument('--num_layer', type=int, default=3)
     parser.add_argument('--model_dim', type=int, default=32)
     parser.add_argument('--prompt_dim', type=int, default=32)
