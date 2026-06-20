@@ -145,9 +145,13 @@ class StandardScaler():
 def load_dataset(data_path, args, logger):
     if os.path.exists(os.path.join(data_path, 'incident_train.npy')):
         install_numpy_pickle_compat()
+        sample_limit = int(os.environ.get('LARGEST_IGSTGNN_SAMPLE_LIMIT', '0'))
         dataloader = {}
         for cat in ['train', 'val', 'test']:
             samples = np.load(os.path.join(data_path, 'incident_' + cat + '.npy'), allow_pickle=True)
+            if sample_limit > 0:
+                logger.info(f'Applying incident sample limit for {cat}: {sample_limit}')
+                samples = samples[:sample_limit]
             dataloader[cat + '_loader'] = IncidentSampleDataLoader(
                 samples, args.input_dim, args.bs, logger
             )

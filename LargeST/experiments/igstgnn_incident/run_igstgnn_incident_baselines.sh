@@ -23,6 +23,7 @@ case "$RUN_MODE" in
   smoke)
     DEFAULT_MAX_EPOCHS=1
     DEFAULT_PATIENCE=1
+    export LARGEST_IGSTGNN_SAMPLE_LIMIT="${SMOKE_SAMPLE_LIMIT:-64}"
     ;;
   full)
     DEFAULT_MAX_EPOCHS=100
@@ -134,4 +135,3 @@ for model in $MODELS; do
     run_one "$model" "$dataset"
   done
 done
-
