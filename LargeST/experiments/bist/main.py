@@ -53,8 +53,7 @@ def get_config():
 
 def main():
     args, log_dir, logger = get_config()
-    seed = torch.randint(999999, (1,)) # set random seed here
-    set_seed(seed)
+    set_seed(args.seed)
     device = torch.device(args.device)
     
     data_path, tod_size, node_num = get_dataset_info(args.dataset)

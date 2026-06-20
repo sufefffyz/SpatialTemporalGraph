@@ -4,6 +4,8 @@ import torch
 import numpy as np
 import threading
 import multiprocessing as mp
+import sys
+import types
 
 class DataLoader(object):
     def __init__(self, data, idx, seq_len, horizon, bs, logger, pad_last_sample=False):
@@ -75,6 +77,58 @@ class DataLoader(object):
         return _wrapper()
 
 
+class IncidentSampleDataLoader(object):
+    """Load IGSTGNN released object-array splits without changing their order."""
+
+    def __init__(self, samples, input_dim, bs, logger):
+        self.samples = list(samples)
+        self.input_dim = input_dim
+        self.size = len(self.samples)
+        self.bs = bs
+        self.num_batch = int(np.ceil(self.size / self.bs)) if self.size > 0 else 0
+        self.current_ind = 0
+
+        if self.size == 0:
+            raise ValueError('No samples were loaded.')
+
+        first = self._as_sample(self.samples[0])
+        x_shape = first['x_data'].shape
+        y_shape = first['y_data'].shape
+        logger.info('Sample num: ' + str(self.size) + ', Batch num: ' + str(self.num_batch))
+        logger.info('Incident sample shape: x=' + str(x_shape) + ', y=' + str(y_shape))
+
+    @staticmethod
+    def _as_sample(sample):
+        return sample.item() if hasattr(sample, 'item') else sample
+
+    def shuffle(self):
+        perm = np.random.permutation(self.size)
+        self.samples = [self.samples[i] for i in perm]
+
+    def get_iterator(self):
+        self.current_ind = 0
+
+        def _wrapper():
+            while self.current_ind < self.num_batch:
+                start_ind = self.bs * self.current_ind
+                end_ind = min(self.size, self.bs * (self.current_ind + 1))
+                batch_samples = [self._as_sample(sample) for sample in self.samples[start_ind:end_ind]]
+
+                x = np.stack([
+                    np.asarray(sample['x_data'], dtype=np.float32)[..., :self.input_dim]
+                    for sample in batch_samples
+                ], axis=0)
+                y = np.stack([
+                    np.asarray(sample['y_data'], dtype=np.float32)[..., :1]
+                    for sample in batch_samples
+                ], axis=0)
+
+                yield (x, y)
+                self.current_ind += 1
+
+        return _wrapper()
+
+
 class StandardScaler():
     def __init__(self, mean, std):
         self.mean = torch.tensor(mean)
@@ -90,6 +144,19 @@ class StandardScaler():
 
 
 def load_dataset(data_path, args, logger):
+    if os.path.exists(os.path.join(data_path, 'incident_train.npy')):
+        install_numpy_pickle_compat()
+        dataloader = {}
+        for cat in ['train', 'val', 'test']:
+            samples = np.load(os.path.join(data_path, 'incident_' + cat + '.npy'), allow_pickle=True)
+            dataloader[cat + '_loader'] = IncidentSampleDataLoader(
+                samples, args.input_dim, args.bs, logger
+            )
+        stats = np.load(os.path.join(data_path, 'incident_stats.npz'), allow_pickle=True)
+        logger.info(f"Incident stats: mean={stats['mean']}, std={stats['std']}")
+        scaler = StandardScaler(mean=stats['mean'], std=stats['std'])
+        return dataloader, scaler
+
     ptr = np.load(os.path.join(data_path, args.years, 'his.npz'))
     logger.info('Data shape: ' + str(ptr['data'].shape))
     
@@ -127,6 +194,22 @@ def get_dataset_info(dataset):
          'GLA': [base_dir+'gla', base_dir+'gla/gla_rn_adj.npy', 3834],
          'GBA': [base_dir+'gba', base_dir+'gba/gba_rn_adj.npy', 2352],
          'SD': [base_dir+'sd', base_dir+'sd/sd_rn_adj.npy', 716],
+         'Alameda': [base_dir+'Alameda', base_dir+'Alameda/adj_matrix.npy', 521],
+         'Contra_Costa': [base_dir+'Contra_Costa', base_dir+'Contra_Costa/adj_matrix.npy', 496],
+         'Orange': [base_dir+'Orange', base_dir+'Orange/adj_matrix.npy', 990],
         }
     assert dataset in d.keys()
     return d[dataset]
+
+
+def install_numpy_pickle_compat():
+    """Allow NumPy 1.x to read object arrays pickled by NumPy 2.x."""
+    if "numpy._core" in sys.modules:
+        return
+    numpy_core = types.ModuleType("numpy._core")
+    numpy_core.__dict__.update(np.core.__dict__)
+    numpy_core.multiarray = np.core.multiarray
+    numpy_core._multiarray_umath = np.core._multiarray_umath
+    sys.modules["numpy._core"] = numpy_core
+    sys.modules["numpy._core.multiarray"] = np.core.multiarray
+    sys.modules["numpy._core._multiarray_umath"] = np.core._multiarray_umath

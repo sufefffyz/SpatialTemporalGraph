@@ -7,6 +7,7 @@ def get_config():
     # if need to use the data from multiple years, please use underline to separate them, e.g., 2018_2019
     parser.add_argument('--years', type=str, default='')
     parser.add_argument('--model_name', type=str, default='BiST')
+    parser.add_argument('--seed', type=int, default=2025)
 
     parser.add_argument('--bs', type=int, default=64)
     # seq_len denotes input history length, horizon denotes output future length
