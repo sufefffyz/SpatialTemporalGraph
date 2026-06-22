@@ -77,7 +77,7 @@ model_extra_args() {
     d2stgnn)
       local max_epochs="${D2STGNN_MAX_EPOCHS:-$DEFAULT_MAX_EPOCHS}"
       local patience="${D2STGNN_PATIENCE:-$DEFAULT_PATIENCE}"
-      echo "--input_dim 3 --num_feat 1 --tpd 96 --max_epochs $max_epochs --patience $patience --bs $bs"
+      echo "--input_dim 3 --num_feat 1 --tpd 288 --max_epochs $max_epochs --patience $patience --bs $bs"
       ;;
     bist)
       local max_epochs="${BIST_MAX_EPOCHS:-$DEFAULT_MAX_EPOCHS}"

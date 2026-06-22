@@ -37,6 +37,11 @@ performed. `incident_stats.npz` is reused for inverse scaling.
   used as temporal embeddings.
 - `BiST`: uses `input_dim=3`. A seed argument is added for reproducible runs.
 
+The released IGSTGNN incident samples use 5-minute time-of-day encoding:
+adjacent history slots differ by `1 / 288`. Therefore D2STGNN uses
+`tpd=288`, and BiST uses `tod_size=288` for `Alameda`, `Contra_Costa`, and
+`Orange`.
+
 Run smoke tests:
 
 ```bash
