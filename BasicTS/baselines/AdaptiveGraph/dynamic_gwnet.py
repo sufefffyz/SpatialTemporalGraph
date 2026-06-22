@@ -187,4 +187,5 @@ class DynamicThresholdGraphWaveNet(nn.Module):
 
         x = F.relu(skip)
         x = F.relu(self.end_conv_1(x))
-        return self.end_conv_2(x)
+        x = self.end_conv_2(x)
+        return x[..., -1:].contiguous()

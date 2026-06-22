@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Signal Cluster Viewer</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <main class="app">
+    <aside class="panel">
+      <div class="brand">
+        <h1>Signal Cluster Viewer</h1>
+        <p>30-day SD / GLA / GBA daily KMeans maps</p>
+      </div>
+
+      <label>
+        Dataset
+        <select id="datasetSelect"></select>
+      </label>
+
+      <label>
+        Embedding
+        <select id="embeddingSelect"></select>
+      </label>
+
+      <label>
+        Cluster
+        <select id="clusterSelect"></select>
+      </label>
+
+      <label>
+        Day
+        <input id="daySlider" type="range" min="0" max="0" value="0">
+      </label>
+      <div class="day-row">
+        <strong id="dayLabel">Day 01</strong>
+        <span id="stepLabel"></span>
+      </div>
+
+      <label>
+        Fade other clusters
+        <input id="fadeSlider" type="range" min="0" max="30" value="6">
+      </label>
+
+      <div class="button-row">
+        <button id="playButton" type="button">Play</button>
+        <button id="fitButton" type="button">Fit</button>
+      </div>
+
+      <div class="stats" id="stats"></div>
+      <div class="legend" id="legend"></div>
+    </aside>
+
+    <section class="stage">
+      <canvas id="mapCanvas"></canvas>
+      <div id="tooltip" class="tooltip" hidden></div>
+    </section>
+  </main>
+
+  <script src="./data/cluster_data.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

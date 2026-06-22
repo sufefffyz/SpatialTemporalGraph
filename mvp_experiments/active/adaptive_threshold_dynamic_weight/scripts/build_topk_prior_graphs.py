@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reference-adj", type=Path, help="Reference adj_mx.pkl for Gaussian sigma estimation.")
     parser.add_argument("--node-ids", type=Path, help="Optional node_id CSV.")
     parser.add_argument("--k-list", default="32,64")
+    parser.add_argument(
+        "--methods",
+        default="osrm,gsp",
+        help="Comma-separated graph variants to build: osrm, gsp. Default keeps existing behavior.",
+    )
     parser.add_argument("--gsp-pool-k", type=int, default=128, help="Physical nearest-neighbor pool before GSP pruning.")
     parser.add_argument("--lambda-dist", type=float, default=0.25, help=argparse.SUPPRESS)
     parser.add_argument("--lambda-hub", type=float, default=0.05, help=argparse.SUPPRESS)
@@ -290,6 +295,13 @@ def stage_dataset(
 
 def main() -> None:
     args = parse_args()
+    methods = {item.strip().lower() for item in args.methods.split(",") if item.strip()}
+    allowed_methods = {"osrm", "gsp"}
+    unknown = methods - allowed_methods
+    if unknown:
+        raise ValueError(f"Unsupported methods: {sorted(unknown)}. Choose from {sorted(allowed_methods)}.")
+    if not methods:
+        raise ValueError("--methods must include at least one of: osrm, gsp.")
     args.output_graph_dir.mkdir(parents=True, exist_ok=True)
     args.output_dataset_root.mkdir(parents=True, exist_ok=True)
 
@@ -303,20 +315,26 @@ def main() -> None:
     sigma, sigma_info = (float(args.sigma), {"mode": "explicit", "sigma_m": float(args.sigma)}) if args.sigma else estimate_sigma(distance, reference_adj)
     sigma_info["sigma_m"] = sigma
     node_ids = load_node_ids(args.node_ids, n)
-    signal, signal_info = load_train_signal(args.base_dataset)
+    signal: np.ndarray | None = None
+    signal_info: dict[str, Any] | None = None
+    if "gsp" in methods:
+        signal, signal_info = load_train_signal(args.base_dataset)
 
     graphs = []
     for k in parse_csv_ints(args.k_list):
         variants: list[tuple[str, np.ndarray, np.ndarray, dict[str, Any]]] = []
-        topk_i, topk_j = build_osrm_topk(distance, k)
-        variants.append(("osrm_topk", topk_i, topk_j, {}))
-        gsp_i, gsp_j, gsp_info = build_gsp_topk(
-            distance=distance,
-            signal=signal,
-            k=k,
-            pool_k=max(args.gsp_pool_k, k),
-        )
-        variants.append(("gsp_smooth_topk", gsp_i, gsp_j, gsp_info))
+        if "osrm" in methods:
+            topk_i, topk_j = build_osrm_topk(distance, k)
+            variants.append(("osrm_topk", topk_i, topk_j, {}))
+        if "gsp" in methods:
+            assert signal is not None
+            gsp_i, gsp_j, gsp_info = build_gsp_topk(
+                distance=distance,
+                signal=signal,
+                k=k,
+                pool_k=max(args.gsp_pool_k, k),
+            )
+            variants.append(("gsp_smooth_topk", gsp_i, gsp_j, gsp_info))
 
         for method, edge_i, edge_j, method_info in variants:
             adj = adjacency_from_edges(distance, edge_i, edge_j, sigma=sigma, include_self=args.include_self)
@@ -333,7 +351,7 @@ def main() -> None:
                 "graph_path": str(graph_path),
                 "method": method_info,
                 "stats": graph_stats(adj),
-                "edge_quality": edge_quality(distance, signal, edge_i, edge_j),
+                "edge_quality": edge_quality(distance, signal, edge_i, edge_j) if signal is not None else None,
             }
             dataset_dir = stage_dataset(
                 base_dataset=args.base_dataset,
@@ -363,6 +381,7 @@ def main() -> None:
         "base_dataset": str(args.base_dataset),
         "reference_adj": str(args.reference_adj) if args.reference_adj else None,
         "gsp_pool_k": args.gsp_pool_k,
+        "methods": sorted(methods),
         "distance_label": args.distance_label,
         "gsp_selection_metric": "train_signal_roughness",
         "graphs": graphs,

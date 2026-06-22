@@ -8,8 +8,8 @@ GPU="${4:-0}"
 RUN_TAG="${5:-smallbench_$(date '+%Y%m%d_%H%M%S')}"
 PROJECT="${WANDB_PROJECT:-adaptive_threshold_smallbench}"
 
-if [[ "${DATASET_KEY}" != "pems04" && "${DATASET_KEY}" != "metrla" ]]; then
-  echo "Usage: $0 {pems04|metrla} {gwnet|dcrnn|stgcn} {original|osrmK64|gspK64|dynFull|dynOsrmK64|dynGspK64|originalAddapt|osrmK64Addapt|gspK64Addapt|dynFullAddapt|dynOsrmK64Addapt|dynGspK64Addapt} [gpu_id] [run_tag]" >&2
+if [[ "${DATASET_KEY}" != "pems04" && "${DATASET_KEY}" != "metrla" && "${DATASET_KEY}" != "pemsbay" ]]; then
+  echo "Usage: $0 {pems04|metrla|pemsbay} {gwnet|dcrnn|stgcn} {original|osrmK64|gspK64|dynFull|dynOsrmK64|dynGspK64|originalAddapt|osrmK64Addapt|gspK64Addapt|dynFullAddapt|dynOsrmK64Addapt|dynGspK64Addapt} [gpu_id] [run_tag]" >&2
   exit 2
 fi
 if [[ "${MODEL}" != "gwnet" && "${MODEL}" != "dcrnn" && "${MODEL}" != "stgcn" ]]; then
@@ -27,6 +27,11 @@ case "${DATASET_KEY}" in
     BASE_DATASET="METR-LA"
     DIST_MTX="${METRLA_DISTANCE_MTX:-datasets/METR-LA_osrm_shortest_distance_m.npy}"
     DATA_TAG="metr-la"
+    ;;
+  pemsbay)
+    BASE_DATASET="PEMS-BAY"
+    DIST_MTX="${PEMSBAY_DISTANCE_MTX:-datasets/PEMS-BAY_osrm_shortest_distance_m.npy}"
+    DATA_TAG="pems-bay"
     ;;
 esac
 

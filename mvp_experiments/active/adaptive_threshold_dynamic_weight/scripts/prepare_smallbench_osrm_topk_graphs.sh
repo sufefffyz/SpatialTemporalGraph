@@ -3,8 +3,8 @@ set -euo pipefail
 
 DATASET="${1:-}"
 META="${2:-}"
-if [[ "${DATASET}" != "PEMS04" && "${DATASET}" != "METR-LA" ]]; then
-  echo "Usage: $0 {PEMS04|METR-LA} ordered_meta.csv" >&2
+if [[ "${DATASET}" != "PEMS04" && "${DATASET}" != "METR-LA" && "${DATASET}" != "PEMS-BAY" ]]; then
+  echo "Usage: $0 {PEMS04|METR-LA|PEMS-BAY} ordered_meta.csv" >&2
   exit 2
 fi
 if [[ -z "${META}" || ! -f "${META}" ]]; then

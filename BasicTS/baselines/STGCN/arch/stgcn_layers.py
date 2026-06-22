@@ -236,6 +236,57 @@ class GraphConv(nn.Module):
         return graph_conv
 
 
+class DiffusionGraphConv(nn.Module):
+    def __init__(self, c_in, c_out, diffusion_steps, supports, bias):
+        super(DiffusionGraphConv, self).__init__()
+        self.c_in = c_in
+        self.c_out = c_out
+        self.diffusion_steps = diffusion_steps
+        if isinstance(supports, torch.Tensor):
+            supports = [supports]
+        self.supports = list(supports)
+        self.num_matrices = 1 + len(self.supports) * diffusion_steps
+        self.weight = nn.Parameter(torch.FloatTensor(self.num_matrices, c_in, c_out))
+        if bias:
+            self.bias = nn.Parameter(torch.FloatTensor(c_out))
+        else:
+            self.register_parameter('bias', None)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            init.uniform_(self.bias, -bound, bound)
+
+    @staticmethod
+    def _support_mul(support, x):
+        support = support.to(x.device)
+        return torch.einsum('hi,btij->bthj', support, x)
+
+    def forward(self, x):
+        x = torch.permute(x, (0, 2, 3, 1))
+        if self.diffusion_steps < 0:
+            raise ValueError(
+                f'ERROR: diffusion_steps must be non-negative, but received {self.diffusion_steps}.')
+
+        x_list = [x]
+        for support in self.supports:
+            propagated = x
+            for _ in range(self.diffusion_steps):
+                propagated = self._support_mul(support, propagated)
+                x_list.append(propagated)
+
+        x = torch.stack(x_list, dim=2)
+        diffusion_graph_conv = torch.einsum('btkni,kij->btnj', x, self.weight)
+
+        if self.bias is not None:
+            diffusion_graph_conv = torch.add(diffusion_graph_conv, self.bias)
+
+        return diffusion_graph_conv
+
+
 class GraphConvLayer(nn.Module):
     def __init__(self, graph_conv_type, c_in, c_out, Ks, gso, bias):
         super(GraphConvLayer, self).__init__()
@@ -249,6 +300,10 @@ class GraphConvLayer(nn.Module):
             self.cheb_graph_conv = ChebGraphConv(c_out, c_out, Ks, gso, bias)
         elif self.graph_conv_type == 'graph_conv':
             self.graph_conv = GraphConv(c_out, c_out, gso, bias)
+        elif self.graph_conv_type == 'diffusion_graph_conv':
+            self.diffusion_graph_conv = DiffusionGraphConv(c_out, c_out, Ks, gso, bias)
+        else:
+            raise ValueError(f'Unsupported graph_conv_type: {self.graph_conv_type}')
 
     def forward(self, x):
         x_gc_in = self.align(x)
@@ -256,6 +311,8 @@ class GraphConvLayer(nn.Module):
             x_gc = self.cheb_graph_conv(x_gc_in)
         elif self.graph_conv_type == 'graph_conv':
             x_gc = self.graph_conv(x_gc_in)
+        elif self.graph_conv_type == 'diffusion_graph_conv':
+            x_gc = self.diffusion_graph_conv(x_gc_in)
         x_gc = x_gc.permute(0, 3, 1, 2)
         x_gc_out = torch.add(x_gc, x_gc_in)
 

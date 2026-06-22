@@ -67,6 +67,22 @@ def parse_sensor_ids(args: argparse.Namespace) -> list[int] | None:
     return ordered
 
 
+def auto_detect_pbf(output_dir: Path) -> Path | None:
+    candidates = [
+        output_dir.parent / "california-latest.osm.pbf",
+        output_dir.parent.parent / "california-latest.osm.pbf",
+        GRAPH_ROOT / "california-latest.osm.pbf",
+        GRAPH_ROOT.parent / "california-latest.osm.pbf",
+        GRAPH_ROOT.parent.parent / "california-latest.osm.pbf",
+        Path("/data/yuzhang_fei/PEMS/california-latest.osm.pbf"),
+        Path("/data/yuzhang_fei/california-latest.osm.pbf"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
 def detect_csv_sep(path: Path, fallback: str | None) -> str | None:
     if fallback not in (None, "auto"):
         return fallback
@@ -359,6 +375,11 @@ def parse_args() -> argparse.Namespace:
     args.metadata_file = resolve_existing_path(args.metadata_file, "元数据文件")
     if args.pbf_path is not None:
         args.pbf_path = resolve_existing_path(str(args.pbf_path), "OSM PBF 文件")
+    else:
+        detected_pbf = auto_detect_pbf(args.output_dir)
+        if detected_pbf is not None:
+            args.pbf_path = detected_pbf
+            log(f"自动检测到 OSM PBF 文件: {args.pbf_path}")
     args.sensor_types = [sensor_type.upper() for sensor_type in args.sensor_types]
     return args
 

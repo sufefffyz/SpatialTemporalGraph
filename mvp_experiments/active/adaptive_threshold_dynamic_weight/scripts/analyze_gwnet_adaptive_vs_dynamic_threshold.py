@@ -174,6 +174,7 @@ def _prepare_runner(
     device: str,
     split: str,
     basic_ts_dir: Path,
+    strict_load: bool = True,
 ):
     os.environ.setdefault("WANDB_MODE", "disabled")
     os.environ["BASICTS_RUN_TAG"] = run_tag
@@ -200,7 +201,7 @@ def _prepare_runner(
         runner.test_data_loader = runner.build_val_data_loader(cfg)
     elif split != "test":
         raise ValueError(f"Unsupported split: {split}")
-    runner.load_model(ckpt_path, strict=True)
+    runner.load_model(ckpt_path, strict=strict_load)
     runner.model.eval()
     return cfg, runner
 
@@ -215,6 +216,7 @@ def _prepare_original_runner(args: argparse.Namespace, basic_ts_dir: Path):
         args.device,
         args.split,
         basic_ts_dir,
+        True,
     )
 
 
@@ -231,6 +233,7 @@ def _prepare_dynamic_runner(args: argparse.Namespace, basic_ts_dir: Path):
         args.device,
         args.split,
         basic_ts_dir,
+        args.strict_load,
     )
 
 
@@ -381,6 +384,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=2023)
     parser.add_argument("--gpu", default="0")
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--strict-load", action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args()
 
     if args.output_dir is None:

@@ -32,12 +32,20 @@ env/
 /BasicTS/logs/
 /BasicTS/checkpoints/
 /BasicTS/wandb/
+/BasicTS/output/
+/BasicTS/outputs/
+/BasicTS/profile_logs/
+/BasicTS/PEMS/analysis_outputs/
 /BasicTS/PEMS/graph_construction/outputs
 /BasicTS/PEMS/output
+/graphs/
 
 # Heavy experiment artifacts
 **/outputs/*
 !**/outputs/.gitkeep
+**/results/*
+!**/results/.gitkeep
+**/server_exports/
 **/checkpoints/
 **/wandb/
 **/logs/

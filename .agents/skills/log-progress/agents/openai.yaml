@@ -1,0 +1,4 @@
+interface:
+  display_name: "中文项目进展记录"
+  short_description: "同步项目进展到 Obsidian 并维护三份项目笔记"
+  default_prompt: "Use $log-progress to update the current project's Obsidian notes in Chinese."

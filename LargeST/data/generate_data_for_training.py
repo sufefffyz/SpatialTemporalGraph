@@ -44,7 +44,7 @@ def generate_train_val_test(args):
     df = pd.DataFrame()
     for y in years:
         df_tmp = pd.read_hdf(args.dataset + '/' + args.dataset + '_his_' + y + '.h5')
-        df = df.append(df_tmp)
+        df = pd.concat([df, df_tmp])
     print('original data shape:', df.shape)
 
     seq_length_x, seq_length_y = args.seq_length_x, args.seq_length_y

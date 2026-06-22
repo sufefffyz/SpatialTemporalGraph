@@ -1,0 +1,36 @@
+snapshot_id: snap-2026-06-22-001
+master_title: "[CD-MAIN][master] LargeST2019 virtual-node benchmark"
+global_decisions:
+  - "Dynamic threshold is out of scope for this line."
+  - "Wave 1 reproduction scope is LargeST 2019 SD/GLA/GBA; CA is deferred."
+  - "PatchSTG, BiST, MAGE, and STID are the target baseline family."
+  - "Virtual-node/bipartite work is research and design only in Wave 1."
+branches:
+  - branch_id: CD-001
+    branch_type: branch
+    interaction_mode: subagent
+    role: reproduction
+    stable_title: "[CD-001][W1][repro] LargeST2019 baselines"
+    status: active
+    execution_wave: 1
+    depends_on: []
+    unblocks:
+      - W2_virtual_node_prototype_decision
+    branch_brief_path: "CD-001_largest2019_baselines/branch-brief.md"
+    completion_report_path: "CD-001_largest2019_baselines/completion-report.md"
+    merge_policy: explicit_user_confirm
+    thread_id: "019eee6a-4cd8-7213-889a-093479587ae0"
+  - branch_id: CD-002
+    branch_type: branch
+    interaction_mode: subagent
+    role: research
+    stable_title: "[CD-002][W1][research] Virtual-node bipartite graph"
+    status: completion_suggested
+    execution_wave: 1
+    depends_on: []
+    unblocks:
+      - W2_virtual_node_prototype_decision
+    branch_brief_path: "CD-002_virtual_node_bipartite/branch-brief.md"
+    completion_report_path: "CD-002_virtual_node_bipartite/completion-report.md"
+    merge_policy: explicit_user_confirm
+    thread_id: "019eee6a-9ae3-7721-a8f5-a530fe8d8619"

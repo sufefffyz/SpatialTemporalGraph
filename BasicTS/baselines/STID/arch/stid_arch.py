@@ -97,8 +97,21 @@ class STID(nn.Module):
 
         node_emb = []
         if self.if_spatial:
+            node_indices = kwargs.get("idx", None)
+            if node_indices is None:
+                selected_node_emb = self.node_emb
+            else:
+                node_indices = torch.as_tensor(node_indices, device=self.node_emb.device, dtype=torch.long)
+                if node_indices.ndim != 1:
+                    raise ValueError(f"idx must be a 1-D node index tensor, got shape {tuple(node_indices.shape)}.")
+                selected_node_emb = self.node_emb.index_select(0, node_indices)
+                if int(selected_node_emb.shape[0]) != int(num_nodes):
+                    raise ValueError(
+                        "idx length must match the node dimension of history_data, "
+                        f"got len(idx)={selected_node_emb.shape[0]} and num_nodes={num_nodes}."
+                    )
             # expand node embeddings
-            node_emb.append(self.node_emb.unsqueeze(0).expand(
+            node_emb.append(selected_node_emb.unsqueeze(0).expand(
                 batch_size, -1, -1).transpose(1, 2).unsqueeze(-1))
         # temporal embeddings
         tem_emb = []

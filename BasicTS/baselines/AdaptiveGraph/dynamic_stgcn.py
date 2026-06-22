@@ -8,7 +8,7 @@ from torch.nn import init
 
 from baselines.STGCN.arch.stgcn_layers import Align, OutputBlock, TemporalConvLayer
 
-from .dynamic_support import DynamicThresholdSupport
+from .dynamic_support import DynamicEdgeSupport, DynamicThresholdSupport, dynamic_edge_support_matmul_4d
 
 
 class DynamicChebGraphConv(nn.Module):
@@ -95,6 +95,64 @@ class DynamicGraphConv(nn.Module):
         return graph_conv
 
 
+class DynamicDiffusionGraphConv(nn.Module):
+    def __init__(self, c_in, c_out, diffusion_steps, bias):
+        super().__init__()
+        self.diffusion_steps = int(diffusion_steps)
+        self.c_in = c_in
+        self.c_out = c_out
+        self.num_supports = 2
+        self.num_matrices = 1 + self.num_supports * self.diffusion_steps
+        self.weight = nn.Parameter(torch.FloatTensor(self.num_matrices, c_in, c_out))
+        if bias:
+            self.bias = nn.Parameter(torch.FloatTensor(c_out))
+        else:
+            self.register_parameter("bias", None)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            init.uniform_(self.bias, -bound, bound)
+
+    @staticmethod
+    def _support_mul(support, x: torch.Tensor) -> torch.Tensor:
+        if isinstance(support, DynamicEdgeSupport):
+            x_bcnt = x.permute(0, 3, 2, 1).contiguous()
+            out = dynamic_edge_support_matmul_4d(support, x_bcnt)
+            return out.permute(0, 3, 2, 1).contiguous()
+        support = support.to(x.device)
+        if support.dim() == 2:
+            return torch.einsum("hi,btij->bthj", support, x)
+        if support.dim() == 3:
+            return torch.einsum("bhi,btij->bthj", support, x)
+        raise ValueError(f"Unsupported support rank {support.dim()}.")
+
+    def forward(self, x: torch.Tensor, supports) -> torch.Tensor:
+        x = torch.permute(x, (0, 2, 3, 1))
+        if self.diffusion_steps < 0:
+            raise ValueError(f"diffusion_steps must be non-negative, got {self.diffusion_steps}.")
+        if isinstance(supports, (torch.Tensor, DynamicEdgeSupport)):
+            supports = [supports]
+        if len(supports) != self.num_supports:
+            raise ValueError(f"Dynamic STGCN diffusion expects {self.num_supports} supports, got {len(supports)}.")
+
+        x_list = [x]
+        for support in supports:
+            propagated = x
+            for _ in range(self.diffusion_steps):
+                propagated = self._support_mul(support, propagated)
+                x_list.append(propagated)
+
+        x = torch.stack(x_list, dim=2)
+        graph_conv = torch.einsum("btkni,kij->btnj", x, self.weight)
+        if self.bias is not None:
+            graph_conv = torch.add(graph_conv, self.bias)
+        return graph_conv
+
+
 class DynamicGraphConvLayer(nn.Module):
     def __init__(self, graph_conv_type, c_in, c_out, Ks, bias):
         super().__init__()
@@ -104,6 +162,8 @@ class DynamicGraphConvLayer(nn.Module):
             self.cheb_graph_conv = DynamicChebGraphConv(c_out, c_out, Ks, bias)
         elif self.graph_conv_type == "graph_conv":
             self.graph_conv = DynamicGraphConv(c_out, c_out, bias)
+        elif self.graph_conv_type == "diffusion_graph_conv":
+            self.diffusion_graph_conv = DynamicDiffusionGraphConv(c_out, c_out, Ks, bias)
         else:
             raise ValueError(f"Unsupported graph_conv_type: {graph_conv_type}")
 
@@ -111,8 +171,10 @@ class DynamicGraphConvLayer(nn.Module):
         x_gc_in = self.align(x)
         if self.graph_conv_type == "cheb_graph_conv":
             x_gc = self.cheb_graph_conv(x_gc_in, gso)
-        else:
+        elif self.graph_conv_type == "graph_conv":
             x_gc = self.graph_conv(x_gc_in, gso)
+        else:
+            x_gc = self.diffusion_graph_conv(x_gc_in, gso)
         x_gc = x_gc.permute(0, 3, 1, 2)
         return torch.add(x_gc, x_gc_in)
 
@@ -141,10 +203,12 @@ class DynamicThresholdSTGCN(nn.Module):
 
     def __init__(self, Kt, Ks, blocks, T, n_vertex, act_func, graph_conv_type, dynamic_graph, bias, droprate):
         super().__init__()
+        self.graph_conv_type = graph_conv_type
+        dynamic_graph = dict(dynamic_graph)
+        dynamic_graph.setdefault("normalization", "transition" if graph_conv_type == "diffusion_graph_conv" else "sym")
         self.dynamic_support = DynamicThresholdSupport(
             num_nodes=n_vertex,
             seq_len=T,
-            normalization="sym",
             **dynamic_graph,
         )
         self.st_blocks = nn.ModuleList()
@@ -176,7 +240,10 @@ class DynamicThresholdSTGCN(nn.Module):
         train: bool,
         **kwargs,
     ) -> torch.Tensor:
-        gso = self.dynamic_support.symmetric_laplacian(history_data)
+        if self.graph_conv_type == "diffusion_graph_conv":
+            gso = self.dynamic_support.transition_supports(history_data)
+        else:
+            gso = self.dynamic_support.symmetric_laplacian(history_data)
         x = history_data.permute(0, 3, 1, 2).contiguous()
         for block in self.st_blocks:
             x = block(x, gso)
