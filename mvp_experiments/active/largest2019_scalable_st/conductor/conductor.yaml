@@ -1,0 +1,91 @@
+snapshot_id: snap-2026-06-24-001
+master_title: "[CD-MAIN][master] LargeST2019 scalable ST"
+artifact_root: "SpatialTemporalGraph/mvp_experiments/active/largest2019_scalable_st"
+global_decisions:
+  - "Use largest2019_scalable_st as the new artifact root for this master session and future branches."
+  - "Preserve largest2019_virtual_node as historical input; do not delete it during migration."
+  - "Dynamic-threshold experiments are out of scope for this line unless explicitly reopened."
+  - "Wave 1 has exactly two primary branches: one experiment branch and one research branch."
+  - "No branch thread is opened until the user confirms the branch cards."
+  - "LargeST-LTSF input-window probing is tracked under ltsf_input_window and does not reopen dynamic-threshold work."
+historical_inputs:
+  - "../largest2019_virtual_node/conductor/CD-001_largest2019_baselines/completion-report.md"
+  - "../largest2019_virtual_node/conductor/CD-002_virtual_node_bipartite/completion-report.md"
+  - "../largest2019_virtual_node/conductor/CD-E01_bist_paper_explainer/reading-notes.md"
+branches:
+  - branch_id: CD-001
+    branch_type: branch
+    interaction_mode: agent_branch
+    role: experiment
+    stable_title: "[CD-001][W1][experiment] LargeST2019 baseline matrix"
+    status: active
+    execution_wave: 1
+    depends_on: []
+    unblocks:
+      - W2_direction_decision
+    branch_brief_path: "CD-001_largest2019_baseline_matrix/branch-brief.md"
+    completion_report_path: "CD-001_largest2019_baseline_matrix/completion-report.md"
+    merge_policy: explicit_user_confirm
+    thread_id: "019ef7cc-ba7a-7101-9499-7dfeff3d4f13"
+    agent_nickname: "Bernoulli"
+  - branch_id: CD-002
+    branch_type: branch
+    interaction_mode: agent_branch
+    role: research
+    stable_title: "[CD-002][W1][research] Scalable ST direction audit"
+    status: active
+    execution_wave: 1
+    depends_on: []
+    unblocks:
+      - W2_direction_decision
+    branch_brief_path: "CD-002_scalable_st_direction_audit/branch-brief.md"
+    completion_report_path: "CD-002_scalable_st_direction_audit/completion-report.md"
+    merge_policy: explicit_user_confirm
+    thread_id: "019ef7cc-bbbd-7922-b73c-65b59ec7ffa4"
+    agent_nickname: "Nash"
+  - branch_id: CD-003
+    branch_type: branch
+    interaction_mode: workspace_tooling
+    role: research
+    stable_title: "[CD-003][W1][research] LargeST-LTSF complexity and protocol"
+    status: report_ready
+    execution_wave: 1
+    depends_on: []
+    unblocks:
+      - CD-004_ltsf_smoke_pilot
+      - W2_direction_decision
+    branch_brief_path: "CD-003_largest_ltsf_complexity_protocol/branch-brief.md"
+    completion_report_path: "CD-003_largest_ltsf_complexity_protocol/completion-report.md"
+    merge_policy: explicit_user_confirm
+    thread_id: null
+    agent_nickname: null
+  - branch_id: CD-004
+    branch_type: branch
+    interaction_mode: workspace_tooling
+    role: experiment
+    stable_title: "[CD-004][W1][experiment] LargeST-LTSF smoke and pilot"
+    status: brief_ready
+    execution_wave: 1
+    depends_on:
+      - CD-003
+    unblocks:
+      - W2_ltsf_full_gate
+      - W2_direction_decision
+    branch_brief_path: "CD-004_largest_ltsf_smoke_pilot/branch-brief.md"
+    completion_report_path: "CD-004_largest_ltsf_smoke_pilot/completion-report.md"
+    merge_policy: explicit_user_confirm
+    thread_id: null
+    agent_nickname: null
+  - branch_id: CD-E01
+    branch_type: explainer
+    interaction_mode: user_interactive
+    role: explainer
+    stable_title: "[CD-E01][sidecar][explainer] Background questions"
+    status: planned
+    execution_wave: sidecar
+    depends_on: []
+    unblocks: []
+    branch_brief_path: "CD-E01_background_questions/branch-brief.md"
+    completion_report_path: "CD-E01_background_questions/completion-report.md"
+    merge_policy: no_merge_by_default
+    thread_id: null

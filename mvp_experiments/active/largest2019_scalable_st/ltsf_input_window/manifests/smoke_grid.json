@@ -1,0 +1,18 @@
+{
+  "phase": "smoke",
+  "horizon": 672,
+  "input_lengths": [96, 192, 336, 672],
+  "basicts": {
+    "datasets": ["SD"],
+    "models": ["STID", "DLinear", "CycleNet", "TimeMixer", "PatchTST"],
+    "num_epochs": 1,
+    "patience": 1
+  },
+  "bist": {
+    "datasets": ["SD"],
+    "models": ["BiST"],
+    "num_epochs": 1,
+    "patience": 1,
+    "requires_npz_tags": ["2019_L96_H672", "2019_L192_H672", "2019_L336_H672", "2019_L672_H672"]
+  }
+}

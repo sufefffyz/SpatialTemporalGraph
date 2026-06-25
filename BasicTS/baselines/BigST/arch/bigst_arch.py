@@ -33,10 +33,13 @@ class BigST(nn.Module):
         super(BigST, self).__init__()
 
         self.use_long = bigst_args['use_long']
+        self.use_full_history = bigst_args.get('use_full_history', False)
         self.in_dim = bigst_args['in_dim']
         self.out_dim = bigst_args['out_dim']
         self.time_num = bigst_args['time_of_day_size']
-        self.bigst = Model(**bigst_args) 
+        model_args = dict(bigst_args)
+        model_args.pop('use_full_history', None)
+        self.bigst = Model(**model_args)
 
         if self.use_long:
             self.feat_extractor = BigSTPreprocess(**preprocess_args)
@@ -57,7 +60,10 @@ class BigST(nn.Module):
 
     def forward(self, history_data: torch.Tensor, future_data: torch.Tensor, batch_seen: int, epoch: int, train: bool, **kwargs) -> torch.Tensor:
         history_data = history_data.transpose(1,2) # (B, N, T, D)
-        x = history_data[:, :, -self.out_dim:]         # (batch_size, in_len, data_dim)
+        if self.use_full_history:
+            x = history_data
+        else:
+            x = history_data[:, :, -self.out_dim:]         # (batch_size, in_len, data_dim)
 
         if self.use_long:
             feat = []
@@ -75,4 +81,3 @@ class BigST(nn.Module):
         else:
             return self.bigst(x)
 
-        

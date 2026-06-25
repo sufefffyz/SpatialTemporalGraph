@@ -1,0 +1,4 @@
+outputs/
+generated_configs/
+*.log
+__pycache__/

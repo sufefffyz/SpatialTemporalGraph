@@ -17,10 +17,13 @@ from .arch import BigST, BigSTPreprocess
 from .loss import bigst_loss
 from .runner import BigSTPreprocessRunner
 
-BIGST_INPUT_LEN = 2016
-BIGST_OUTPUT_LEN = 12
-BIGST_PREPROCESS_EPOCHS = 100
-BIGST_TINY_BATCH_SIZE = 64
+# BigST uses one week of long history. The official paper reports 2016
+# steps for 5-minute California data; LargeST SD/GLA/GBA are 15-minute
+# data, so one week is 96 * 7 = 672 steps.
+BIGST_INPUT_LEN = int(os.environ.get("BIGST_INPUT_LEN", "672"))
+BIGST_OUTPUT_LEN = int(os.environ.get("BIGST_OUTPUT_LEN", "12"))
+BIGST_PREPROCESS_EPOCHS = int(os.environ.get("BIGST_PREPROCESS_EPOCHS", "100"))
+BIGST_TINY_BATCH_SIZE = int(os.environ.get("BIGST_TINY_BATCH_SIZE", "64"))
 
 _TRAIN_BATCH_SIZE = {
     "CA": 1,

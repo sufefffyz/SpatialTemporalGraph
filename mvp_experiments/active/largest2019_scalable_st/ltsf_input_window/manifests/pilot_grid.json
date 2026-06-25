@@ -1,0 +1,22 @@
+{
+  "phase": "pilot",
+  "horizon": 672,
+  "input_lengths": [96, 192, 336, 672],
+  "basicts": {
+    "sd_all_models": ["STID", "DLinear", "CycleNet", "TimeMixer", "PatchTST"],
+    "gba_scalable_models": ["STID", "DLinear", "CycleNet", "TimeMixer"],
+    "num_epochs": 20,
+    "patience": 10
+  },
+  "bist": {
+    "datasets": ["SD", "GBA"],
+    "num_epochs": 20,
+    "patience": 10,
+    "launch_only_after_smoke_passes": true
+  },
+  "full_gate": {
+    "condition": "L=336 or L=672 improves MAE/RMSE over L=96 without unacceptable memory/time growth",
+    "full_epochs": 50,
+    "report_horizons": [48, 96, 192, 672]
+  }
+}

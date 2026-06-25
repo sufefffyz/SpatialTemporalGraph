@@ -62,6 +62,8 @@ def main():
     base = MLP(node_num=node_num,
                 input_dim=args.input_dim,
                 output_dim=args.output_dim,
+                seq_len=args.seq_len,
+                horizon=args.horizon,
                 num_layer=args.num_layer, 
                 model_dim=args.model_dim, 
                 prompt_dim=args.prompt_dim, 
